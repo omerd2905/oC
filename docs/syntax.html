@@ -5,277 +5,68 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OC-LANG(7) — oC Systems Programming Language Reference Manual</title>
   <link rel="stylesheet" href="style.css">
-  <style>
-    /* Manual Portal Layout & W3-Style Example Extensions */
-    body {
-      max-width: 1440px;
-      margin: 0 auto;
-      padding: 1.5rem 2rem 4rem;
-    }
-    .topbar {
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 1.25rem;
-      margin-bottom: 2rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-    .topbar .brand {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-    .topbar .brand-link {
-      text-decoration: none;
-      display: flex;
-      align-items: baseline;
-      gap: 0.6rem;
-    }
-    .topbar .brand-link .logo {
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      font-size: 1.85rem;
-      font-weight: 800;
-      color: var(--accent);
-      letter-spacing: -0.03em;
-    }
-    .topbar .brand-link .brand-title {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--text);
-      letter-spacing: 0.04em;
-    }
-    .layout {
-      display: flex;
-      gap: 2.25rem;
-      align-items: flex-start;
-    }
-    .sidebar {
-      width: 290px;
-      flex-shrink: 0;
-      position: sticky;
-      top: 1.5rem;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem 1rem;
-      font-size: 0.88rem;
-      max-height: calc(100vh - 3rem);
-      overflow-y: auto;
-    }
-    .sidebar-section-title {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.72rem;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-      margin: 1rem 0 0.5rem;
-      padding-left: 0.5rem;
-    }
-    .sidebar-section-title:first-child {
-      margin-top: 0;
-    }
-    .sidebar-nav {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
-    }
-    .sidebar-nav a {
-      display: block;
-      color: var(--text);
-      text-decoration: none;
-      padding: 0.38rem 0.65rem;
-      border-radius: 5px;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      border-left: 2px solid transparent;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
-    }
-    .sidebar-nav a:hover, .sidebar-nav a.active {
-      background: rgba(88, 166, 255, 0.1);
-      color: var(--cyan);
-      border-left-color: var(--cyan);
-    }
-    .content {
-      flex: 1;
-      min-width: 0;
-    }
-    .man-header {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--cyan);
-      border-radius: 8px;
-      padding: 1.5rem 1.75rem;
-      margin-bottom: 2rem;
-    }
-    .man-meta {
-      display: flex;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-      margin-top: 0.75rem;
-      font-size: 0.88rem;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, monospace;
-    }
-    .example-card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin: 1.75rem 0 2rem;
-      overflow: hidden;
-    }
-    .example-card-header {
-      background: rgba(35, 43, 62, 0.5);
-      border-bottom: 1px solid var(--border);
-      padding: 0.65rem 1.15rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-    }
-    .example-card-title {
-      color: var(--cyan);
-      font-weight: 600;
-    }
-    .example-card-badge {
-      background: rgba(63, 185, 80, 0.15);
-      color: var(--accent);
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.74rem;
-      border: 1px solid rgba(63, 185, 80, 0.3);
-    }
-    .example-card-body {
-      padding: 1rem 1.25rem;
-    }
-    .output-label {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.75rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin: 0.85rem 0 0.35rem;
-    }
-    .terminal-out {
-      background: #040608;
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: 4px;
-      padding: 0.75rem 1rem;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      color: #7ee787;
-      overflow-x: auto;
-    }
-    .danger-out {
-      background: #040608;
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--danger);
-      border-radius: 4px;
-      padding: 0.75rem 1rem;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      color: #ff7b72;
-      overflow-x: auto;
-    }
-    .explanation {
-      margin-top: 0.85rem;
-      font-size: 0.9rem;
-      color: var(--text);
-      line-height: 1.5;
-    }
-    .keyword-pill {
-      display: inline-block;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.85rem;
-      background: rgba(88, 166, 255, 0.15);
-      color: var(--cyan);
-      border: 1px solid rgba(88, 166, 255, 0.3);
-      padding: 0.1rem 0.45rem;
-      border-radius: 4px;
-      font-weight: 600;
-    }
-    @media (max-width: 900px) {
-      .layout {
-        flex-direction: column;
-      }
-      .sidebar {
-        width: 100%;
-        position: static;
-        max-height: none;
-      }
-    }
-  </style>
 </head>
 <body>
 
   <!-- Top bar contract -->
-  <header class="topbar">
-    <div class="brand">
-      <a href="index.html" class="brand-link">
-        <span class="logo">oC</span>
-        <span class="brand-title">// MAN &amp; TUTORIAL PORTAL</span>
-      </a>
-      <span class="badge">v1.0 Self-Hosted</span>
+    <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <a href="index.html">
+          <span class="brand-title">oC</span>
+          <span class="brand-sub">v1.0 manual &amp; reference</span>
+        </a>
+      </div>
+      <nav>
+        <a href="index.html">OC(7)</a>
+        <a href="tutorial.html">TUTORIAL(7)</a>
+        <a href="syntax.html" class="active">OC-LANG(7)</a>
+        <a href="stdlib.html">OC-STD(3)</a>
+        <a href="man-occ.html">OCC(1)</a>
+        <a href="security.html">OC-SECURITY(7)</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">git</a>
+      </nav>
     </div>
-    <nav>
-      <a href="index.html">OC(7) Overview</a>
-      <a href="tutorial.html">W3 Tutorial</a>
-      <a href="syntax.html" class="active">OC-LANG(7) Syntax</a>
-      <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
-      <a href="man-occ.html">OCC(1) Compiler</a>
-      <a href="security.html">OC-SECURITY(7) CWEs</a>
-      <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub ↗</a>
-    </nav>
   </header>
 
   <div class="layout">
     <!-- Left Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-section-title">Manual Page Sections</div>
-      <ul class="sidebar-nav">
-        <li><a href="#name-synopsis">1. NAME &amp; SYNOPSIS</a></li>
-        <li><a href="#lexical">2. Lexical &amp; Keywords</a></li>
-        <li><a href="#types">3. Type System &amp; Memory</a></li>
-        <li><a href="#declarations">4. Declarations &amp; Scope</a></li>
-        <li><a href="#operators">5. Operator Precedence</a></li>
-        <li><a href="#slices-arrays">6. Arrays &amp; Fat Slices</a></li>
-        <li><a href="#structs">7. Structs &amp; Packed Wire</a></li>
-        <li><a href="#functions">8. Functions &amp; Intrinsics</a></li>
-        <li><a href="#control-flow">9. Control Flow</a></li>
-        <li><a href="#modules">10. Module System</a></li>
-      </ul>
-
-      <div class="sidebar-section-title">Cross Portal Links</div>
-      <ul class="sidebar-nav">
-        <li><a href="index.html">OC(7) Overview</a></li>
-        <li><a href="tutorial.html">W3Schools oC Tutorial</a></li>
-        <li><a href="stdlib.html">OC-STD(3) Standard Library</a></li>
-        <li><a href="man-occ.html">OCC(1) Compiler Toolchain</a></li>
-        <li><a href="security.html">OC-SECURITY(7) CWE Matrix</a></li>
-      </ul>
+        <aside class="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-title">OC-LANG(7) Sections</div>
+        <a href="#name-synopsis" class="sidebar-link active">1. NAME & SYNOPSIS</a>
+        <a href="#lexical" class="sidebar-link">2. Lexical & Keywords</a>
+        <a href="#types" class="sidebar-link">3. Type System & Memory</a>
+        <a href="#declarations" class="sidebar-link">4. Declarations & Scope</a>
+        <a href="#operators" class="sidebar-link">5. Operator Precedence</a>
+        <a href="#slices-arrays" class="sidebar-link">6. Arrays & Fat Slices</a>
+        <a href="#structs" class="sidebar-link">7. Structs & Packed Wire</a>
+        <a href="#functions" class="sidebar-link">8. Functions & Intrinsics</a>
+        <a href="#control-flow" class="sidebar-link">9. Control Flow</a>
+        <a href="#modules" class="sidebar-link">10. Module System</a>
+      </div>
+      <div class="sidebar-group">
+        <div class="sidebar-title">Manual Pages</div>
+        <a href="index.html" class="sidebar-link">OC(7) Overview</a>
+        <a href="tutorial.html" class="sidebar-link">TUTORIAL(7) W3 Guide</a>
+        <a href="syntax.html" class="sidebar-link active">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) & SYSCALLS(2)</a>
+        <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWEs</a>
+      </div>
     </aside>
 
     <!-- Main Content -->
     <main class="content">
 
       <!-- Section 1: NAME & SYNOPSIS -->
+      <div class="man-header">
+        <span>OC-LANG(7)</span>
+        <span>oC Programmer's Manual</span>
+        <span>OC-LANG(7)</span>
+      </div>
+
       <section id="name-synopsis">
-        <div class="man-header">
-          <h2>OC-LANG(7) — oC Systems Programming Language Reference Manual</h2>
-          <p>Complete formal language specification, lexical grammar, memory representation, Pratt operator precedence, and hardware trap semantics.</p>
-          <div class="man-meta">
-            <span><strong>Standard:</strong> Pure oC v1.0.0</span>
-            <span><strong>Target ABI:</strong> Linux x86_64 ELF64</span>
-            <span><strong>Section:</strong> 7 (Conventions &amp; Specs)</span>
-          </div>
-        </div>
 
         <h2>NAME</h2>
         <p>
@@ -377,7 +168,7 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
             <tr>
               <td><span class="keyword-pill">fn</span></td>
               <td>Declaration</td>
-              <td>Declares a function. <code>fn add(a: i32, b: i32) -&gt; i32 { return a + b; }</code></td>
+              <td>Declares a function. <code>fn add(a: i32, b: i32) i32 { return a + b; }</code></td>
             </tr>
             <tr>
               <td><span class="keyword-pill">let</span></td>
@@ -454,14 +245,16 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
 
         <!-- Example Card 1 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 1: Lexical Literals &amp; Radix Representation</span>
-            <span class="example-card-badge">Lexer Test</span>
+          <div class="example-header">
+            <span class="example-title">Example 1: Lexical Literals &amp; Radix Representation</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
-fn main() -> i32 {
+fn main() i32 {
     let dec_val: u32 = 42;
     let hex_val: u32 = 0x2A;
     let bin_val: u32 = 0b0010_1010;
@@ -471,12 +264,14 @@ fn main() -> i32 {
     }
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run literal_demo.oc<br>All three radices equal 42 decimal!</div>
-            <p class="explanation">
-              <strong>Explanation:</strong> Decimal, hexadecimal, and binary literals produce identical bit patterns. Underscores in literals are stripped during lexical analysis.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run literal_demo.oc
+All three radices equal 42 decimal!</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Explanation:</strong> Decimal, hexadecimal, and binary literals produce identical bit patterns. Underscores in literals are stripped during lexical analysis.</div>
         </div>
       </section>
 
@@ -640,12 +435,14 @@ fn main() -> i32 {
 
         <!-- Example Card 2 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 2: Fat Slices &amp; Pointer Operations</span>
-            <span class="example-card-badge">Memory Layout</span>
+          <div class="example-header">
+            <span class="example-title">Example 2: Fat Slices &amp; Pointer Operations</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 fn print_slice_info(name: string, s: string) {
     print("Slice: ");
@@ -655,7 +452,7 @@ fn print_slice_info(name: string, s: string) {
     print("\n");
 }
 
-fn main() -> i32 {
+fn main() i32 {
     let full: string = "Active-Defense Systems";
     print_slice_info("full", full);
 
@@ -665,12 +462,15 @@ fn main() -> i32 {
 
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run slice_demo.oc<br>Slice: full | Length: 22<br>Slice: sub | Length: 14</div>
-            <p class="explanation">
-              <strong>Memory Representation:</strong> <code>full</code> contains <code>{ ptr: 0x401000, len: 22 }</code>. The sub-slice <code>sub</code> creates <code>{ ptr: 0x401000, len: 14 }</code> without allocating any heap memory.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run slice_demo.oc
+Slice: full | Length: 22
+Slice: sub | Length: 14</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Memory Representation:</strong> <code>full</code> contains <code>{ ptr: 0x401000, len: 22 }</code>. The sub-slice <code>sub</code> creates <code>{ ptr: 0x401000, len: 14 }</code> without allocating any heap memory.</div>
         </div>
       </section>
 
@@ -696,16 +496,18 @@ let mut buf: [32]u8 = [0]; // Valid: zero-initialized fixed array
 
         <!-- Example Card 3 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 3: Explicit Mutability vs Immutability</span>
-            <span class="example-card-badge">CWE-457 Guard</span>
+          <div class="example-header">
+            <span class="example-title">Example 3: Explicit Mutability vs Immutability</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 let GLOBAL_RETRY_COUNT: u32 = 3; // Top-level constant
 
-fn main() -> i32 {
+fn main() i32 {
     let immut_val: i32 = 100;
     let mut mut_val: i32 = 200;
 
@@ -716,12 +518,14 @@ fn main() -> i32 {
     print("\n");
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run mut_demo.oc<br>203</div>
-            <p class="explanation">
-              <strong>Safety Invariant:</strong> Attempting to assign to <code>immut_val</code> triggers a compile-time rejection. Mutability is tracked by the symbol table and parser AST.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run mut_demo.oc
+203</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Safety Invariant:</strong> Attempting to assign to <code>immut_val</code> triggers a compile-time rejection. Mutability is tracked by the symbol table and parser AST.</div>
         </div>
       </section>
 
@@ -841,12 +645,14 @@ fn main() -> i32 {
 
         <!-- Example Card 4 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 4: Hardware Overflow &amp; Division-by-Zero Trapping</span>
-            <span class="example-card-badge">CWE-190 Hardware Trap</span>
+          <div class="example-header">
+            <span class="example-title">Example 4: Hardware Overflow &amp; Division-by-Zero Trapping</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 fn test_overflow_protection() {
     let max_i32: i32 = 2147483647;
@@ -855,16 +661,19 @@ fn test_overflow_protection() {
     print(boom);
 }
 
-fn main() -> i32 {
+fn main() i32 {
     test_overflow_protection();
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="danger-out">$ occ run overflow_test.oc --backend native<br>panic: integer overflow<br>[Process terminated with exit code 1 via __trap_overflow]</div>
-            <p class="explanation">
-              <strong>Trap Mechanism:</strong> The native backend emits <code>add %ebx, %eax</code> followed immediately by <code>jo __trap_overflow</code>. On overflow, the CPU jumps directly to the panic handler, writes to <code>stderr</code>, and terminates without executing undefined behavior.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-trap">$ occ run overflow_test.oc --backend native
+panic: integer overflow
+[Process terminated with exit code 1 via __trap_overflow]</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Trap Mechanism:</strong> The native backend emits <code>add %ebx, %eax</code> followed immediately by <code>jo __trap_overflow</code>. On overflow, the CPU jumps directly to the panic handler, writes to <code>stderr</code>, and terminates without executing undefined behavior.</div>
         </div>
       </section>
 
@@ -902,12 +711,14 @@ let tail: string = src[4..9]; // "Alloc" (len = 5)
 
         <!-- Example Card 5 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 5: Safe Sub-slicing with .len Property</span>
-            <span class="example-card-badge">Spatial Safety</span>
+          <div class="example-header">
+            <span class="example-title">Example 5: Safe Sub-slicing with .len Property</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 fn print_bytes(data: string) {
     let mut i: usize = 0;
@@ -920,18 +731,20 @@ fn print_bytes(data: string) {
     print("\n");
 }
 
-fn main() -> i32 {
+fn main() i32 {
     let greeting: string = "oC-LANG";
     let token: string = greeting[0..2]; // "oC"
     print_bytes(token);
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run bytes_demo.oc<br>111 67 </div>
-            <p class="explanation">
-              <strong>Explanation:</strong> <code>token[0]</code> yields ASCII 111 (<code>'o'</code>), and <code>token[1]</code> yields ASCII 67 (<code>'C'</code>). The slice length <code>token.len</code> is 2.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run bytes_demo.oc
+111 67</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Explanation:</strong> <code>token[0]</code> yields ASCII 111 (<code>'o'</code>), and <code>token[1]</code> yields ASCII 67 (<code>'C'</code>). The slice length <code>token.len</code> is 2.</div>
         </div>
       </section>
 
@@ -971,12 +784,14 @@ let s: SensorPacket = SensorPacket {
 
         <!-- Example Card 6 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 6: Wire-Format Network Structs</span>
-            <span class="example-card-badge">Wire ABI</span>
+          <div class="example-header">
+            <span class="example-title">Example 6: Wire-Format Network Structs</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 packed struct IPv4Header {
     ver_ihl: u8,
@@ -991,7 +806,7 @@ packed struct IPv4Header {
     dst_ip: u32,
 }
 
-fn main() -> i32 {
+fn main() i32 {
     let mut hdr: IPv4Header = IPv4Header {
         ver_ihl: 0x45, // IPv4, 5 words (20 bytes)
         tos: 0,
@@ -1010,12 +825,14 @@ fn main() -> i32 {
     print("\n");
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run ipv4_demo.oc<br>IPv4 Header Initialized. TTL: 64</div>
-            <p class="explanation">
-              <strong>Wire Guarantee:</strong> <code>IPv4Header</code> occupies exactly 20 bytes in memory with zero compiler-injected padding bytes between 8-bit, 16-bit, and 32-bit fields.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run ipv4_demo.oc
+IPv4 Header Initialized. TTL: 64</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Wire Guarantee:</strong> <code>IPv4Header</code> occupies exactly 20 bytes in memory with zero compiler-injected padding bytes between 8-bit, 16-bit, and 32-bit fields.</div>
         </div>
       </section>
 
@@ -1042,32 +859,34 @@ fn main() -> i32 {
         <p>
           External symbols (such as Linux kernel syscalls or standard C library functions) are declared with <code>extern fn</code> without a function body:
         </p>
-        <pre><code>extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
-extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
+        <pre><code>extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) i64;
 extern fn sys_exit(code: i32);</code></pre>
 
         <!-- Example Card 7 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 7: Recursive Function &amp; Pass-by-Reference</span>
-            <span class="example-card-badge">CWE-674 Guard</span>
+          <div class="example-header">
+            <span class="example-title">Example 7: Recursive Function &amp; Pass-by-Reference</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
 fn square_mut(val: *mut i32) {
     let current: i32 = *val;
     *val = current * current;
 }
 
-fn factorial(n: u64) -> u64 {
+fn factorial(n: u64) u64 {
     if n <= 1 {
         return 1;
     }
     return n * factorial(n - 1);
 }
 
-fn main() -> i32 {
+fn main() i32 {
     let mut num: i32 = 7;
     square_mut(&mut num);
     print("Squared: ");
@@ -1077,12 +896,14 @@ fn main() -> i32 {
     print("\n");
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run fn_demo.oc<br>Squared: 49 | 5! = 120</div>
-            <p class="explanation">
-              <strong>Explanation:</strong> <code>square_mut</code> receives a mutable reference <code>&amp;mut num</code>. Modifying <code>*val</code> mutates the caller's stack frame directly.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run fn_demo.oc
+Squared: 49 | 5! = 120</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Explanation:</strong> <code>square_mut</code> receives a mutable reference <code>&amp;mut num</code>. Modifying <code>*val</code> mutates the caller's stack frame directly.</div>
         </div>
       </section>
 
@@ -1117,14 +938,16 @@ while idx < 10 {
 
         <!-- Example Card 8 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 8: Deterministic Loop Execution</span>
-            <span class="example-card-badge">Zero Fluff</span>
+          <div class="example-header">
+            <span class="example-title">Example 8: Deterministic Loop Execution</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 
-fn main() -> i32 {
+fn main() i32 {
     let mut sum: i64 = 0;
     let mut n: i64 = 1;
 
@@ -1138,12 +961,14 @@ fn main() -> i32 {
     print("\n");
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run sum_demo.oc<br>Sum of 1..100: 5050</div>
-            <p class="explanation">
-              <strong>Control Guarantee:</strong> Loop conditions are checked at the start of each iteration. Loop variables are mutated explicitly without hidden loop index side effects.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run sum_demo.oc
+Sum of 1..100: 5050</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Control Guarantee:</strong> Loop conditions are checked at the start of each iteration. Loop variables are mutated explicitly without hidden loop index side effects.</div>
         </div>
       </section>
 
@@ -1171,16 +996,18 @@ fn main() -> i32 {
 
         <!-- Example Card 9 -->
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Example 9: Modular Program with Deduplicated Imports</span>
-            <span class="example-card-badge">Module Loader</span>
+          <div class="example-header">
+            <span class="example-title">Example 9: Modular Program with Deduplicated Imports</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>import "std/io.oc";
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>import "std/io.oc";
 import "std/fs.oc";
 import "std/mem.oc";
 
-fn main() -> i32 {
+fn main() i32 {
     // Arena allocated in 64 KB page chunk
     let mut arena: Arena = arena_init(65536);
     let chunk: *mut u8 = arena_alloc(&mut arena, 128);
@@ -1192,12 +1019,14 @@ fn main() -> i32 {
     arena_deinit(&mut arena);
     return 0;
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run arena_demo.oc<br>Arena allocated chunk at: 140728198303744</div>
-            <p class="explanation">
-              <strong>Zero Libc:</strong> <code>arena_init</code> directly invokes <code>sys_mmap</code> (0x0f 0x05) to acquire anonymous memory pages from the Linux kernel. No <code>glibc</code> or <code>ptmalloc</code> heap metadata is linked.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run arena_demo.oc
+Arena allocated chunk at: 140728198303744</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Zero Libc:</strong> <code>arena_init</code> directly invokes <code>sys_mmap</code> (0x0f 0x05) to acquire anonymous memory pages from the Linux kernel. No <code>glibc</code> or <code>ptmalloc</code> heap metadata is linked.</div>
         </div>
       </section>
 
@@ -1209,5 +1038,17 @@ fn main() -> i32 {
     </main>
   </div>
 
+<script>
+function copyCode(btn) {
+  const card = btn.closest('.example-card');
+  const code = card.querySelector('.code-pane pre code, pre code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.innerText).then(() => {
+    const orig = btn.innerText;
+    btn.innerText = 'Copied';
+    setTimeout(() => { btn.innerText = orig; }, 1200);
+  });
+}
+</script>
 </body>
 </html>

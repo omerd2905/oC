@@ -5,276 +5,66 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OCC(1) — Self-Hosted Zero-Libc oC Compiler Reference Manual</title>
   <link rel="stylesheet" href="style.css">
-  <style>
-    /* Manual Portal Layout & W3-Style Example Extensions */
-    body {
-      max-width: 1440px;
-      margin: 0 auto;
-      padding: 1.5rem 2rem 4rem;
-    }
-    .topbar {
-      border-bottom: 1px solid var(--border);
-      padding-bottom: 1.25rem;
-      margin-bottom: 2rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      flex-wrap: wrap;
-      gap: 1rem;
-    }
-    .topbar .brand {
-      display: flex;
-      align-items: center;
-      gap: 1rem;
-    }
-    .topbar .brand-link {
-      text-decoration: none;
-      display: flex;
-      align-items: baseline;
-      gap: 0.6rem;
-    }
-    .topbar .brand-link .logo {
-      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
-      font-size: 1.85rem;
-      font-weight: 800;
-      color: var(--accent);
-      letter-spacing: -0.03em;
-    }
-    .topbar .brand-link .brand-title {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.95rem;
-      font-weight: 600;
-      color: var(--text);
-      letter-spacing: 0.04em;
-    }
-    .layout {
-      display: flex;
-      gap: 2.25rem;
-      align-items: flex-start;
-    }
-    .sidebar {
-      width: 290px;
-      flex-shrink: 0;
-      position: sticky;
-      top: 1.5rem;
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem 1rem;
-      font-size: 0.88rem;
-      max-height: calc(100vh - 3rem);
-      overflow-y: auto;
-    }
-    .sidebar-section-title {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.72rem;
-      text-transform: uppercase;
-      letter-spacing: 0.12em;
-      color: var(--muted);
-      margin: 1rem 0 0.5rem;
-      padding-left: 0.5rem;
-    }
-    .sidebar-section-title:first-child {
-      margin-top: 0;
-    }
-    .sidebar-nav {
-      list-style: none;
-      margin: 0;
-      padding: 0;
-      display: flex;
-      flex-direction: column;
-      gap: 0.2rem;
-    }
-    .sidebar-nav a {
-      display: block;
-      color: var(--text);
-      text-decoration: none;
-      padding: 0.38rem 0.65rem;
-      border-radius: 5px;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      border-left: 2px solid transparent;
-      transition: background 0.15s, border-color 0.15s, color 0.15s;
-    }
-    .sidebar-nav a:hover, .sidebar-nav a.active {
-      background: rgba(88, 166, 255, 0.1);
-      color: var(--cyan);
-      border-left-color: var(--cyan);
-    }
-    .content {
-      flex: 1;
-      min-width: 0;
-    }
-    .man-header {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-left: 4px solid var(--accent);
-      border-radius: 8px;
-      padding: 1.5rem 1.75rem;
-      margin-bottom: 2rem;
-    }
-    .man-meta {
-      display: flex;
-      gap: 1.5rem;
-      flex-wrap: wrap;
-      margin-top: 0.75rem;
-      font-size: 0.88rem;
-      color: var(--muted);
-      font-family: ui-monospace, SFMono-Regular, monospace;
-    }
-    .example-card {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      margin: 1.75rem 0 2rem;
-      overflow: hidden;
-    }
-    .example-card-header {
-      background: rgba(35, 43, 62, 0.5);
-      border-bottom: 1px solid var(--border);
-      padding: 0.65rem 1.15rem;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-    }
-    .example-card-title {
-      color: var(--cyan);
-      font-weight: 600;
-    }
-    .example-card-badge {
-      background: rgba(63, 185, 80, 0.15);
-      color: var(--accent);
-      padding: 0.15rem 0.5rem;
-      border-radius: 4px;
-      font-size: 0.74rem;
-      border: 1px solid rgba(63, 185, 80, 0.3);
-    }
-    .example-card-body {
-      padding: 1rem 1.25rem;
-    }
-    .output-label {
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.75rem;
-      color: var(--muted);
-      text-transform: uppercase;
-      letter-spacing: 0.08em;
-      margin: 0.85rem 0 0.35rem;
-    }
-    .terminal-out {
-      background: #040608;
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--accent);
-      border-radius: 4px;
-      padding: 0.75rem 1rem;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      color: #7ee787;
-      overflow-x: auto;
-    }
-    .danger-out {
-      background: #040608;
-      border: 1px solid var(--border);
-      border-left: 3px solid var(--danger);
-      border-radius: 4px;
-      padding: 0.75rem 1rem;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.84rem;
-      color: #ff7b72;
-      overflow-x: auto;
-    }
-    .explanation {
-      margin-top: 0.85rem;
-      font-size: 0.9rem;
-      color: var(--text);
-      line-height: 1.5;
-    }
-    .pipeline-box {
-      background: var(--code-bg);
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 1.25rem;
-      margin: 1.25rem 0;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.85rem;
-      line-height: 1.5;
-      color: var(--cyan);
-      overflow-x: auto;
-    }
-    @media (max-width: 900px) {
-      .layout {
-        flex-direction: column;
-      }
-      .sidebar {
-        width: 100%;
-        position: static;
-        max-height: none;
-      }
-    }
-  </style>
 </head>
 <body>
 
   <!-- Top bar contract -->
-  <header class="topbar">
-    <div class="brand">
-      <a href="index.html" class="brand-link">
-        <span class="logo">oC</span>
-        <span class="brand-title">// MAN &amp; TUTORIAL PORTAL</span>
-      </a>
-      <span class="badge">v1.0 Self-Hosted</span>
+    <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <a href="index.html">
+          <span class="brand-title">oC</span>
+          <span class="brand-sub">v1.0 manual &amp; reference</span>
+        </a>
+      </div>
+      <nav>
+        <a href="index.html">OC(7)</a>
+        <a href="tutorial.html">TUTORIAL(7)</a>
+        <a href="syntax.html">OC-LANG(7)</a>
+        <a href="stdlib.html">OC-STD(3)</a>
+        <a href="man-occ.html" class="active">OCC(1)</a>
+        <a href="security.html">OC-SECURITY(7)</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">git</a>
+      </nav>
     </div>
-    <nav>
-      <a href="index.html">OC(7) Overview</a>
-      <a href="tutorial.html">W3 Tutorial</a>
-      <a href="syntax.html">OC-LANG(7) Syntax</a>
-      <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
-      <a href="man-occ.html" class="active">OCC(1) Compiler</a>
-      <a href="security.html">OC-SECURITY(7) CWEs</a>
-      <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub ↗</a>
-    </nav>
   </header>
 
   <div class="layout">
     <!-- Left Sidebar -->
-    <aside class="sidebar">
-      <div class="sidebar-section-title">Manual Page Sections</div>
-      <ul class="sidebar-nav">
-        <li><a href="#name">1. NAME</a></li>
-        <li><a href="#synopsis">2. SYNOPSIS</a></li>
-        <li><a href="#description">3. DESCRIPTION &amp; Architecture</a></li>
-        <li><a href="#commands">4. COMMANDS (build vs run)</a></li>
-        <li><a href="#options">5. OPTIONS &amp; Flags</a></li>
-        <li><a href="#bootstrap">6. BOOTSTRAP &amp; Self-Hosting</a></li>
-        <li><a href="#diagnostics">7. DIAGNOSTICS &amp; Exit Codes</a></li>
-        <li><a href="#see-also">8. SEE ALSO</a></li>
-      </ul>
-
-      <div class="sidebar-section-title">Cross Portal Links</div>
-      <ul class="sidebar-nav">
-        <li><a href="index.html">OC(7) Overview</a></li>
-        <li><a href="tutorial.html">W3Schools oC Tutorial</a></li>
-        <li><a href="syntax.html">OC-LANG(7) Grammar Spec</a></li>
-        <li><a href="stdlib.html">OC-STD(3) Standard Library</a></li>
-        <li><a href="security.html">OC-SECURITY(7) CWE Matrix</a></li>
-      </ul>
+        <aside class="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-title">OCC(1) Sections</div>
+        <a href="#name" class="sidebar-link active">1. NAME</a>
+        <a href="#synopsis" class="sidebar-link">2. SYNOPSIS</a>
+        <a href="#description" class="sidebar-link">3. DESCRIPTION</a>
+        <a href="#commands" class="sidebar-link">4. COMMANDS</a>
+        <a href="#options" class="sidebar-link">5. OPTIONS</a>
+        <a href="#bootstrap" class="sidebar-link">6. BOOTSTRAP</a>
+        <a href="#diagnostics" class="sidebar-link">7. DIAGNOSTICS</a>
+        <a href="#see-also" class="sidebar-link">8. SEE ALSO</a>
+      </div>
+      <div class="sidebar-group">
+        <div class="sidebar-title">Manual Pages</div>
+        <a href="index.html" class="sidebar-link">OC(7) Overview</a>
+        <a href="tutorial.html" class="sidebar-link">TUTORIAL(7) W3 Guide</a>
+        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) & SYSCALLS(2)</a>
+        <a href="man-occ.html" class="sidebar-link active">OCC(1) Compiler CLI</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWEs</a>
+      </div>
     </aside>
 
     <!-- Main Content -->
     <main class="content">
 
       <!-- Section 1: NAME -->
+      <div class="man-header">
+        <span>OCC(1)</span>
+        <span>oC Programmer's Manual</span>
+        <span>OCC(1)</span>
+      </div>
+
       <section id="name">
-        <div class="man-header">
-          <h2>OCC(1) — oC Systems Compiler Reference Manual</h2>
-          <p>User command reference for the self-hosted zero-libc oC toolchain and native x86_64 ELF64 generator.</p>
-          <div class="man-meta">
-            <span><strong>Standard:</strong> Pure oC v1.0.0</span>
-            <span><strong>Target ABI:</strong> Linux x86_64 ELF64</span>
-            <span><strong>Section:</strong> 1 (User Commands)</span>
-          </div>
-        </div>
 
         <h2>NAME</h2>
         <p>
@@ -356,18 +146,22 @@
           Compiles the specified source file and its imported dependencies into an executable binary. If <code>-o &lt;output&gt;</code> is omitted, the compiler outputs the binary to <code>a.out</code> in the current directory.
         </p>
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Subcommand: build</span>
-            <span class="example-card-badge">Native Backend</span>
+          <div class="example-header">
+            <span class="example-title">Subcommand: build</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>$ occ build examples/native_fibonacci.oc -o /tmp/native_fib --backend native</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ ls -lh /tmp/native_fib<br>-rwxr-xr-x 1 omer users 4.7K Nov  7 19:20 /tmp/native_fib</div>
-            <p class="explanation">
-              <strong>Outcome:</strong> A standalone, 4.7 KB static ELF64 executable is produced with zero reliance on <code>libc.so</code>.
-            </p>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>$ occ build examples/native_fibonacci.oc -o /tmp/native_fib --backend native</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ ls -lh /tmp/native_fib
+-rwxr-xr-x 1 omer users 4.7K Nov  7 19:20 /tmp/native_fib</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Outcome:</strong> A standalone, 4.7 KB static ELF64 executable is produced with zero reliance on <code>libc.so</code>.</div>
         </div>
 
         <h3><code>run &lt;input.oc&gt;</code></h3>
@@ -375,18 +169,27 @@
           Compiles the source file to a temporary location (default: <code>/tmp/occ_run_bin</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller.
         </p>
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Subcommand: run</span>
-            <span class="example-card-badge">Instant Run</span>
+          <div class="example-header">
+            <span class="example-title">Subcommand: run</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>$ occ run examples/core_suite.oc</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="terminal-out">$ occ run examples/core_suite.oc<br>=== oC Core Suite: Regional Memory, Strings, &amp; Sockets ===<br>[1/4] Regional bump arena alloc/reset test... PASS<br>[2/4] Fat slice indexing &amp; sub-slicing test... PASS<br>[3/4] Socket networking &amp; loopback echo... PASS<br>[4/4] Hardware integer overflow trap... PASS<br>All 4 suites completed successfully.</div>
-            <p class="explanation">
-              <strong>Convenience:</strong> Ideal for test suites, scripts, and continuous integration workflows.
-            </p>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>$ occ run examples/core_suite.oc</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-pass">$ occ run examples/core_suite.oc
+=== oC Core Suite: Regional Memory, Strings, &amp; Sockets ===
+[1/4] Regional bump arena alloc/reset test... PASS
+[2/4] Fat slice indexing &amp; sub-slicing test... PASS
+[3/4] Socket networking &amp; loopback echo... PASS
+[4/4] Hardware integer overflow trap... PASS
+All 4 suites completed successfully.</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Convenience:</strong> Ideal for test suites, scripts, and continuous integration workflows.</div>
         </div>
       </section>
 
@@ -581,41 +384,51 @@ $ cmp /tmp/occ_stage2 /tmp/occ_stage3
         </p>
 
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Diagnostic: Stack Reference Escape Rejected</span>
-            <span class="example-card-badge">CWE-562 Defense</span>
+          <div class="example-header">
+            <span class="example-title">Diagnostic: Stack Reference Escape Rejected</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>// examples/bad_stack_escape.oc
-fn leak_stack() -> *mut i32 {
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>// examples/bad_stack_escape.oc
+fn leak_stack() *mut i32 {
     let mut local: i32 = 42;
     return &amp;mut local; // Illegal stack address escape
 }</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="danger-out">$ occ build examples/bad_stack_escape.oc<br>error: cannot return reference to local stack variable 'local'<br>[occ terminated with exit code 1]</div>
-            <p class="explanation">
-              <strong>Prevention:</strong> CWE-562 (Return of Stack Variable Address) is completely prevented before any assembly or C code is generated.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-trap">$ occ build examples/bad_stack_escape.oc
+error: cannot return reference to local stack variable 'local'
+[occ terminated with exit code 1]</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Prevention:</strong> CWE-562 (Return of Stack Variable Address) is completely prevented before any assembly or C code is generated.</div>
         </div>
 
         <div class="example-card">
-          <div class="example-card-header">
-            <span class="example-card-title">Diagnostic: Use-After-Free via Arena Reset Rejected</span>
-            <span class="example-card-badge">CWE-416 Defense</span>
+          <div class="example-header">
+            <span class="example-title">Diagnostic: Use-After-Free via Arena Reset Rejected</span>
+            <button class="copy-btn" onclick="copyCode(this)">Copy</button>
           </div>
-          <div class="example-card-body">
-            <pre><code>// examples/exploits/UAF_Arena_Reset.oc
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label"><span>SOURCE</span></div>
+              <pre><code>// examples/exploits/UAF_Arena_Reset.oc
 let mut a = arena_init(4096);
 let ptr = arena_alloc(&amp;mut a, 64);
 arena_reset(&amp;mut a);
 ptr[0] = 0xAA; // Illegal access after arena invalidation</code></pre>
-            <div class="output-label">Terminal Execution</div>
-            <div class="danger-out">$ occ build examples/exploits/UAF_Arena_Reset.oc<br>error: use-after-free: variable 'ptr' used after arena 'a' was reset<br>[occ terminated with exit code 1]</div>
-            <p class="explanation">
-              <strong>Prevention:</strong> CWE-416 (Use After Free) is eliminated statically at compile time with 0.00 ns runtime cost.
-            </p>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label"><span>OUTPUT</span></div>
+              <pre><code class="term-trap">$ occ build examples/exploits/UAF_Arena_Reset.oc
+error: use-after-free: variable 'ptr' used after arena 'a' was reset
+[occ terminated with exit code 1]</code></pre>
+            </div>
           </div>
+          <div class="explanation-box"><strong>Prevention:</strong> CWE-416 (Use After Free) is eliminated statically at compile time with 0.00 ns runtime cost.</div>
         </div>
       </section>
 
@@ -640,5 +453,17 @@ ptr[0] = 0xAA; // Illegal access after arena invalidation</code></pre>
     </main>
   </div>
 
+<script>
+function copyCode(btn) {
+  const card = btn.closest('.example-card');
+  const code = card.querySelector('.code-pane pre code, pre code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.innerText).then(() => {
+    const orig = btn.innerText;
+    btn.innerText = 'Copied';
+    setTimeout(() => { btn.innerText = orig; }, 1200);
+  });
+}
+</script>
 </body>
 </html>
