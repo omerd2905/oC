@@ -1,0 +1,24 @@
+packed struct PacketHeader {
+    version: u8,
+    port: u16,
+}
+
+struct User {
+    id: u32,
+    is_active: bool,
+}
+
+fn main() {
+    let packet = PacketHeader { version: 1, port: 8080 }
+    print("Packet version:")
+    print(packet.version)
+    print("Packet port:")
+    print(packet.port)
+
+    let mut user = User { id: 42, is_active: true }
+    user.id = 100
+    if user.is_active {
+        print("Active user ID:")
+        print(user.id)
+    }
+}

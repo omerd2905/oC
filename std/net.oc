@@ -1,0 +1,32 @@
+extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
+extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -> i32;
+extern fn sys_close(fd: i32) -> i32;
+
+fn htons(hostshort: u16) -> u16 {
+    let hi: u16 = (hostshort / 256).as(u16);
+    let lo: u16 = (hostshort % 256).as(u16);
+    return ((lo * 256) + hi).as(u16);
+}
+
+packed struct sockaddr_in {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: u32,
+    sin_zero: [8]u8,
+}
+
+fn probe_port(port: u16) -> bool {
+    let fd: i32 = sys_socket(2, 1, 0)
+    if fd < 0 {
+        return false
+    }
+    let addr: sockaddr_in = sockaddr_in {
+        sin_family: 2,
+        sin_port: htons(port),
+        sin_addr: 0x0100007f,
+        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
+    }
+    let res: i32 = sys_connect(fd, &addr, 16)
+    sys_close(fd)
+    return res == 0
+}

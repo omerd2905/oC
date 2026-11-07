@@ -1,0 +1,17 @@
+fn main() {
+    let full_text: string = "Secured systems with oC slices"
+    print("Full text:")
+    print(full_text)
+    print("Length:")
+    print(full_text.len)
+
+    let sub: string = full_text[0..7]
+    print("Substring [0..7]:")
+    print(sub)
+    print("Substring length:")
+    print(sub.len)
+
+    let first_char: u8 = sub[0]
+    print("First byte:")
+    print(first_char)
+}

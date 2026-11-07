@@ -1,0 +1,50 @@
+import "std/mem.oc";
+import "compiler/token.oc";
+
+let NODE_PROGRAM: u32 = 1;
+let NODE_FN: u32 = 2;
+let NODE_PARAM: u32 = 3;
+let NODE_LET: u32 = 4;
+let NODE_RETURN: u32 = 5;
+let NODE_IF: u32 = 6;
+let NODE_WHILE: u32 = 7;
+let NODE_PRINT: u32 = 8;
+let NODE_ASSIGN: u32 = 9;
+let NODE_CALL: u32 = 10;
+let NODE_BINARY: u32 = 11;
+let NODE_IDENT: u32 = 12;
+let NODE_INT: u32 = 13;
+let NODE_STRING: u32 = 14;
+let NODE_BLOCK: u32 = 15;
+let NODE_BOOL: u32 = 16;
+let NODE_ADDRESS_OF: u32 = 17;
+let NODE_DEREF: u32 = 18;
+let NODE_CAST: u32 = 19;
+let NODE_INDEX: u32 = 20;
+let NODE_SLICE: u32 = 21;
+let NODE_FIELD_ACCESS: u32 = 22;
+let NODE_STRUCT_INIT: u32 = 23;
+let NODE_ARRAY_INIT: u32 = 24;
+let NODE_STRUCT_DECL: u32 = 25;
+let NODE_UNARY: u32 = 26;
+
+struct AstNode {
+    tag: u32,
+    tok: Token,
+    type_name: string,
+    left: *mut AstNode,
+    right: *mut AstNode,
+    next: *mut AstNode,
+}
+
+fn ast_alloc_node(arena: *mut Arena, tag: u32, tok: Token) -> *mut AstNode {
+    let raw: *mut u8 = arena_alloc(arena, 128);
+    let node: *mut AstNode = raw.as(*mut AstNode);
+    node.tag = tag;
+    node.tok = tok;
+    node.type_name = "";
+    node.left = (0).as(*mut AstNode);
+    node.right = (0).as(*mut AstNode);
+    node.next = (0).as(*mut AstNode);
+    return node;
+}

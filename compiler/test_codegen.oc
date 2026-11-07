@@ -1,0 +1,51 @@
+import "std/io.oc";
+import "std/fs.oc";
+import "std/mem.oc";
+import "compiler/parser.oc";
+import "compiler/codegen.oc";
+
+extern fn system(cmd: *u8) -> i32;
+
+fn main() {
+    print("=== oC Self-Hosting Code Generator Test ===");
+
+    let mut buf: [4096]u8 = [0];
+    let bytes: i64 = read_file("examples/hello.oc", (&mut buf).as(*mut u8), 4095);
+    if bytes <= 0 {
+        print("Error: failed to read examples/hello.oc");
+        return;
+    }
+
+    let src: string = string {
+        ptr: (&mut buf).as(*u8),
+        len: bytes.as(usize),
+    };
+
+    let mut arena: Arena = arena_init(65536);
+    let mut parser: Parser = parser_init(src, &mut arena);
+    let prog: *mut AstNode = parse_program(&mut parser);
+
+    let mut out: CodeBuffer = buf_init(16384);
+    codegen_program(prog, &mut out);
+
+    let c_code: string = buf_to_string(&mut out);
+    let ok: bool = write_file("/tmp/hello_self.c", c_code);
+    if !ok {
+        print("Error: failed to write /tmp/hello_self.c");
+        return;
+    }
+
+    print("Emitted C code successfully written to /tmp/hello_self.c");
+    print("Compiling and executing via gcc:");
+
+    let cmd: string = "gcc /tmp/hello_self.c -o /tmp/hello_self_bin && /tmp/hello_self_bin";
+    let ret: i32 = system(cmd.ptr.as(*u8));
+    if ret != 0 {
+        print("Error: execution of emitted code failed");
+        return;
+    }
+
+    buf_deinit(&mut out);
+    arena_deinit(&mut arena);
+    print("=== Code Generator Test Completed Successfully ===");
+}

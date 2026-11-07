@@ -1,0 +1,47 @@
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -> *mut void;
+extern fn sys_munmap(addr: *mut void, len: usize) -> i32;
+
+struct Arena {
+    offset: usize,
+    capacity: usize,
+    buffer: *mut u8,
+}
+
+fn arena_init(capacity: usize) -> Arena {
+    let raw: *mut void = sys_mmap(0, capacity, 3, 34, -1, 0);
+    return Arena {
+        offset: 0,
+        capacity: capacity,
+        buffer: raw.as(*mut u8),
+    }
+}
+
+fn arena_alloc(arena: *mut Arena, size: usize) -> *mut u8 {
+    if arena.offset + size > arena.capacity {
+        return (0).as(*mut u8)
+    }
+    let ptr: *mut u8 = (arena.buffer + arena.offset).as(*mut u8)
+    arena.offset = arena.offset + size
+    return ptr
+}
+
+fn arena_reset(arena: *mut Arena) {
+    let mut i: usize = 0
+    while i < arena.offset {
+        arena.buffer[i] = 0
+        i = i + 1
+    }
+    arena.offset = 0
+}
+
+fn arena_deinit(arena: *mut Arena) {
+    let mut i: usize = 0
+    while i < arena.offset {
+        arena.buffer[i] = 0
+        i = i + 1
+    }
+    sys_munmap(arena.buffer.as(*mut void), arena.capacity);
+    arena.buffer = (0).as(*mut u8)
+    arena.capacity = 0
+    arena.offset = 0
+}

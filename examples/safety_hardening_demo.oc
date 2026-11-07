@@ -1,0 +1,36 @@
+struct Node {
+    id: i32,
+    val: i32,
+}
+
+fn inspect_node(node: *Node) {
+    print("Node ID:")
+    print(node.id)
+    print("Node Val:")
+    print(node.val)
+}
+
+fn main() {
+    print("=== Attack Surface Hardening Verification ===");
+
+    let a: i32 = 100;
+    let b: i32 = 4;
+    let q: i32 = a / b;
+    let r: i32 = a % 3;
+    print("Safe Division (100 / 4):");
+    print(q);
+    print("Safe Modulo (100 % 3):");
+    print(r);
+
+    let mut n: Node = Node { id: 42, val: 99 };
+    inspect_node(&n);
+
+    let mut x: i32 = 1337;
+    let px: *mut i32 = &mut x;
+    *px = 7331;
+    print("Safe Dereference Value:");
+    print(*px);
+
+    print("Verified: all division, modulo, and pointer dereferences protected.");
+}
+

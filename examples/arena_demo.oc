@@ -1,0 +1,76 @@
+extern fn malloc(size: usize) -> *mut void;
+extern fn free(ptr: *mut void);
+
+struct Arena {
+    offset: usize,
+    capacity: usize,
+    buffer: *mut u8,
+}
+
+fn arena_alloc(arena: *mut Arena, size: usize) -> *mut u8 {
+    if arena.offset + size > arena.capacity {
+        return (0).as(*mut u8);
+    }
+    let ptr: *mut u8 = (arena.buffer + arena.offset).as(*mut u8);
+    arena.offset = arena.offset + size;
+    return ptr;
+}
+
+fn arena_reset(arena: *mut Arena) {
+    arena.offset = 0;
+}
+
+fn main() {
+    let capacity: usize = 1024;
+    let raw: *mut void = malloc(capacity);
+    let mut arena: Arena = Arena {
+        offset: 0,
+        capacity: capacity,
+        buffer: raw.as(*mut u8),
+    };
+
+    print("Initial Arena Capacity:");
+    print(arena.capacity);
+    print("Initial Arena Offset:");
+    print(arena.offset);
+
+    // Allocate 16 bytes for first chunk
+    let chunk1: *mut u8 = arena_alloc(&mut arena, 16);
+    chunk1[0] = 79; // 'O'
+    chunk1[1] = 67; // 'C'
+    chunk1[2] = 0;
+
+    print("After allocating 16 bytes, offset:");
+    print(arena.offset);
+    print("Chunk1 first byte:");
+    print(chunk1[0]);
+    print("Chunk1 second byte:");
+    print(chunk1[1]);
+
+    // Allocate 32 bytes for second chunk
+    let chunk2: *mut u8 = arena_alloc(&mut arena, 32);
+    chunk2[0] = 42;
+
+    print("After allocating 32 bytes, offset:");
+    print(arena.offset);
+    print("Chunk2 first byte:");
+    print(chunk2[0]);
+
+    // Reset arena
+    arena_reset(&mut arena);
+    print("After arena_reset, offset:");
+    print(arena.offset);
+
+    // Allocate again into reset arena
+    let chunk3: *mut u8 = arena_alloc(&mut arena, 8);
+    chunk3[0] = 99;
+
+    print("After reallocating 8 bytes into reset arena, offset:");
+    print(arena.offset);
+    print("Chunk3 first byte:");
+    print(chunk3[0]);
+
+    // Cleanup backing storage
+    free(arena.buffer.as(*mut void));
+    print("Arena backing buffer freed successfully.");
+}

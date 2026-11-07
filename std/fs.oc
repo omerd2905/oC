@@ -1,0 +1,56 @@
+extern fn sys_open(path: *u8, flags: i32, mode: u32) -> i32;
+extern fn sys_close(fd: i32) -> i32;
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn sys_chmod(path: *u8, mode: u32) -> i32;
+extern fn sys_unlink(path: *u8) -> i32;
+
+fn cstr_path(path: string, out_buf: *mut u8) -> *u8 {
+    let mut len: usize = path.len
+    if len > 4095 {
+        len = 4095
+    }
+    let mut i: usize = 0
+    while i < len {
+        out_buf[i] = path[i]
+        i = i + 1
+    }
+    out_buf[len] = 0
+    return out_buf.as(*u8)
+}
+
+fn read_file(path: string, out_buf: *mut u8, max_len: usize) -> i64 {
+    let mut pbuf: [4096]u8 = [0]
+    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    let fd: i32 = sys_open(p, 0 | 655360, 0)
+    if fd < 0 {
+        return -1
+    }
+    let n: i64 = sys_read(fd, out_buf, max_len)
+    sys_close(fd)
+    return n
+}
+
+fn write_file(path: string, content: string) -> bool {
+    let mut pbuf: [4096]u8 = [0]
+    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    let fd: i32 = sys_open(p, 577 | 655360, 420)
+    if fd < 0 {
+        return false
+    }
+    let n: i64 = sys_write(fd, content.ptr.as(*u8), content.len)
+    sys_close(fd)
+    return n >= 0
+}
+
+fn chmod_exec(path: string) -> bool {
+    let mut pbuf: [4096]u8 = [0]
+    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    return sys_chmod(p, 493) == 0
+}
+
+fn unlink_file(path: string) -> bool {
+    let mut pbuf: [4096]u8 = [0]
+    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    return sys_unlink(p) == 0
+}

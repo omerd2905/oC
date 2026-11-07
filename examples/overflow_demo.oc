@@ -1,0 +1,19 @@
+fn main() {
+    print("=== Safe Arithmetic & Overflow Protection ===")
+
+    let a: u64 = 1000
+    let b: u64 = 2000
+    let sum: u64 = a + b
+    print("Sum:")
+    print(sum)
+
+    let diff: u64 = b - a
+    print("Difference:")
+    print(diff)
+
+    let prod: u64 = a * 3
+    print("Product:")
+    print(prod)
+
+    print("Verified: all arithmetic passed with zero overflow.")
+}

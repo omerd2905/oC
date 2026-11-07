@@ -1,0 +1,70 @@
+// Literals
+let TOK_EOF: u32 = 0;
+let TOK_IDENT: u32 = 1;
+let TOK_INT: u32 = 2;
+let TOK_STRING: u32 = 3;
+
+// Keywords
+let TOK_FN: u32 = 10;
+let TOK_LET: u32 = 11;
+let TOK_MUT: u32 = 12;
+let TOK_RETURN: u32 = 13;
+let TOK_IF: u32 = 14;
+let TOK_ELSE: u32 = 15;
+let TOK_WHILE: u32 = 16;
+let TOK_STRUCT: u32 = 17;
+let TOK_PACKED: u32 = 18;
+let TOK_EXTERN: u32 = 19;
+let TOK_IMPORT: u32 = 20;
+let TOK_PRINT: u32 = 21;
+let TOK_TRUE: u32 = 22;
+let TOK_FALSE: u32 = 23;
+let TOK_AS: u32 = 24;
+
+// Punctuation & Operators
+let TOK_LPAREN: u32 = 30;
+let TOK_RPAREN: u32 = 31;
+let TOK_LBRACE: u32 = 32;
+let TOK_RBRACE: u32 = 33;
+let TOK_LBRACKET: u32 = 34;
+let TOK_RBRACKET: u32 = 35;
+let TOK_COLON: u32 = 36;
+let TOK_COMMA: u32 = 37;
+let TOK_DOT: u32 = 38;
+let TOK_ARROW: u32 = 39;
+let TOK_EQUAL: u32 = 40;
+let TOK_PLUS: u32 = 41;
+let TOK_MINUS: u32 = 42;
+let TOK_STAR: u32 = 43;
+let TOK_SLASH: u32 = 44;
+let TOK_PERCENT: u32 = 45;
+let TOK_AMP: u32 = 46;
+let TOK_BANG: u32 = 47;
+let TOK_EQEQ: u32 = 48;
+let TOK_NEQ: u32 = 49;
+let TOK_LT: u32 = 50;
+let TOK_LTE: u32 = 51;
+let TOK_GT: u32 = 52;
+let TOK_GTE: u32 = 53;
+let TOK_SEMICOLON: u32 = 54;
+let TOK_DOTDOT: u32 = 55;
+let TOK_PIPE: u32 = 56;
+let TOK_CARET: u32 = 57;
+let TOK_SHL: u32 = 58;
+let TOK_SHR: u32 = 59;
+
+struct Token {
+    tag: u32,
+    slice: string,
+    line: u32,
+    col: u32,
+}
+
+fn is_keyword(tag: u32) -> bool {
+    if tag >= 10 {
+        if tag <= 24 {
+            return true;
+        }
+    }
+    return false;
+}

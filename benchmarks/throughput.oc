@@ -1,0 +1,35 @@
+packed struct Packet {
+    version: u8,
+    port: u16,
+    seq: u32,
+    checksum: u32,
+}
+
+fn process_packet(pkt: *Packet) -> u32 {
+    let sum: u32 = pkt.version.as(u32) + pkt.port.as(u32) + pkt.seq + pkt.checksum;
+    return sum;
+}
+
+fn main() {
+    print("Starting 10,000,000 packet benchmark...");
+    let mut pkt: Packet = Packet {
+        version: 1,
+        port: 8080,
+        seq: 100,
+        checksum: 42,
+    };
+
+    let mut total: u64 = 0;
+    let mut i: u32 = 0;
+    while i < 10000000 {
+        pkt.seq = i;
+        pkt.checksum = pkt.checksum + 1;
+        let p: u32 = process_packet(&pkt);
+        total = total + p.as(u64);
+        i = i + 1;
+    }
+
+    print("Completed 10,000,000 iterations.");
+    print("Total checksum:");
+    print(total);
+}

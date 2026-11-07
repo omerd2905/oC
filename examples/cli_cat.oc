@@ -1,0 +1,31 @@
+extern fn open(path: *u8, flags: i32, mode: u32) -> i32;
+extern fn read(fd: i32, buf: *mut u8, count: usize) -> i64;
+extern fn write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn close(fd: i32) -> i32;
+
+fn stream_file(path: *u8) {
+    let fd: i32 = open(path, 0, 0);
+    if fd < 0 {
+        print("Error: unable to open file");
+        return;
+    }
+
+    let mut chunk: [512]u8 = [0];
+    let mut n: i64 = read(fd, (&mut chunk).as(*mut u8), 512);
+    while n > 0 {
+        write(1, (&chunk).as(*u8), n.as(usize));
+        n = read(fd, (&mut chunk).as(*mut u8), 512);
+    }
+
+    close(fd);
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc < 2 {
+        print("Usage: cli_cat <filepath>");
+        return 1;
+    }
+
+    stream_file(argv[1]);
+    return 0;
+}

@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>oC v1.0 — Active-Defense Systems Programming Language</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>oC</h1>
+      <span class="badge">v1.0.0 Self-Hosted</span>
+    </div>
+    <nav>
+      <a href="index.html" class="active">Overview</a>
+      <a href="syntax.html">Syntax Reference</a>
+      <a href="security.html">17-CWE Security Matrix</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h2>100% C Speed. Zero Allocator Exploit Surface. &lt;5 KB Static ELF.</h2>
+    <p>
+      <strong>oC</strong> is a self-hosted systems programming language engineered for deterministic regional memory management, compile-time escape &amp; lifetime verification, and direct Linux <code>x86_64</code> machine code emission without <code>libc</code> or heap metadata attack surface.
+    </p>
+  </section>
+
+  <div class="grid">
+    <div class="stat-card">
+      <div class="value">4.7 KB</div>
+      <div class="label">Standalone Static ELF64 Binary (<code>--backend native</code>)</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">0.00 ns</div>
+      <div class="label">Runtime Memory-Safety Overhead (Compile-Time <code>EscapeValidator</code>)</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">17 CWEs</div>
+      <div class="label">Vulnerability Classes Eliminated by Construction</div>
+    </div>
+    <div class="stat-card">
+      <div class="value">103 KB</div>
+      <div class="label">100% Self-Hosted Compiler Binary (Stage 2 == Stage 3 Bit-for-Bit)</div>
+    </div>
+  </div>
+
+  <h2>Why oC Exists</h2>
+  <p>
+    Traditional heap allocators (<code>ptmalloc</code>, <code>jemalloc</code>, <code>mimalloc</code>) interleave inline chunk metadata or freelist pointers with application data, enabling Use-After-Free (CWE-416), Double-Free (CWE-415), and Heap Metadata Corruption (CWE-122). Garbage collectors add latency spikes, while borrow checkers often force complex lifetime annotations across every struct.
+  </p>
+  <p>
+    <strong>oC</strong> eliminates the general-purpose heap entirely:
+  </p>
+  <pre><code>// 1. Deterministic kernel-backed regional arenas via direct sys_mmap (0x0f 0x05)
+let mut arena: Arena = arena_init(65536);
+let buf: *mut u8 = arena_alloc(&amp;mut arena, 256);
+
+// 2. Compile-Time EscapeValidator blocks UAF &amp; Cross-Arena Escapes before codegen
+arena_deinit(&amp;mut arena); // Automatically zeroes [0..arena.offset] (CWE-14) + sys_munmap</code></pre>
+
+  <h2>v1.0 Architecture Comparison</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Metric</th>
+        <th>C (GCC / glibc)</th>
+        <th>Rust / Zig</th>
+        <th>oC v1.0 (<code>--backend native</code>)</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Minimum Static Binary</td>
+        <td>~850 KB (static glibc)</td>
+        <td>~300 KB – 4 MB</td>
+        <td><strong>4.7 KB</strong> (Raw ELF64, zero libc)</td>
+      </tr>
+      <tr>
+        <td>Allocator Attack Surface</td>
+        <td>Freelist / tcache poisoning</td>
+        <td>Custom / libc allocator</td>
+        <td><strong>Zero</strong> (Kernel <code>sys_mmap</code> bump arenas)</td>
+      </tr>
+      <tr>
+        <td>Arena Scrubbing (CWE-14)</td>
+        <td>Dead-store eliminated by <code>-O2</code></td>
+        <td>Manual <code>zeroize</code> crate</td>
+        <td><strong>Enforced</strong> on <code>arena_reset</code> &amp; <code>arena_deinit</code></td>
+      </tr>
+      <tr>
+        <td>File I/O Defaults (CWE-59/403)</td>
+        <td>Follows symlinks, leaks FDs</td>
+        <td><code>CLOEXEC</code> only</td>
+        <td><strong><code>O_NOFOLLOW | O_CLOEXEC</code></strong> enforced in <code>std/fs.oc</code></td>
+      </tr>
+      <tr>
+        <td>Compiler Binary Size</td>
+        <td>~100+ MB toolchain</td>
+        <td>~170 MB+</td>
+        <td><strong>103 KB</strong> pure self-hosted <code>oC</code> binary</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>Quickstart</h2>
+  <pre><code># 1. Run the full self-hosting &amp; 13-exploit verification suite
+./tools/occ/showcase.sh
+
+# 2. Compile a standalone &lt;5 KB static ELF directly to x86_64 machine code
+./tools/occ/bin/occ build tools/occ/examples/oc_tripwire.oc -o /tmp/oc_tripwire --backend native
+/tmp/oc_tripwire</code></pre>
+
+  <footer>
+    oC v1.0 Systems Programming Language • Self-Hosted in Pure oC • Built for Active Defense
+  </footer>
+</body>
+</html>

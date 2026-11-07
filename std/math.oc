@@ -1,0 +1,28 @@
+fn abs_i32(x: i32) -> i32 {
+    if x < 0 {
+        return -x
+    }
+    return x
+}
+
+fn min_u32(a: u32, b: u32) -> u32 {
+    if a < b {
+        return a
+    }
+    return b
+}
+
+fn max_u32(a: u32, b: u32) -> u32 {
+    if a > b {
+        return a
+    }
+    return b
+}
+
+fn align_forward(addr: usize, alignment: usize) -> usize {
+    let rem: usize = addr % alignment
+    if rem == 0 {
+        return addr
+    }
+    return addr + (alignment - rem)
+}

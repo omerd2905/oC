@@ -1,0 +1,9 @@
+fn escape_pointer() -> *u8 {
+    let local: u8 = 42;
+    return &local;
+}
+
+fn main() {
+    let p: *u8 = escape_pointer();
+    print(*p);
+}

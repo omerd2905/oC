@@ -1,0 +1,7 @@
+fn main() {
+    let a: u64 = 15
+    let b: u64 = 25
+    let sum: u64 = a + b
+    print("Math verified natively:")
+    print(sum)
+}

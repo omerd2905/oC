@@ -1,0 +1,6 @@
+fn main() {
+    print("Testing spatial bounds safety on string indexing...");
+    let s: string = "hello";
+    let byte: u8 = s[100];
+    print(byte);
+}

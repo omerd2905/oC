@@ -1,0 +1,29 @@
+import "std/io.oc";
+import "std/fs.oc";
+import "compiler/lexer.oc";
+
+fn main() {
+    print("=== oC Self-Hosting Lexer Test ===");
+
+    let mut buf: [4096]u8 = [0];
+    let bytes: i64 = read_file("examples/hello.oc", (&mut buf).as(*mut u8), 4095);
+    if bytes <= 0 {
+        print("Error: failed to read examples/hello.oc");
+        return;
+    }
+
+    let src: string = string {
+        ptr: (&mut buf).as(*u8),
+        len: bytes.as(usize),
+    };
+
+    let mut lex: Lexer = lexer_init(src);
+    let mut tok: Token = lexer_next(&mut lex);
+    while tok.tag != TOK_EOF {
+        print(tok.tag);
+        print(tok.slice);
+        tok = lexer_next(&mut lex);
+    }
+
+    print("=== Lexer Test Completed Successfully ===");
+}
