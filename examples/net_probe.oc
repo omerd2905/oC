@@ -1,0 +1,47 @@
+extern fn socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
+extern fn connect(fd: i32, addr: *sockaddr_in, len: u32) -> i32;
+extern fn close(fd: i32) -> i32;
+extern fn htons(hostshort: u16) -> u16;
+
+packed struct sockaddr_in {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: u32,
+    sin_zero: [8]u8,
+}
+
+fn probe_port(port: u16) -> bool {
+    let fd: i32 = socket(2, 1, 0);
+    if fd < 0 {
+        return false;
+    }
+    let addr: sockaddr_in = sockaddr_in {
+        sin_family: 2,
+        sin_port: htons(port),
+        sin_addr: 0x0100007f,
+        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
+    };
+    let res: i32 = connect(fd, &addr, 16);
+    close(fd);
+    return res == 0;
+}
+
+fn main() {
+    print("--- Network Probe (127.0.0.1) ---");
+
+    print("Probing port 22 (SSH):");
+    let p22: bool = probe_port(22);
+    print(p22);
+
+    print("Probing port 53 (DNS):");
+    let p53: bool = probe_port(53);
+    print(p53);
+
+    print("Probing port 80 (HTTP):");
+    let p80: bool = probe_port(80);
+    print(p80);
+
+    print("Probing port 8080 (HTTP-Alt):");
+    let p8080: bool = probe_port(8080);
+    print(p8080);
+}

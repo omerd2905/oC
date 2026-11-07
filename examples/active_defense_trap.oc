@@ -1,0 +1,75 @@
+extern fn socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
+extern fn setsockopt(fd: i32, level: i32, optname: i32, optval: *void, optlen: u32) -> i32;
+extern fn bind(fd: i32, addr: *sockaddr_in, len: u32) -> i32;
+extern fn listen(fd: i32, backlog: i32) -> i32;
+extern fn accept(fd: i32, addr: *mut void, len: *mut void) -> i32;
+extern fn connect(fd: i32, addr: *sockaddr_in, len: u32) -> i32;
+extern fn close(fd: i32) -> i32;
+extern fn htons(hostshort: u16) -> u16;
+extern fn fork() -> i32;
+extern fn usleep(usec: u32) -> i32;
+
+packed struct sockaddr_in {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: u32,
+    sin_zero: [8]u8,
+}
+
+fn start_tripwire(port: u16) -> bool {
+    let sfd: i32 = socket(2, 1, 0);
+    if sfd < 0 {
+        print("Error: socket creation failed");
+        return false;
+    }
+
+    let opt: i32 = 1;
+    setsockopt(sfd, 1, 2, (&opt).as(*void), 4);
+
+    let saddr: sockaddr_in = sockaddr_in {
+        sin_family: 2,
+        sin_port: htons(port),
+        sin_addr: 0x0100007f,
+        sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
+    };
+
+    let b_res: i32 = bind(sfd, &saddr, 16);
+    if b_res < 0 {
+        print("Error: bind failed");
+        close(sfd);
+        return false;
+    }
+
+    listen(sfd, 1);
+    print("Active defense tripwire armed on port:");
+    print(port);
+
+    let client_fd: i32 = accept(sfd, (0).as(*mut void), (0).as(*mut void));
+    if client_fd >= 0 {
+        print("[IoB ALERT] Intruder trapped on decoy port!");
+        close(client_fd);
+    }
+
+    close(sfd);
+    return true;
+}
+
+fn main() -> i32 {
+    let pid: i32 = fork();
+    if pid == 0 {
+        usleep(20000);
+        let cfd: i32 = socket(2, 1, 0);
+        let caddr: sockaddr_in = sockaddr_in {
+            sin_family: 2,
+            sin_port: htons(9999),
+            sin_addr: 0x0100007f,
+            sin_zero: [0, 0, 0, 0, 0, 0, 0, 0],
+        };
+        connect(cfd, &caddr, 16);
+        close(cfd);
+        return 0;
+    }
+
+    start_tripwire(9999);
+    return 0;
+}

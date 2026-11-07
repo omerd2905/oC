@@ -1,0 +1,312 @@
+import "std/io.oc";
+import "std/fs.oc";
+import "std/mem.oc";
+import "compiler/token.oc";
+import "compiler/lexer.oc";
+import "compiler/ast.oc";
+import "compiler/parser.oc";
+import "compiler/codegen.oc";
+import "compiler/elf.oc";
+
+extern fn system(cmd: *u8) -> i32;
+
+fn cstr_to_string(cstr: *u8) -> string {
+    let mut len: usize = 0;
+    while cstr[len] != 0 {
+        len = len + 1;
+    }
+    return string {
+        ptr: cstr,
+        len: len,
+    };
+}
+
+fn is_safe_path(s: string) -> bool {
+    let mut i: usize = 0;
+    while i < s.len {
+        let c: u8 = s[i];
+        if c == 59 { return false; } // ';'
+        if c == 38 { return false; } // '&'
+        if c == 124 { return false; } // '|'
+        if c == 96 { return false; } // '`'
+        if c == 36 { return false; } // '$'
+        if c == 62 { return false; } // '>'
+        if c == 60 { return false; } // '<'
+        if c == 39 { return false; } // '\''
+        if c == 34 { return false; } // '"'
+        if c == 10 { return false; } // '\n'
+        if c == 13 { return false; } // '\r'
+        if c == 40 { return false; } // '('
+        if c == 41 { return false; } // ')'
+        i = i + 1;
+    }
+    return true;
+}
+
+fn try_read_file(path: string, buf: *mut u8, max_len: usize) -> i64 {
+    let bytes: i64 = read_file(path, buf, max_len);
+    if bytes >= 0 { return bytes; }
+
+    let mut cand: CodeBuffer = buf_init(256);
+    buf_append(&mut cand, "tools/occ/");
+    buf_append(&mut cand, path);
+    let bytes2: i64 = read_file(buf_to_string(&mut cand), buf, max_len);
+    buf_deinit(&mut cand);
+    if bytes2 >= 0 { return bytes2; }
+
+    return -1;
+}
+
+struct ModuleLoader {
+    visited: [64]string,
+    visited_count: usize,
+}
+
+fn arena_dup_str(arena: *mut Arena, s: string) -> string {
+    if s.len == 0 { return ""; }
+    let buf: *mut u8 = arena_alloc(arena, s.len);
+    let mut i: usize = 0;
+    while i < s.len {
+        buf[i] = s[i];
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: s.len };
+}
+
+fn load_module_recursive(
+    path: string,
+    out: *mut CodeBuffer,
+    loader: *mut ModuleLoader,
+    arena: *mut Arena
+) -> bool {
+    let mut i: usize = 0;
+    while i < loader.visited_count {
+        if str_eq(loader.visited[i], path) {
+            return true;
+        }
+        i = i + 1;
+    }
+
+    if loader.visited_count < 64 {
+        loader.visited[loader.visited_count] = arena_dup_str(arena, path);
+        loader.visited_count = loader.visited_count + 1;
+    }
+
+    let file_buf: *mut u8 = arena_alloc(arena, 262144);
+    let bytes: i64 = try_read_file(path, file_buf, 262143);
+    if bytes < 0 {
+        print("error: failed to read file: ");
+        print(path);
+        return false;
+    }
+
+    let src: string = string {
+        ptr: file_buf.as(*u8),
+        len: bytes.as(usize),
+    };
+
+    // Scan top-level imports
+    let mut lex: Lexer = lexer_init(src);
+    let mut scanning: bool = true;
+    while scanning {
+        let tok: Token = lexer_next(&mut lex);
+        if tok.tag == TOK_IMPORT {
+            let path_tok: Token = lexer_next(&mut lex);
+            if path_tok.tag == TOK_STRING {
+                let mut raw: string = path_tok.slice;
+                if raw.len >= 2 {
+                    if raw[0] == 34 {
+                        raw = raw[1..raw.len - 1];
+                    }
+                }
+                let mut sub_path_buf: CodeBuffer = buf_init(256);
+                buf_append(&mut sub_path_buf, raw);
+                let mut need_dot_oc: bool = false;
+                if raw.len < 3 {
+                    need_dot_oc = true;
+                } else if raw[raw.len - 3] != 46 {
+                    need_dot_oc = true;
+                } else if raw[raw.len - 2] != 111 {
+                    need_dot_oc = true;
+                } else if raw[raw.len - 1] != 99 {
+                    need_dot_oc = true;
+                }
+                if need_dot_oc {
+                    buf_append(&mut sub_path_buf, ".oc");
+                }
+                let sub_path: string = buf_to_string(&mut sub_path_buf);
+                let ok_sub: bool = load_module_recursive(sub_path, out, loader, arena);
+                buf_deinit(&mut sub_path_buf);
+                if !ok_sub {
+                    return false;
+                }
+            }
+        } else if tok.tag == TOK_SEMICOLON {
+            // Ignore optional semicolon after import
+        } else if tok.tag == TOK_EOF {
+            scanning = false;
+        } else {
+            // First non-import token reached: dependencies processed!
+            scanning = false;
+        }
+    }
+
+    buf_append(out, src);
+    buf_append(out, "\n");
+    return true;
+}
+
+fn main(argc: i32, argv: **u8) -> i32 {
+    if argc < 2 {
+        print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend native]");
+        return 1;
+    }
+
+    let mut in_file_str: string = "";
+    let mut out_file_str: string = "";
+    let mut is_run: bool = false;
+    let mut is_native: bool = false;
+
+    let mut i: i32 = 1;
+    if i < argc {
+        let first: string = cstr_to_string(argv[i]);
+        if str_eq(first, "run") {
+            is_run = true;
+            i = i + 1;
+        } else if str_eq(first, "build") {
+            i = i + 1;
+        }
+    }
+
+    while i < argc {
+        let arg: string = cstr_to_string(argv[i]);
+        if str_eq(arg, "-o") {
+            if i + 1 < argc {
+                out_file_str = cstr_to_string(argv[i + 1]);
+                i = i + 1;
+            }
+        } else if str_eq(arg, "--backend") {
+            if i + 1 < argc {
+                let backend_name: string = cstr_to_string(argv[i + 1]);
+                if str_eq(backend_name, "native") {
+                    is_native = true;
+                }
+                i = i + 1;
+            }
+        } else {
+            in_file_str = arg;
+        }
+        i = i + 1;
+    }
+
+    if in_file_str.len == 0 {
+        print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend native]");
+        return 1;
+    }
+
+    let mut is_temp_out: bool = false;
+    if is_run {
+        if out_file_str.len == 0 {
+            is_temp_out = true;
+        }
+    }
+    if out_file_str.len == 0 {
+        if is_run {
+            out_file_str = "/tmp/occ_run_bin";
+        } else {
+            out_file_str = "a.out";
+        }
+    }
+
+    if !is_safe_path(in_file_str) {
+        print("error: unsafe characters in file path");
+        return 1;
+    }
+    if !is_safe_path(out_file_str) {
+        print("error: unsafe characters in file path");
+        return 1;
+    }
+
+    let mut arena: Arena = arena_init(33554432);
+
+    let mut loader: ModuleLoader = ModuleLoader {
+        visited: [""],
+        visited_count: 0,
+    };
+    let mut combined_buf: CodeBuffer = buf_init(4194304);
+
+    let load_ok: bool = load_module_recursive(in_file_str, &mut combined_buf, &mut loader, &mut arena);
+    if !load_ok {
+        buf_deinit(&mut combined_buf);
+        return 1;
+    }
+
+    let combined_src: string = buf_to_string(&mut combined_buf);
+
+    let mut parser: Parser = parser_init(combined_src, &mut arena);
+    let prog: *mut AstNode = parse_program(&mut parser);
+
+    // Active defense: compile-time escape & borrow safety validation
+    let valid: bool = validate_program(prog);
+    if !valid {
+        buf_deinit(&mut combined_buf);
+        return 1;
+    }
+
+    if is_native {
+        let ok_native: bool = emit_native_elf(prog, out_file_str);
+        buf_deinit(&mut combined_buf);
+        if !ok_native {
+            print("error: native elf emission failed");
+            return 1;
+        }
+    } else {
+        let mut out: CodeBuffer = buf_init(4194304);
+        codegen_program(prog, &mut out);
+        buf_deinit(&mut combined_buf);
+
+        let c_code: string = buf_to_string(&mut out);
+        let ok: bool = write_file("/tmp/occ_stage.tmp.c", c_code);
+        if !ok {
+            print("error: failed to write /tmp/occ_stage.tmp.c");
+            buf_deinit(&mut out);
+            return 1;
+        }
+
+        let mut cmd_buf: CodeBuffer = buf_init(512);
+        buf_append(&mut cmd_buf, "gcc /tmp/occ_stage.tmp.c -o ");
+        buf_append(&mut cmd_buf, out_file_str);
+        buf_append_u8(&mut cmd_buf, 0);
+
+        let ret: i32 = system(cmd_buf.buffer.as(*u8));
+
+        buf_deinit(&mut cmd_buf);
+        buf_deinit(&mut out);
+        unlink_file("/tmp/occ_stage.tmp.c");
+
+        if ret != 0 {
+            print("error: gcc compilation failed");
+            return 1;
+        }
+    }
+
+    if is_run {
+        let mut run_cmd: CodeBuffer = buf_init(256);
+        if out_file_str[0] != 47 {
+            buf_append(&mut run_cmd, "./");
+        }
+        buf_append(&mut run_cmd, out_file_str);
+        buf_append_u8(&mut run_cmd, 0);
+        let raw_ret: i32 = system(run_cmd.buffer.as(*u8));
+        buf_deinit(&mut run_cmd);
+
+        if is_temp_out {
+            unlink_file(out_file_str);
+        }
+
+        let exit_code: i32 = (raw_ret / 256) % 256;
+        return exit_code;
+    }
+
+    return 0;
+}

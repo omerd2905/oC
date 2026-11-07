@@ -1,0 +1,49 @@
+import "std/io.oc";
+import "std/fs.oc";
+import "std/mem.oc";
+import "compiler/parser.oc";
+
+fn print_ast(node: *mut AstNode) {
+    if node == (0).as(*mut AstNode) {
+        return;
+    }
+    print("Node Tag:");
+    print(node.tag);
+    print("Token Slice:");
+    print(node.tok.slice);
+
+    if node.left != (0).as(*mut AstNode) {
+        print_ast(node.left);
+    }
+    if node.right != (0).as(*mut AstNode) {
+        print_ast(node.right);
+    }
+    if node.next != (0).as(*mut AstNode) {
+        print_ast(node.next);
+    }
+}
+
+fn main() {
+    print("=== oC Self-Hosting Parser Test ===");
+
+    let mut buf: [4096]u8 = [0];
+    let bytes: i64 = read_file("examples/hello.oc", (&mut buf).as(*mut u8), 4095);
+    if bytes <= 0 {
+        print("Error: failed to read examples/hello.oc");
+        return;
+    }
+
+    let src: string = string {
+        ptr: (&mut buf).as(*u8),
+        len: bytes.as(usize),
+    };
+
+    let mut arena: Arena = arena_init(65536);
+    let mut parser: Parser = parser_init(src, &mut arena);
+    let prog: *mut AstNode = parse_program(&mut parser);
+
+    print_ast(prog);
+
+    arena_deinit(&mut arena);
+    print("=== Parser Test Completed Successfully ===");
+}

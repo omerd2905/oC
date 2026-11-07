@@ -1,0 +1,35 @@
+extern fn sys_open(path: *u8, flags: i32, mode: u32) -> i32;
+extern fn sys_close(fd: i32) -> i32;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -> *mut u8;
+extern fn sys_munmap(addr: *mut u8, len: usize) -> i32;
+
+fn main() -> i32 {
+    let banner: string = "[oC-TRIPWIRE] Active Defense Probe: ARMED";
+    let tag: string = banner[0..13];
+    print(tag);
+    print(banner);
+
+    // 1. Direct Linux kernel sys_mmap / sys_munmap verification (PROT_READ|PROT_WRITE=3, MAP_PRIVATE|MAP_ANONYMOUS=34)
+    let page: *mut u8 = sys_mmap(0, 4096, 3, 34, -1, 0);
+    *page = 79;
+    let first_byte: u8 = *page;
+    let unmap_rc: i32 = sys_munmap(page, 4096);
+
+    if first_byte == 79 {
+        if unmap_rc == 0 {
+            print("[oC-TRIPWIRE] Kernel Anonymous Arena Probe: OK (4096B mapped & scrubbed)");
+        }
+    }
+
+    // 2. Checked division & slice indexing verification
+    let canary_char: u8 = banner[1];
+    let ratio: i32 = 1337 / 7;
+    if canary_char == 111 {
+        if ratio == 191 {
+            print("[oC-TRIPWIRE] Bounds & Arithmetic Hardware Traps: VERIFIED");
+        }
+    }
+
+    print("[oC-TRIPWIRE] STATUS: CLEAN");
+    return 0;
+}

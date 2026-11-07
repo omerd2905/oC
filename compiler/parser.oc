@@ -1,0 +1,1323 @@
+import "std/mem.oc";
+import "std/io.oc";
+import "compiler/token.oc";
+import "compiler/lexer.oc";
+import "compiler/ast.oc";
+
+struct Parser {
+    lex: Lexer,
+    current: Token,
+    arena: *mut Arena,
+    allow_struct_init: bool,
+}
+
+fn parser_init(source: string, arena: *mut Arena) -> Parser {
+    let mut lex: Lexer = lexer_init(source);
+    let cur: Token = lexer_next(&mut lex);
+    return Parser {
+        lex: lex,
+        current: cur,
+        arena: arena,
+        allow_struct_init: true,
+    };
+}
+
+fn parser_advance(p: *mut Parser) {
+    p.current = lexer_next(&mut p.lex);
+}
+
+fn parser_expect(p: *mut Parser, expected_tag: u32) -> Token {
+    let tok: Token = p.current;
+    if tok.tag == expected_tag {
+        parser_advance(p);
+    } else {
+        print("parse error: unexpected token");
+        print(tok.tag);
+        print(tok.slice);
+    }
+    return tok;
+}
+
+fn get_precedence(tag: u32) -> u32 {
+    if tag == TOK_PIPE { return 1; }
+    if tag == TOK_CARET { return 2; }
+    if tag == TOK_AMP { return 3; }
+    if tag == TOK_EQEQ { return 4; }
+    if tag == TOK_NEQ { return 4; }
+    if tag == TOK_LT { return 5; }
+    if tag == TOK_LTE { return 5; }
+    if tag == TOK_GT { return 5; }
+    if tag == TOK_GTE { return 5; }
+    if tag == TOK_SHL { return 6; }
+    if tag == TOK_SHR { return 6; }
+    if tag == TOK_PLUS { return 7; }
+    if tag == TOK_MINUS { return 7; }
+    if tag == TOK_STAR { return 8; }
+    if tag == TOK_SLASH { return 8; }
+    if tag == TOK_PERCENT { return 8; }
+    return 0;
+}
+
+fn parse_type(p: *mut Parser) -> string {
+    let start_ptr: *u8 = p.current.slice.ptr;
+    let mut end_ptr: *u8 = start_ptr + p.current.slice.len;
+
+    let mut cont: bool = true;
+    while cont {
+        if p.current.tag == TOK_STAR {
+            end_ptr = p.current.slice.ptr + p.current.slice.len;
+            parser_advance(p);
+            if p.current.tag == TOK_MUT {
+                end_ptr = p.current.slice.ptr + p.current.slice.len;
+                parser_advance(p);
+            }
+        } else if p.current.tag == TOK_AMP {
+            end_ptr = p.current.slice.ptr + p.current.slice.len;
+            parser_advance(p);
+            if p.current.tag == TOK_MUT {
+                end_ptr = p.current.slice.ptr + p.current.slice.len;
+                parser_advance(p);
+            }
+        } else if p.current.tag == TOK_LBRACKET {
+            end_ptr = p.current.slice.ptr + p.current.slice.len;
+            parser_advance(p);
+            while p.current.tag != TOK_RBRACKET {
+                if p.current.tag == TOK_EOF { break; }
+                end_ptr = p.current.slice.ptr + p.current.slice.len;
+                parser_advance(p);
+            }
+            if p.current.tag == TOK_RBRACKET {
+                end_ptr = p.current.slice.ptr + p.current.slice.len;
+                parser_advance(p);
+            }
+        } else {
+            cont = false;
+        }
+    }
+
+    if p.current.tag != TOK_EOF {
+        end_ptr = p.current.slice.ptr + p.current.slice.len;
+        parser_advance(p);
+    }
+
+    let len: usize = end_ptr.as(usize) - start_ptr.as(usize);
+    return string {
+        ptr: start_ptr,
+        len: len,
+    };
+}
+
+extern fn parse_expr(p: *mut Parser, min_prec: u32) -> *mut AstNode;
+
+fn parse_primary(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    if tok.tag == TOK_INT {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_INT, tok);
+    }
+    if tok.tag == TOK_STRING {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_STRING, tok);
+    }
+    if tok.tag == TOK_TRUE {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_BOOL, tok);
+    }
+    if tok.tag == TOK_FALSE {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_BOOL, tok);
+    }
+    if tok.tag == TOK_LBRACKET {
+        parser_advance(p);
+        let arr_node: *mut AstNode = ast_alloc_node(p.arena, NODE_ARRAY_INIT, tok);
+        let mut first_elem: *mut AstNode = (0).as(*mut AstNode);
+        let mut last_elem: *mut AstNode = (0).as(*mut AstNode);
+        while p.current.tag != TOK_RBRACKET {
+            if p.current.tag == TOK_EOF { break; }
+            let elem: *mut AstNode = parse_expr(p, 0);
+            if first_elem == (0).as(*mut AstNode) {
+                first_elem = elem;
+                last_elem = elem;
+            } else {
+                last_elem.next = elem;
+                last_elem = elem;
+            }
+            if p.current.tag == TOK_COMMA {
+                parser_advance(p);
+            } else {
+                break;
+            }
+        }
+        parser_expect(p, TOK_RBRACKET);
+        arr_node.left = first_elem;
+        return arr_node;
+    }
+    if tok.tag == TOK_IDENT {
+        parser_advance(p);
+        if p.allow_struct_init {
+            if p.current.tag == TOK_LBRACE {
+                parser_advance(p);
+                let s_node: *mut AstNode = ast_alloc_node(p.arena, NODE_STRUCT_INIT, tok);
+                let mut first_f: *mut AstNode = (0).as(*mut AstNode);
+                let mut last_f: *mut AstNode = (0).as(*mut AstNode);
+                while p.current.tag != TOK_RBRACE {
+                    if p.current.tag == TOK_EOF { break; }
+                    let f_name: Token = parser_expect(p, TOK_IDENT);
+                    parser_expect(p, TOK_COLON);
+                    let prev_allow: bool = p.allow_struct_init;
+                    p.allow_struct_init = true;
+                    let f_val: *mut AstNode = parse_expr(p, 0);
+                    p.allow_struct_init = prev_allow;
+                    let f_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, f_name);
+                    f_node.left = f_val;
+                    if first_f == (0).as(*mut AstNode) {
+                        first_f = f_node;
+                        last_f = f_node;
+                    } else {
+                        last_f.next = f_node;
+                        last_f = f_node;
+                    }
+                    if p.current.tag == TOK_COMMA {
+                        parser_advance(p);
+                    } else {
+                        break;
+                    }
+                }
+                parser_expect(p, TOK_RBRACE);
+                s_node.left = first_f;
+                return s_node;
+            }
+        }
+        return ast_alloc_node(p.arena, NODE_IDENT, tok);
+    }
+    if tok.tag == TOK_LPAREN {
+        parser_advance(p);
+        let inner: *mut AstNode = parse_expr(p, 0);
+        parser_expect(p, TOK_RPAREN);
+        return inner;
+    }
+    return (0).as(*mut AstNode);
+}
+
+fn parse_postfix(p: *mut Parser) -> *mut AstNode {
+    let mut expr: *mut AstNode = parse_primary(p);
+
+    let mut running: bool = true;
+    while running {
+        if p.current.tag == TOK_LPAREN {
+            let mut call_tok: Token = p.current;
+            if expr != (0).as(*mut AstNode) {
+                call_tok = expr.tok;
+            }
+            parser_advance(p);
+            let call_node: *mut AstNode = ast_alloc_node(p.arena, NODE_CALL, call_tok);
+            let mut first_arg: *mut AstNode = (0).as(*mut AstNode);
+            let mut last_arg: *mut AstNode = (0).as(*mut AstNode);
+            while p.current.tag != TOK_RPAREN {
+                if p.current.tag == TOK_EOF { break; }
+                let arg: *mut AstNode = parse_expr(p, 0);
+                if first_arg == (0).as(*mut AstNode) {
+                    first_arg = arg;
+                    last_arg = arg;
+                } else {
+                    last_arg.next = arg;
+                    last_arg = arg;
+                }
+                if p.current.tag == TOK_COMMA {
+                    parser_advance(p);
+                } else {
+                    break;
+                }
+            }
+            parser_expect(p, TOK_RPAREN);
+            call_node.left = first_arg;
+            expr = call_node;
+        } else if p.current.tag == TOK_DOT {
+            parser_advance(p);
+            if p.current.tag == TOK_AS {
+                parser_advance(p);
+                parser_expect(p, TOK_LPAREN);
+                let t_name: string = parse_type(p);
+                parser_expect(p, TOK_RPAREN);
+                let cast_node: *mut AstNode = ast_alloc_node(p.arena, NODE_CAST, p.current);
+                cast_node.left = expr;
+                cast_node.type_name = t_name;
+                expr = cast_node;
+            } else if p.current.tag == TOK_IDENT {
+                if str_eq(p.current.slice, "as") {
+                    parser_advance(p);
+                    parser_expect(p, TOK_LPAREN);
+                    let t_name: string = parse_type(p);
+                    parser_expect(p, TOK_RPAREN);
+                    let cast_node: *mut AstNode = ast_alloc_node(p.arena, NODE_CAST, p.current);
+                    cast_node.left = expr;
+                    cast_node.type_name = t_name;
+                    expr = cast_node;
+                } else {
+                    let f_tok: Token = parser_expect(p, TOK_IDENT);
+                    let fa_node: *mut AstNode = ast_alloc_node(p.arena, NODE_FIELD_ACCESS, f_tok);
+                    fa_node.left = expr;
+                    expr = fa_node;
+                }
+            } else {
+                running = false;
+            }
+        } else if p.current.tag == TOK_AS {
+            parser_advance(p);
+            let t_name: string = parse_type(p);
+            let cast_node: *mut AstNode = ast_alloc_node(p.arena, NODE_CAST, p.current);
+            cast_node.left = expr;
+            cast_node.type_name = t_name;
+            expr = cast_node;
+        } else if p.current.tag == TOK_LBRACKET {
+            parser_advance(p);
+            if p.current.tag == TOK_DOTDOT {
+                parser_advance(p);
+                let mut end_expr: *mut AstNode = (0).as(*mut AstNode);
+                if p.current.tag != TOK_RBRACKET {
+                    if p.current.tag != TOK_EOF {
+                        end_expr = parse_expr(p, 0);
+                    }
+                }
+                parser_expect(p, TOK_RBRACKET);
+                let sl_node: *mut AstNode = ast_alloc_node(p.arena, NODE_SLICE, p.current);
+                sl_node.left = expr;
+                let range_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, p.current);
+                range_node.left = (0).as(*mut AstNode);
+                range_node.right = end_expr;
+                sl_node.right = range_node;
+                expr = sl_node;
+            } else {
+                let first_expr: *mut AstNode = parse_expr(p, 0);
+                if p.current.tag == TOK_DOTDOT {
+                    parser_advance(p);
+                    let mut end_expr: *mut AstNode = (0).as(*mut AstNode);
+                    if p.current.tag != TOK_RBRACKET {
+                        if p.current.tag != TOK_EOF {
+                            end_expr = parse_expr(p, 0);
+                        }
+                    }
+                    parser_expect(p, TOK_RBRACKET);
+                    let sl_node: *mut AstNode = ast_alloc_node(p.arena, NODE_SLICE, p.current);
+                    sl_node.left = expr;
+                    let range_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, p.current);
+                    range_node.left = first_expr;
+                    range_node.right = end_expr;
+                    sl_node.right = range_node;
+                    expr = sl_node;
+                } else {
+                    parser_expect(p, TOK_RBRACKET);
+                    let idx_node: *mut AstNode = ast_alloc_node(p.arena, NODE_INDEX, p.current);
+                    idx_node.left = expr;
+                    idx_node.right = first_expr;
+                    expr = idx_node;
+                }
+            }
+        } else {
+            running = false;
+        }
+    }
+    return expr;
+}
+
+fn parse_unary(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    if tok.tag == TOK_MINUS {
+        parser_advance(p);
+        let target: *mut AstNode = parse_unary(p);
+        let un: *mut AstNode = ast_alloc_node(p.arena, NODE_UNARY, tok);
+        un.left = target;
+        return un;
+    }
+    if tok.tag == TOK_BANG {
+        parser_advance(p);
+        let target: *mut AstNode = parse_unary(p);
+        let un: *mut AstNode = ast_alloc_node(p.arena, NODE_UNARY, tok);
+        un.left = target;
+        return un;
+    }
+    if tok.tag == TOK_STAR {
+        parser_advance(p);
+        let target: *mut AstNode = parse_unary(p);
+        let deref: *mut AstNode = ast_alloc_node(p.arena, NODE_DEREF, tok);
+        deref.left = target;
+        return deref;
+    }
+    if tok.tag == TOK_AMP {
+        parser_advance(p);
+        let mut is_mut: bool = false;
+        if p.current.tag == TOK_MUT {
+            parser_advance(p);
+            is_mut = true;
+        }
+        let target: *mut AstNode = parse_unary(p);
+        let addr: *mut AstNode = ast_alloc_node(p.arena, NODE_ADDRESS_OF, tok);
+        addr.left = target;
+        if is_mut {
+            addr.type_name = "mut";
+        }
+        return addr;
+    }
+    return parse_postfix(p);
+}
+
+fn parse_expr(p: *mut Parser, min_prec: u32) -> *mut AstNode {
+    let mut left: *mut AstNode = parse_unary(p);
+
+    let mut running: bool = true;
+    while running {
+        let prec: u32 = get_precedence(p.current.tag);
+        if prec == 0 {
+            running = false;
+        } else if prec < min_prec {
+            running = false;
+        } else {
+            let op_tok: Token = p.current;
+            parser_advance(p);
+            let right: *mut AstNode = parse_expr(p, prec + 1);
+            let bin: *mut AstNode = ast_alloc_node(p.arena, NODE_BINARY, op_tok);
+            bin.left = left;
+            bin.right = right;
+            left = bin;
+        }
+    }
+
+    return left;
+}
+
+extern fn parse_stmt(p: *mut Parser) -> *mut AstNode;
+
+fn parse_block(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = parser_expect(p, TOK_LBRACE);
+    let block_node: *mut AstNode = ast_alloc_node(p.arena, NODE_BLOCK, tok);
+    let mut first_stmt: *mut AstNode = (0).as(*mut AstNode);
+    let mut last_stmt: *mut AstNode = (0).as(*mut AstNode);
+
+    while p.current.tag != TOK_RBRACE {
+        if p.current.tag == TOK_EOF { break; }
+        let prev_tag: u32 = p.current.tag;
+        let prev_idx: usize = p.lex.index;
+        let stmt: *mut AstNode = parse_stmt(p);
+        if stmt != (0).as(*mut AstNode) {
+            if first_stmt == (0).as(*mut AstNode) {
+                first_stmt = stmt;
+                last_stmt = stmt;
+            } else {
+                last_stmt.next = stmt;
+                last_stmt = stmt;
+            }
+        }
+        if p.current.tag == prev_tag {
+            if p.lex.index == prev_idx {
+                parser_advance(p);
+            }
+        }
+    }
+    parser_expect(p, TOK_RBRACE);
+    block_node.left = first_stmt;
+    return block_node;
+}
+
+fn parse_print_stmt(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    parser_advance(p);
+    parser_expect(p, TOK_LPAREN);
+    let expr: *mut AstNode = parse_expr(p, 0);
+    parser_expect(p, TOK_RPAREN);
+    if p.current.tag == TOK_SEMICOLON {
+        parser_advance(p);
+    }
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_PRINT, tok);
+    node.left = expr;
+    return node;
+}
+
+fn parse_let_stmt(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    parser_advance(p);
+    if p.current.tag == TOK_MUT {
+        parser_advance(p);
+    }
+    let name_tok: Token = parser_expect(p, TOK_IDENT);
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_LET, name_tok);
+    if p.current.tag == TOK_COLON {
+        parser_advance(p);
+        node.type_name = parse_type(p);
+    }
+    parser_expect(p, TOK_EQUAL);
+    let init_expr: *mut AstNode = parse_expr(p, 0);
+    if p.current.tag == TOK_SEMICOLON {
+        parser_advance(p);
+    }
+    node.left = init_expr;
+    return node;
+}
+
+fn parse_return_stmt(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    parser_advance(p);
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_RETURN, tok);
+    if p.current.tag != TOK_SEMICOLON {
+        if p.current.tag != TOK_RBRACE {
+            if p.current.tag != TOK_EOF {
+                node.left = parse_expr(p, 0);
+            }
+        }
+    }
+    if p.current.tag == TOK_SEMICOLON {
+        parser_advance(p);
+    }
+    return node;
+}
+
+fn parse_if_stmt(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    parser_advance(p);
+    let prev_allow: bool = p.allow_struct_init;
+    p.allow_struct_init = false;
+    let cond: *mut AstNode = parse_expr(p, 0);
+    p.allow_struct_init = prev_allow;
+    let then_block: *mut AstNode = parse_block(p);
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_IF, tok);
+    node.left = cond;
+    node.right = then_block;
+    if p.current.tag == TOK_ELSE {
+        parser_advance(p);
+        if p.current.tag == TOK_IF {
+            then_block.next = parse_if_stmt(p);
+        } else {
+            then_block.next = parse_block(p);
+        }
+    }
+    return node;
+}
+
+fn parse_while_stmt(p: *mut Parser) -> *mut AstNode {
+    let tok: Token = p.current;
+    parser_advance(p);
+    let prev_allow: bool = p.allow_struct_init;
+    p.allow_struct_init = false;
+    let cond: *mut AstNode = parse_expr(p, 0);
+    p.allow_struct_init = prev_allow;
+    let body: *mut AstNode = parse_block(p);
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_WHILE, tok);
+    node.left = cond;
+    node.right = body;
+    return node;
+}
+
+fn parse_stmt(p: *mut Parser) -> *mut AstNode {
+    if p.current.tag == TOK_PRINT {
+        return parse_print_stmt(p);
+    }
+    if p.current.tag == TOK_LET {
+        return parse_let_stmt(p);
+    }
+    if p.current.tag == TOK_RETURN {
+        return parse_return_stmt(p);
+    }
+    if p.current.tag == TOK_IF {
+        return parse_if_stmt(p);
+    }
+    if p.current.tag == TOK_WHILE {
+        return parse_while_stmt(p);
+    }
+    if p.current.tag == TOK_LBRACE {
+        return parse_block(p);
+    }
+
+    let expr: *mut AstNode = parse_expr(p, 0);
+    if p.current.tag == TOK_EQUAL {
+        let eq_tok: Token = p.current;
+        parser_advance(p);
+        let val: *mut AstNode = parse_expr(p, 0);
+        if p.current.tag == TOK_SEMICOLON {
+            parser_advance(p);
+        }
+        let assign_node: *mut AstNode = ast_alloc_node(p.arena, NODE_ASSIGN, eq_tok);
+        assign_node.left = expr;
+        assign_node.right = val;
+        return assign_node;
+    }
+    if p.current.tag == TOK_SEMICOLON {
+        parser_advance(p);
+    }
+    return expr;
+}
+
+fn parse_struct_decl(p: *mut Parser, is_packed: bool) -> *mut AstNode {
+    let name_tok: Token = parser_expect(p, TOK_IDENT);
+    parser_expect(p, TOK_LBRACE);
+    let node: *mut AstNode = ast_alloc_node(p.arena, NODE_STRUCT_DECL, name_tok);
+    if is_packed {
+        node.type_name = "packed";
+    }
+    let mut first_f: *mut AstNode = (0).as(*mut AstNode);
+    let mut last_f: *mut AstNode = (0).as(*mut AstNode);
+    while p.current.tag != TOK_RBRACE {
+        if p.current.tag == TOK_EOF { break; }
+        let f_name: Token = parser_expect(p, TOK_IDENT);
+        parser_expect(p, TOK_COLON);
+        let f_type: string = parse_type(p);
+        let f_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, f_name);
+        f_node.type_name = f_type;
+        if first_f == (0).as(*mut AstNode) {
+            first_f = f_node;
+            last_f = f_node;
+        } else {
+            last_f.next = f_node;
+            last_f = f_node;
+        }
+        if p.current.tag == TOK_COMMA {
+            parser_advance(p);
+        }
+    }
+    parser_expect(p, TOK_RBRACE);
+    node.left = first_f;
+    return node;
+}
+
+fn parse_fn_decl(p: *mut Parser) -> *mut AstNode {
+    let fn_tok: Token = parser_expect(p, TOK_FN);
+    let name_tok: Token = parser_expect(p, TOK_IDENT);
+    let fn_node: *mut AstNode = ast_alloc_node(p.arena, NODE_FN, name_tok);
+
+    parser_expect(p, TOK_LPAREN);
+    let mut first_param: *mut AstNode = (0).as(*mut AstNode);
+    let mut last_param: *mut AstNode = (0).as(*mut AstNode);
+    while p.current.tag != TOK_RPAREN {
+        if p.current.tag == TOK_EOF { break; }
+        let p_name: Token = parser_expect(p, TOK_IDENT);
+        let param_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, p_name);
+        parser_expect(p, TOK_COLON);
+        param_node.type_name = parse_type(p);
+
+        if first_param == (0).as(*mut AstNode) {
+            first_param = param_node;
+            last_param = param_node;
+        } else {
+            last_param.next = param_node;
+            last_param = param_node;
+        }
+
+        if p.current.tag == TOK_COMMA {
+            parser_advance(p);
+        } else {
+            break;
+        }
+    }
+    parser_expect(p, TOK_RPAREN);
+
+    if p.current.tag == TOK_ARROW {
+        parser_advance(p);
+        fn_node.type_name = parse_type(p);
+    }
+
+    if p.current.tag != TOK_LBRACE {
+        if p.current.tag == TOK_SEMICOLON {
+            parser_advance(p);
+        }
+        fn_node.left = first_param;
+        fn_node.right = (0).as(*mut AstNode);
+        return fn_node;
+    }
+
+    let body: *mut AstNode = parse_block(p);
+    fn_node.left = first_param;
+    fn_node.right = body;
+    return fn_node;
+}
+
+// -------------------------------------------------------------
+// Compile-time Active Safety Validator (EscapeValidator)
+// -------------------------------------------------------------
+
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+
+fn print_str_raw(s: string) {
+    sys_write(1, s.ptr, s.len);
+}
+
+fn print_err_ref_invalidated(name: string, bv: string) {
+    print_str_raw("error: reference '");
+    print_str_raw(name);
+    print_str_raw("' invalidated by mutable operation on '");
+    print_str_raw(bv);
+    print_str_raw("'\n");
+}
+
+fn print_err_uaf_reset(name: string, arena: string) {
+    print_str_raw("error: use-after-free: variable '");
+    print_str_raw(name);
+    print_str_raw("' used after arena '");
+    print_str_raw(arena);
+    print_str_raw("' was reset\n");
+}
+
+fn print_err_uaf_deinit(name: string, arena: string) {
+    print_str_raw("error: use-after-free: variable '");
+    print_str_raw(name);
+    print_str_raw("' used after arena '");
+    print_str_raw(arena);
+    print_str_raw("' was deinitialized\n");
+}
+
+fn print_err_borrow_escape(src: string, tgt: string) {
+    print_str_raw("error: borrowed argument '");
+    print_str_raw(src);
+    print_str_raw("' does not live long enough (escapes into '");
+    print_str_raw(tgt);
+    print_str_raw("')\n");
+}
+
+fn print_err_cross_arena(arena: string, tgt: string) {
+    print_str_raw("error: cross-arena escape: pointer borrowed from arena '");
+    print_str_raw(arena);
+    print_str_raw("' escapes into longer-lived target '");
+    print_str_raw(tgt);
+    print_str_raw("'\n");
+}
+
+fn print_err_ret_local(src: string) {
+    print_str_raw("error: cannot return reference to local stack variable '");
+    print_str_raw(src);
+    print_str_raw("'\n");
+}
+
+fn print_err_ret_arena(arena: string) {
+    print_str_raw("error: cannot return reference to locally allocated arena '");
+    print_str_raw(arena);
+    print_str_raw("'\n");
+}
+
+struct VarInfo {
+    name: string,
+    scope_depth: u32,
+    is_stack_local: bool,
+    points_to_stack_local: bool,
+    borrowed_from_arena: string,
+    borrowed_from_var: string,
+    is_invalidated: bool,
+}
+
+struct Validator {
+    vars: [128]VarInfo,
+    vars_count: usize,
+    deinit_arenas: [32]string,
+    deinit_count: usize,
+    scope_depth: u32,
+    has_error: bool,
+}
+
+fn validator_find_var(v: *mut Validator, name: string) -> i32 {
+    let mut i: usize = v.vars_count;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(v.vars[i].name, name) {
+            return i.as(i32);
+        }
+    }
+    return -1;
+}
+
+fn validator_set_points_to_stack_local(v: *mut Validator, name: string) {
+    let mut i: usize = v.vars_count;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(v.vars[i].name, name) {
+            v.vars[i].points_to_stack_local = true;
+            return;
+        }
+    }
+}
+
+fn validator_is_arena_deinit(v: *mut Validator, name: string) -> bool {
+    let mut i: usize = 0;
+    while i < v.deinit_count {
+        if str_eq(v.deinit_arenas[i], name) {
+            return true;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn validator_invalidate_arena(v: *mut Validator, arena_name: string) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        if str_eq(v.vars[i].borrowed_from_arena, arena_name) {
+            v.vars[i].is_invalidated = true;
+        }
+        i = i + 1;
+    }
+}
+
+fn validator_invalidate_var(v: *mut Validator, var_name: string) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        if str_eq(v.vars[i].borrowed_from_var, var_name) {
+            v.vars[i].is_invalidated = true;
+        }
+        i = i + 1;
+    }
+}
+
+fn get_ident_name(expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_IDENT { return expr.tok.slice; }
+    if expr.tag == NODE_CAST { return get_ident_name(expr.left); }
+    if expr.tag == NODE_INDEX { return get_ident_name(expr.left); }
+    if expr.tag == NODE_FIELD_ACCESS { return get_ident_name(expr.left); }
+    if expr.tag == NODE_DEREF { return get_ident_name(expr.left); }
+    return "";
+}
+
+fn get_underlying_address_of(expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_ADDRESS_OF { return get_ident_name(expr.left); }
+    if expr.tag == NODE_CAST { return get_underlying_address_of(expr.left); }
+    return "";
+}
+
+fn get_arena_source(expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "arena_alloc") {
+            if expr.left != (0).as(*mut AstNode) {
+                let u: string = get_underlying_address_of(expr.left);
+                if u.len > 0 { return u; }
+                return get_ident_name(expr.left);
+            }
+        }
+        return "";
+    }
+    if expr.tag == NODE_CAST { return get_arena_source(expr.left); }
+    return "";
+}
+
+fn contains_stack_ref(v: *mut Validator, expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_ADDRESS_OF {
+        let id: string = get_ident_name(expr.left);
+        if id.len > 0 {
+            let idx: i32 = validator_find_var(v, id);
+            if idx >= 0 {
+                if v.vars[idx.as(usize)].is_stack_local { return id; }
+            }
+        }
+        return "";
+    }
+    if expr.tag == NODE_IDENT {
+        let id: string = expr.tok.slice;
+        let idx: i32 = validator_find_var(v, id);
+        if idx >= 0 {
+            if v.vars[idx.as(usize)].points_to_stack_local { return id; }
+        }
+        return "";
+    }
+    if expr.tag == NODE_CAST { return contains_stack_ref(v, expr.left); }
+    if expr.tag == NODE_STRUCT_INIT {
+        let mut f: *mut AstNode = expr.left;
+        while f != (0).as(*mut AstNode) {
+            let s: string = contains_stack_ref(v, f.left);
+            if s.len > 0 { return s; }
+            f = f.next;
+        }
+        return "";
+    }
+    if expr.tag == NODE_ARRAY_INIT {
+        let mut el: *mut AstNode = expr.left;
+        while el != (0).as(*mut AstNode) {
+            let s: string = contains_stack_ref(v, el);
+            if s.len > 0 { return s; }
+            el = el.next;
+        }
+        return "";
+    }
+    if expr.tag == NODE_FIELD_ACCESS { return contains_stack_ref(v, expr.left); }
+    if expr.tag == NODE_INDEX { return contains_stack_ref(v, expr.left); }
+    if expr.tag == NODE_BINARY {
+        let s1: string = contains_stack_ref(v, expr.left);
+        if s1.len > 0 { return s1; }
+        return contains_stack_ref(v, expr.right);
+    }
+    if expr.tag == NODE_UNARY { return contains_stack_ref(v, expr.left); }
+    if expr.tag == NODE_DEREF { return contains_stack_ref(v, expr.left); }
+    return "";
+}
+
+fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return true; }
+
+    if expr.tag == NODE_IDENT {
+        let idx: i32 = validator_find_var(v, expr.tok.slice);
+        if idx >= 0 {
+            let i: usize = idx.as(usize);
+            if v.vars[i].is_invalidated {
+                if v.vars[i].borrowed_from_var.len > 0 {
+                    print_err_ref_invalidated(expr.tok.slice, v.vars[i].borrowed_from_var);
+                    v.has_error = true;
+                    return false;
+                }
+                print_err_uaf_reset(expr.tok.slice, v.vars[i].borrowed_from_arena);
+                v.has_error = true;
+                return false;
+            }
+            if v.vars[i].borrowed_from_arena.len > 0 {
+                if validator_is_arena_deinit(v, v.vars[i].borrowed_from_arena) {
+                    print_err_uaf_deinit(expr.tok.slice, v.vars[i].borrowed_from_arena);
+                    v.has_error = true;
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+
+    if expr.tag == NODE_CALL {
+        let mut mut_arg: *mut AstNode = expr.left;
+        while mut_arg != (0).as(*mut AstNode) {
+            if mut_arg.tag == NODE_ADDRESS_OF {
+                if str_eq(mut_arg.type_name, "mut") {
+                    let tgt_name: string = get_ident_name(mut_arg.left);
+                if tgt_name.len > 0 {
+                    validator_invalidate_var(v, tgt_name);
+                    let tgt_idx: i32 = validator_find_var(v, tgt_name);
+                    if tgt_idx >= 0 {
+                        let mut borrow_arg: *mut AstNode = expr.left;
+                        while borrow_arg != (0).as(*mut AstNode) {
+                            let mut src_name: string = "";
+                            if borrow_arg.tag == NODE_ADDRESS_OF {
+                                src_name = get_ident_name(borrow_arg.left);
+                            } else {
+                                src_name = get_ident_name(borrow_arg);
+                            }
+                            if src_name.len > 0 {
+                                let src_idx: i32 = validator_find_var(v, src_name);
+                                if src_idx >= 0 {
+                                    if v.vars[src_idx.as(usize)].scope_depth > v.vars[tgt_idx.as(usize)].scope_depth {
+                                        print_err_borrow_escape(src_name, tgt_name);
+                                        v.has_error = true;
+                                        return false;
+                                    }
+                                }
+                            }
+                            borrow_arg = borrow_arg.next;
+                        }
+                    }
+                }
+                }
+            }
+            mut_arg = mut_arg.next;
+        }
+
+        let mut a: *mut AstNode = expr.left;
+        while a != (0).as(*mut AstNode) {
+            if !check_expr_use(v, a) { return false; }
+            a = a.next;
+        }
+        return true;
+    }
+
+    if expr.tag == NODE_FIELD_ACCESS { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_INDEX {
+        if !check_expr_use(v, expr.left) { return false; }
+        return check_expr_use(v, expr.right);
+    }
+    if expr.tag == NODE_BINARY {
+        if !check_expr_use(v, expr.left) { return false; }
+        return check_expr_use(v, expr.right);
+    }
+    if expr.tag == NODE_UNARY { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_DEREF { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_CAST { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_ADDRESS_OF { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_STRUCT_INIT {
+        let mut f: *mut AstNode = expr.left;
+        while f != (0).as(*mut AstNode) {
+            if !check_expr_use(v, f.left) { return false; }
+            f = f.next;
+        }
+        return true;
+    }
+    if expr.tag == NODE_ARRAY_INIT {
+        let mut el: *mut AstNode = expr.left;
+        while el != (0).as(*mut AstNode) {
+            if !check_expr_use(v, el) { return false; }
+            el = el.next;
+        }
+        return true;
+    }
+    return true;
+}
+
+fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
+    if stmt == (0).as(*mut AstNode) { return true; }
+
+    if stmt.tag == NODE_LET {
+        if !check_expr_use(v, stmt.left) { return false; }
+
+        let mut points_to_local: bool = false;
+        let mut arena_source: string = get_arena_source(stmt.left);
+        if arena_source.len == 0 {
+            let id: string = get_ident_name(stmt.left);
+            if id.len > 0 {
+                let idx: i32 = validator_find_var(v, id);
+                if idx >= 0 {
+                    if v.vars[idx.as(usize)].borrowed_from_arena.len > 0 {
+                        arena_source = v.vars[idx.as(usize)].borrowed_from_arena;
+                    }
+                }
+            }
+        }
+
+        let src_name: string = get_underlying_address_of(stmt.left);
+        if src_name.len > 0 {
+            let idx: i32 = validator_find_var(v, src_name);
+            if idx >= 0 {
+                if v.vars[idx.as(usize)].is_stack_local {
+                    points_to_local = true;
+                }
+            }
+        } else {
+            let id: string = get_ident_name(stmt.left);
+            if id.len > 0 {
+                let idx: i32 = validator_find_var(v, id);
+                if idx >= 0 {
+                    if v.vars[idx.as(usize)].points_to_stack_local {
+                        points_to_local = true;
+                    }
+                }
+            } else if contains_stack_ref(v, stmt.left).len > 0 {
+                points_to_local = true;
+            }
+        }
+
+        let mut var_source: string = "";
+        let mut is_addr_of: bool = false;
+        if stmt.left != (0).as(*mut AstNode) {
+            if stmt.left.tag == NODE_ADDRESS_OF {
+                is_addr_of = true;
+            }
+        }
+        if is_addr_of {
+            var_source = get_ident_name(stmt.left.left);
+        } else {
+            let id: string = get_ident_name(stmt.left);
+            if id.len > 0 {
+                let idx: i32 = validator_find_var(v, id);
+                if idx >= 0 {
+                    if v.vars[idx.as(usize)].borrowed_from_var.len > 0 {
+                        var_source = v.vars[idx.as(usize)].borrowed_from_var;
+                    }
+                }
+            }
+        }
+
+        if v.vars_count < 128 {
+            v.vars[v.vars_count] = VarInfo {
+                name: stmt.tok.slice,
+                scope_depth: v.scope_depth,
+                is_stack_local: true,
+                points_to_stack_local: points_to_local,
+                borrowed_from_arena: arena_source,
+                borrowed_from_var: var_source,
+                is_invalidated: false,
+            };
+            v.vars_count = v.vars_count + 1;
+        }
+        return true;
+    }
+
+    if stmt.tag == NODE_ASSIGN {
+        if !check_expr_use(v, stmt.right) { return false; }
+        if !check_expr_use(v, stmt.left) { return false; }
+
+        let src_opt: string = get_underlying_address_of(stmt.right);
+        let tgt_opt: string = get_ident_name(stmt.left);
+        let val_ident: string = get_ident_name(stmt.right);
+
+        if val_ident.len > 0 {
+            let v_idx: i32 = validator_find_var(v, val_ident);
+            if v_idx >= 0 {
+                if v.vars[v_idx.as(usize)].borrowed_from_arena.len > 0 {
+                    let arena_name: string = v.vars[v_idx.as(usize)].borrowed_from_arena;
+                    if tgt_opt.len > 0 {
+                        let t_idx: i32 = validator_find_var(v, tgt_opt);
+                        if t_idx >= 0 {
+                            let a_idx: i32 = validator_find_var(v, arena_name);
+                            let mut arena_depth: u32 = v.scope_depth;
+                            if a_idx >= 0 { arena_depth = v.vars[a_idx.as(usize)].scope_depth; }
+                            let mut cross_escape: bool = false;
+                            if v.vars[t_idx.as(usize)].scope_depth < arena_depth {
+                                cross_escape = true;
+                            } else if !v.vars[t_idx.as(usize)].is_stack_local {
+                                cross_escape = true;
+                            }
+                            if cross_escape {
+                                print_err_cross_arena(arena_name, tgt_opt);
+                                v.has_error = true;
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if src_opt.len > 0 {
+            let s_idx: i32 = validator_find_var(v, src_opt);
+            if s_idx >= 0 {
+                if tgt_opt.len > 0 {
+                    let t_idx: i32 = validator_find_var(v, tgt_opt);
+                    if t_idx >= 0 {
+                        let mut ptr_escape: bool = false;
+                        if v.vars[t_idx.as(usize)].scope_depth < v.vars[s_idx.as(usize)].scope_depth {
+                            ptr_escape = true;
+                        } else if !v.vars[t_idx.as(usize)].is_stack_local {
+                            if v.vars[s_idx.as(usize)].is_stack_local {
+                                ptr_escape = true;
+                            }
+                        }
+                        if ptr_escape {
+                            print("error: borrowed pointer escapes enclosing scope");
+                            v.has_error = true;
+                            return false;
+                        }
+                    }
+                }
+                if v.vars[s_idx.as(usize)].is_stack_local {
+                    if tgt_opt.len > 0 {
+                        validator_set_points_to_stack_local(v, tgt_opt);
+                    }
+                }
+            }
+        } else if val_ident.len > 0 {
+            let val_idx: i32 = validator_find_var(v, val_ident);
+            if val_idx >= 0 {
+                if v.vars[val_idx.as(usize)].points_to_stack_local {
+                    if tgt_opt.len > 0 {
+                        let t_idx: i32 = validator_find_var(v, tgt_opt);
+                        if t_idx >= 0 {
+                            let mut val_escape: bool = false;
+                            if v.vars[t_idx.as(usize)].scope_depth < v.vars[val_idx.as(usize)].scope_depth {
+                                val_escape = true;
+                            } else if !v.vars[t_idx.as(usize)].is_stack_local {
+                                val_escape = true;
+                            }
+                            if val_escape {
+                                print("error: borrowed pointer escapes enclosing scope");
+                                v.has_error = true;
+                                return false;
+                            }
+                        }
+                        validator_set_points_to_stack_local(v, tgt_opt);
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    if stmt.tag == NODE_RETURN {
+        if stmt.left != (0).as(*mut AstNode) {
+            if !check_expr_use(v, stmt.left) { return false; }
+            let src_name: string = contains_stack_ref(v, stmt.left);
+            if src_name.len > 0 {
+                print_err_ret_local(src_name);
+                v.has_error = true;
+                return false;
+            }
+            let id: string = get_ident_name(stmt.left);
+            if id.len > 0 {
+                let idx: i32 = validator_find_var(v, id);
+                if idx >= 0 {
+                    if v.vars[idx.as(usize)].borrowed_from_arena.len > 0 {
+                        let arena_name: string = v.vars[idx.as(usize)].borrowed_from_arena;
+                        let a_idx: i32 = validator_find_var(v, arena_name);
+                        if a_idx >= 0 {
+                            if v.vars[a_idx.as(usize)].is_stack_local {
+                                print_err_ret_arena(arena_name);
+                                v.has_error = true;
+                                return false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        return true;
+    }
+
+    if stmt.tag == NODE_BLOCK {
+        v.scope_depth = v.scope_depth + 1;
+        let prev_len: usize = v.vars_count;
+        let mut s: *mut AstNode = stmt.left;
+        while s != (0).as(*mut AstNode) {
+            if !validate_stmt(v, s) { return false; }
+            s = s.next;
+        }
+        v.scope_depth = v.scope_depth - 1;
+        v.vars_count = prev_len;
+        return true;
+    }
+
+    if stmt.tag == NODE_IF {
+        if !validate_stmt(v, stmt.right) { return false; }
+        if stmt.right != (0).as(*mut AstNode) {
+            if stmt.right.next != (0).as(*mut AstNode) {
+                if !validate_stmt(v, stmt.right.next) { return false; }
+            }
+        }
+        return true;
+    }
+
+    if stmt.tag == NODE_WHILE {
+        return validate_stmt(v, stmt.right);
+    }
+
+    if stmt.tag == NODE_PRINT {
+        return check_expr_use(v, stmt.left);
+    }
+
+    // Expression stmt
+    if stmt.tag == NODE_CALL {
+        if str_eq(stmt.tok.slice, "arena_deinit") {
+            if stmt.left != (0).as(*mut AstNode) {
+                let mut a_name: string = get_underlying_address_of(stmt.left);
+                if a_name.len == 0 { a_name = get_ident_name(stmt.left); }
+                if a_name.len > 0 {
+                    if v.deinit_count < 32 {
+                        v.deinit_arenas[v.deinit_count] = a_name;
+                        v.deinit_count = v.deinit_count + 1;
+                    }
+                }
+            }
+        }
+        if str_eq(stmt.tok.slice, "arena_reset") {
+            if stmt.left != (0).as(*mut AstNode) {
+                let mut a_name: string = get_underlying_address_of(stmt.left);
+                if a_name.len == 0 { a_name = get_ident_name(stmt.left); }
+                if a_name.len > 0 {
+                    validator_invalidate_arena(v, a_name);
+                }
+            }
+        }
+    }
+    return check_expr_use(v, stmt);
+}
+
+fn validate_function(f: *mut AstNode) -> bool {
+    if f.right == (0).as(*mut AstNode) { return true; } // extern/prototype
+
+    let mut v: Validator = Validator {
+        vars: [VarInfo {
+            name: "",
+            scope_depth: 0,
+            is_stack_local: false,
+            points_to_stack_local: false,
+            borrowed_from_arena: "",
+            borrowed_from_var: "",
+            is_invalidated: false,
+        }],
+        vars_count: 0,
+        deinit_arenas: [""],
+        deinit_count: 0,
+        scope_depth: 1,
+        has_error: false,
+    };
+
+    let mut p: *mut AstNode = f.left;
+    while p != (0).as(*mut AstNode) {
+        if v.vars_count < 128 {
+            v.vars[v.vars_count] = VarInfo {
+                name: p.tok.slice,
+                scope_depth: 0,
+                is_stack_local: false,
+                points_to_stack_local: false,
+                borrowed_from_arena: "",
+                borrowed_from_var: "",
+                is_invalidated: false,
+            };
+            v.vars_count = v.vars_count + 1;
+        }
+        p = p.next;
+    }
+
+    let body_block: *mut AstNode = f.right;
+    let mut stmt: *mut AstNode = body_block.left;
+    while stmt != (0).as(*mut AstNode) {
+        if !validate_stmt(&mut v, stmt) { return false; }
+        stmt = stmt.next;
+    }
+    return true;
+}
+
+fn validate_program(root: *mut AstNode) -> bool {
+    let mut decl: *mut AstNode = root.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_FN {
+            if !validate_function(decl) {
+                return false;
+            }
+        }
+        decl = decl.next;
+    }
+    return true;
+}
+
+fn parse_program(p: *mut Parser) -> *mut AstNode {
+    let prog_node: *mut AstNode = ast_alloc_node(p.arena, NODE_PROGRAM, p.current);
+    let mut first_decl: *mut AstNode = (0).as(*mut AstNode);
+    let mut last_decl: *mut AstNode = (0).as(*mut AstNode);
+
+    while p.current.tag != TOK_EOF {
+        let prev_tag: u32 = p.current.tag;
+        let prev_idx: usize = p.lex.index;
+        let mut decl: *mut AstNode = (0).as(*mut AstNode);
+
+        if p.current.tag == TOK_FN {
+            decl = parse_fn_decl(p);
+        } else if p.current.tag == TOK_EXTERN {
+            parser_advance(p);
+            decl = parse_fn_decl(p);
+        } else if p.current.tag == TOK_STRUCT {
+            parser_advance(p);
+            decl = parse_struct_decl(p, false);
+        } else if p.current.tag == TOK_PACKED {
+            parser_advance(p);
+            parser_expect(p, TOK_STRUCT);
+            decl = parse_struct_decl(p, true);
+        } else if p.current.tag == TOK_LET {
+            decl = parse_let_stmt(p);
+        } else if p.current.tag == TOK_IMPORT {
+            parser_advance(p);
+            if p.current.tag == TOK_STRING {
+                parser_advance(p);
+            }
+            if p.current.tag == TOK_SEMICOLON {
+                parser_advance(p);
+            }
+        } else {
+            parser_advance(p);
+        }
+
+        if decl != (0).as(*mut AstNode) {
+            if first_decl == (0).as(*mut AstNode) {
+                first_decl = decl;
+                last_decl = decl;
+            } else {
+                last_decl.next = decl;
+                last_decl = decl;
+            }
+        }
+        if p.current.tag == prev_tag {
+            if p.lex.index == prev_idx {
+                parser_advance(p);
+            }
+        }
+    }
+
+    prog_node.left = first_decl;
+    return prog_node;
+}

@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>oC v1.0 — Syntax &amp; Language Reference</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <h1>oC</h1>
+      <span class="badge">v1.0.0 Syntax Spec</span>
+    </div>
+    <nav>
+      <a href="index.html">Overview</a>
+      <a href="syntax.html" class="active">Syntax Reference</a>
+      <a href="security.html">17-CWE Security Matrix</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <h2>oC v1.0 Language &amp; Syntax Reference</h2>
+    <p>
+      Minimalist, unambiguous systems syntax designed for zero hidden control flow, explicit mutability, and hardware-checked safety invariants.
+    </p>
+  </section>
+
+  <h2>1. Primitive Types &amp; Pointers</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>Category</th>
+        <th>Types</th>
+        <th>Representation</th>
+      </tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Unsigned Integers</td>
+        <td><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>usize</code></td>
+        <td>Exact-width unsigned integers (checked casts via <code>.as(T)</code>)</td>
+      </tr>
+      <tr>
+        <td>Signed Integers</td>
+        <td><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code></td>
+        <td>Two's complement signed integers (hardware overflow traps)</td>
+      </tr>
+      <tr>
+        <td>Booleans &amp; Strings</td>
+        <td><code>bool</code>, <code>string</code></td>
+        <td><code>bool</code> (1B), <code>string</code> (16B fat slice <code>{ ptr: *u8, len: usize }</code>)</td>
+      </tr>
+      <tr>
+        <td>Pointers &amp; Borrows</td>
+        <td><code>*T</code>, <code>*mut T</code>, <code>&amp;T</code>, <code>&amp;mut T</code></td>
+        <td>Non-owning pointers/references verified by <code>EscapeValidator</code></td>
+      </tr>
+      <tr>
+        <td>Fixed Arrays</td>
+        <td><code>[N]T</code></td>
+        <td>Zero-initialized inline stack or struct arrays (e.g., <code>[4096]u8</code>)</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h2>2. Variables, Functions &amp; Control Flow</h2>
+  <p>Bindings are immutable by default (`let`) and require `let mut` for mutation.</p>
+  <pre><code>import "std/mem.oc";
+import "std/fs.oc";
+
+let MAX_CONNECTIONS: u32 = 128;
+
+fn fib(n: u64) -&gt; u64 {
+    if n &lt;= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn main() -&gt; i32 {
+    let mut acc: u64 = 0;
+    let mut i: u64 = 0;
+    while i &lt; 10 {
+        acc = acc + fib(i);
+        i = i + 1;
+    }
+    print(acc);
+    return 0;
+}</code></pre>
+
+  <h2>3. Structs &amp; Packed Wire Layouts</h2>
+  <p>
+    Struct literals zero-initialize all alignment padding (`CWE-200`). Use `packed struct` for exact kernel ABI and network packet headers.
+  </p>
+  <pre><code>struct SensorReading {
+    id: u32,
+    flags: u8,
+    payload: string,
+}
+
+packed struct sockaddr_in {
+    sin_family: u16,
+    sin_port: u16,
+    sin_addr: u32,
+    sin_zero: [8]u8,
+}</code></pre>
+
+  <h2>4. Slices, Sub-Slicing &amp; Checked Casts</h2>
+  <p>
+    Slice indexing `s[idx]` and sub-slicing `s[start..end]` emit hardware bounds traps (`__trap_slice_bounds`). Numeric casts `.as(T)` trap on negative-to-unsigned conversion (`CWE-195`) and narrowing truncation (`CWE-197`).
+  </p>
+  <pre><code>let msg: string = "Native oC Systems";
+let sub: string = msg[0..9]; // "Native oC" (traps if start &gt; end or end &gt; msg.len)
+let ch: u8 = sub[0];         // 78 ('N')
+
+let raw_len: usize = sub.len;
+let safe_u16: u16 = raw_len.as(u16); // Checked narrowing cast</code></pre>
+
+  <h2>5. Regional Arenas (`std/mem.oc`)</h2>
+  <p>
+    All dynamic allocation uses deterministic bump arenas backed directly by Linux `sys_mmap`. Resetting or deinitializing an arena scrubs active memory (`CWE-14`) and invalidates all borrows at compile time (`CWE-416`).
+  </p>
+  <pre><code>let mut arena: Arena = arena_init(65536);
+let chunk: *mut u8 = arena_alloc(&amp;mut arena, 128);
+chunk[0] = 0x4F;
+
+arena_reset(&amp;mut arena);  // Scrubs bytes [0..offset] and invalidates `chunk` at compile time
+arena_deinit(&amp;mut arena); // Scrubs bytes and unmaps via sys_munmap</code></pre>
+
+  <h2>6. Direct Linux x86_64 Syscall Intrinsics</h2>
+  <p>
+    In `--backend native`, syscall intrinsics emit raw x86_64 `syscall` (`0x0f 0x05`) instructions with zero `libc`:
+  </p>
+  <pre><code>extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
+extern fn sys_open(path: *u8, flags: i32, mode: u32) -&gt; i32;
+extern fn sys_close(fd: i32) -&gt; i32;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut void;
+extern fn sys_munmap(addr: *mut void, len: usize) -&gt; i32;
+extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -&gt; i32;
+extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -&gt; i32;
+extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;
+extern fn sys_unlink(path: *u8) -&gt; i32;
+extern fn sys_exit(code: i32);</code></pre>
+
+  <footer>
+    oC v1.0 Systems Programming Language • Syntax &amp; Syscall Specification
+  </footer>
+</body>
+</html>

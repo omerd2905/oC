@@ -1,0 +1,22 @@
+packed struct PacketHeader {
+    version: u8,
+    port: u16,
+}
+
+fn inspect_port(header: *PacketHeader) {
+    print("Inspecting port:")
+    print(header.port)
+}
+
+fn main() {
+    // Raw bytes: 0x01 (version), 0x90, 0x1f (port 8080 in little-endian), 0x00
+    let raw_bytes: [4]u8 = [1, 144, 31, 0]
+    let header = raw_bytes.as(*PacketHeader)
+
+    print("Version from raw bytes:")
+    print(header.version)
+    print("Port from raw bytes:")
+    print(header.port)
+
+    inspect_port(header)
+}

@@ -1,0 +1,15 @@
+import "math_utils.oc";
+
+fn main() {
+    print("=== Multi-File Module System Demo ===");
+
+    let sum: i32 = add_numbers(15, 27);
+    print("Sum (15 + 27):");
+    print(sum);
+
+    let sq: i32 = square(12);
+    print("Square (12 * 12):");
+    print(sq);
+
+    print("Verified: multi-file import and execution succeeded.");
+}

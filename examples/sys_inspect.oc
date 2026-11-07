@@ -1,0 +1,31 @@
+extern fn open(path: *u8, flags: i32, mode: u32) -> i32;
+extern fn read(fd: i32, buf: *mut u8, count: usize) -> i64;
+extern fn write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn close(fd: i32) -> i32;
+
+fn show_file(path: string) {
+    print("--- Reading File: ---");
+    print(path);
+
+    let fd: i32 = open(path.ptr.as(*u8), 0, 0);
+    if fd < 0 {
+        print("Error: unable to open file");
+        return;
+    }
+
+    let mut buf: [256]u8 = [0];
+    let bytes_read: i64 = read(fd, (&mut buf).as(*mut u8), 255);
+    if bytes_read >= 0 {
+        buf[bytes_read.as(usize)] = 0;
+    }
+    close(fd);
+
+    print("File Contents:");
+    print(buf);
+}
+
+fn main() {
+    print("=== Plan 9 Style Sys Inspect ===");
+    show_file("/proc/version");
+    show_file("/etc/os-release");
+}

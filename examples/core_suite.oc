@@ -1,0 +1,50 @@
+import "std/io.oc"
+import "std/fs.oc"
+import "std/mem.oc"
+import "std/net.oc"
+import "std/math.oc"
+
+fn main() {
+    print("=== oC Core Standard Libraries Suite ===")
+
+    // 1. Math
+    let aligned: usize = align_forward(17, 8)
+    print("Aligned 17 to 8:")
+    print(aligned)
+
+    let abs_val: i32 = abs_i32(-42)
+    print("abs_i32(-42):")
+    print(abs_val)
+
+    // 2. Memory & Arena
+    let mut arena: Arena = arena_init(256)
+    let chunk: *mut u8 = arena_alloc(&mut arena, 16)
+    chunk[0] = 79
+    chunk[1] = 67
+    chunk[2] = 0
+    print("Arena chunk byte 0:")
+    print(chunk[0])
+    arena_deinit(&mut arena)
+    print("Arena deinitialized.")
+
+    // 3. Filesystem write & read
+    let test_path: string = "/tmp/oc_test.txt"
+    let ok: bool = write_file(test_path, "Hello from oC stdlib!")
+    print("File written successfully:")
+    print(ok)
+
+    let mut read_buf: [64]u8 = [0]
+    let bytes_read: i64 = read_file(test_path, (&mut read_buf).as(*mut u8), 63)
+    if bytes_read > 0 {
+        read_buf[bytes_read.as(usize)] = 0
+        print("Read from file:")
+        print(read_buf)
+    }
+
+    // 4. Network Probe
+    let probed: bool = probe_port(9999)
+    print("Probed port 9999 (should be false):")
+    print(probed)
+
+    print("=== Core Suite Completed Successfully ===")
+}

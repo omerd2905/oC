@@ -1,0 +1,435 @@
+import "compiler/token.oc";
+
+struct Lexer {
+    source: string,
+    index: usize,
+    line: u32,
+    col: u32,
+}
+
+fn lexer_init(source: string) -> Lexer {
+    return Lexer {
+        source: source,
+        index: 0,
+        line: 1,
+        col: 1,
+    };
+}
+
+fn str_eq(a: string, b: string) -> bool {
+    if a.len != b.len {
+        return false;
+    }
+    let mut i: usize = 0;
+    while i < a.len {
+        if a[i] != b[i] {
+            return false;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn is_space(c: u8) -> bool {
+    if c == 32 { return true; }
+    if c == 9 { return true; }
+    if c == 13 { return true; }
+    return false;
+}
+
+fn is_digit(c: u8) -> bool {
+    if c >= 48 {
+        if c <= 57 {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn is_hex_digit(c: u8) -> bool {
+    if c >= 48 {
+        if c <= 57 { return true; }
+    }
+    if c >= 97 {
+        if c <= 102 { return true; }
+    }
+    if c >= 65 {
+        if c <= 70 { return true; }
+    }
+    if c == 95 { return true; }
+    return false;
+}
+
+fn is_ident_start(c: u8) -> bool {
+    if c >= 97 {
+        if c <= 122 {
+            return true;
+        }
+    }
+    if c >= 65 {
+        if c <= 90 {
+            return true;
+        }
+    }
+    if c == 95 {
+        return true;
+    }
+    return false;
+}
+
+fn is_ident_char(c: u8) -> bool {
+    if is_ident_start(c) {
+        return true;
+    }
+    if is_digit(c) {
+        return true;
+    }
+    return false;
+}
+
+fn check_keyword(s: string) -> u32 {
+    if str_eq(s, "fn") { return TOK_FN; }
+    if str_eq(s, "let") { return TOK_LET; }
+    if str_eq(s, "mut") { return TOK_MUT; }
+    if str_eq(s, "return") { return TOK_RETURN; }
+    if str_eq(s, "if") { return TOK_IF; }
+    if str_eq(s, "else") { return TOK_ELSE; }
+    if str_eq(s, "while") { return TOK_WHILE; }
+    if str_eq(s, "struct") { return TOK_STRUCT; }
+    if str_eq(s, "packed") { return TOK_PACKED; }
+    if str_eq(s, "extern") { return TOK_EXTERN; }
+    if str_eq(s, "import") { return TOK_IMPORT; }
+    if str_eq(s, "print") { return TOK_PRINT; }
+    if str_eq(s, "true") { return TOK_TRUE; }
+    if str_eq(s, "false") { return TOK_FALSE; }
+    if str_eq(s, "as") { return TOK_AS; }
+    return TOK_IDENT;
+}
+
+fn lexer_next(lex: *mut Lexer) -> Token {
+    let mut skipping: bool = true;
+    while skipping {
+        if lex.index >= lex.source.len {
+            skipping = false;
+        } else {
+            let c: u8 = lex.source[lex.index];
+            if c == 10 {
+                lex.index = lex.index + 1;
+                lex.line = lex.line + 1;
+                lex.col = 1;
+            } else if is_space(c) {
+                lex.index = lex.index + 1;
+                lex.col = lex.col + 1;
+            } else if c == 47 {
+                if lex.index + 1 < lex.source.len {
+                    if lex.source[lex.index + 1] == 47 {
+                        lex.index = lex.index + 2;
+                        lex.col = lex.col + 2;
+                        while lex.index < lex.source.len {
+                            if lex.source[lex.index] == 10 {
+                                break;
+                            }
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        }
+                    } else {
+                        skipping = false;
+                    }
+                } else {
+                    skipping = false;
+                }
+            } else {
+                skipping = false;
+            }
+        }
+    }
+
+    if lex.index >= lex.source.len {
+        return Token {
+            tag: TOK_EOF,
+            slice: "",
+            line: lex.line,
+            col: lex.col,
+        };
+    }
+
+    let start_idx: usize = lex.index;
+    let tok_line: u32 = lex.line;
+    let tok_col: u32 = lex.col;
+    let c: u8 = lex.source[lex.index];
+
+    if is_ident_start(c) {
+        lex.index = lex.index + 1;
+        lex.col = lex.col + 1;
+        while lex.index < lex.source.len {
+            if is_ident_char(lex.source[lex.index]) {
+                lex.index = lex.index + 1;
+                lex.col = lex.col + 1;
+            } else {
+                break;
+            }
+        }
+        let slice: string = lex.source[start_idx..lex.index];
+        let tag: u32 = check_keyword(slice);
+        return Token {
+            tag: tag,
+            slice: slice,
+            line: tok_line,
+            col: tok_col,
+        };
+    }
+
+    if is_digit(c) {
+        if c == 48 {
+            if lex.index + 1 < lex.source.len {
+                let nc: u8 = lex.source[lex.index + 1];
+                if nc == 120 { // 'x'
+                    lex.index = lex.index + 2;
+                    lex.col = lex.col + 2;
+                    while lex.index < lex.source.len {
+                        let hc: u8 = lex.source[lex.index];
+                        if is_hex_digit(hc) {
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let slice: string = lex.source[start_idx..lex.index];
+                    return Token {
+                        tag: TOK_INT,
+                        slice: slice,
+                        line: tok_line,
+                        col: tok_col,
+                    };
+                } else if nc == 88 { // 'X'
+                    lex.index = lex.index + 2;
+                    lex.col = lex.col + 2;
+                    while lex.index < lex.source.len {
+                        let hc: u8 = lex.source[lex.index];
+                        if is_hex_digit(hc) {
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let slice: string = lex.source[start_idx..lex.index];
+                    return Token {
+                        tag: TOK_INT,
+                        slice: slice,
+                        line: tok_line,
+                        col: tok_col,
+                    };
+                } else if nc == 98 { // 'b'
+                    lex.index = lex.index + 2;
+                    lex.col = lex.col + 2;
+                    while lex.index < lex.source.len {
+                        let bc: u8 = lex.source[lex.index];
+                        if bc == 48 {
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        } else if bc == 49 {
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        } else if bc == 95 {
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    let slice: string = lex.source[start_idx..lex.index];
+                    return Token {
+                        tag: TOK_INT,
+                        slice: slice,
+                        line: tok_line,
+                        col: tok_col,
+                    };
+                }
+            }
+        }
+        lex.index = lex.index + 1;
+        lex.col = lex.col + 1;
+        while lex.index < lex.source.len {
+            let dc: u8 = lex.source[lex.index];
+            if is_digit(dc) {
+                lex.index = lex.index + 1;
+                lex.col = lex.col + 1;
+            } else if dc == 95 {
+                lex.index = lex.index + 1;
+                lex.col = lex.col + 1;
+            } else {
+                break;
+            }
+        }
+        let slice: string = lex.source[start_idx..lex.index];
+        return Token {
+            tag: TOK_INT,
+            slice: slice,
+            line: tok_line,
+            col: tok_col,
+        };
+    }
+
+    if c == 34 {
+        lex.index = lex.index + 1;
+        lex.col = lex.col + 1;
+        while lex.index < lex.source.len {
+            let sc: u8 = lex.source[lex.index];
+            if sc == 92 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+            } else if sc == 34 {
+                lex.index = lex.index + 1;
+                lex.col = lex.col + 1;
+                break;
+            } else {
+                if sc == 10 {
+                    lex.line = lex.line + 1;
+                    lex.col = 1;
+                } else {
+                    lex.col = lex.col + 1;
+                }
+                lex.index = lex.index + 1;
+            }
+        }
+        let slice: string = lex.source[start_idx..lex.index];
+        return Token {
+            tag: TOK_STRING,
+            slice: slice,
+            line: tok_line,
+            col: tok_col,
+        };
+    }
+
+    if lex.index + 1 < lex.source.len {
+        let next_c: u8 = lex.source[lex.index + 1];
+        if c == 45 {
+            if next_c == 62 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_ARROW,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+        if c == 61 {
+            if next_c == 61 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_EQEQ,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+        if c == 33 {
+            if next_c == 61 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_NEQ,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+        if c == 46 {
+            if next_c == 46 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_DOTDOT,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+        if c == 60 {
+            if next_c == 60 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_SHL,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+            if next_c == 61 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_LTE,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+        if c == 62 {
+            if next_c == 62 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_SHR,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+            if next_c == 61 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_GTE,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+        }
+    }
+
+    lex.index = lex.index + 1;
+    lex.col = lex.col + 1;
+    let mut tag: u32 = 0;
+
+    if c == 40 { tag = TOK_LPAREN; }
+    else if c == 41 { tag = TOK_RPAREN; }
+    else if c == 123 { tag = TOK_LBRACE; }
+    else if c == 125 { tag = TOK_RBRACE; }
+    else if c == 91 { tag = TOK_LBRACKET; }
+    else if c == 93 { tag = TOK_RBRACKET; }
+    else if c == 58 { tag = TOK_COLON; }
+    else if c == 59 { tag = TOK_SEMICOLON; }
+    else if c == 44 { tag = TOK_COMMA; }
+    else if c == 46 { tag = TOK_DOT; }
+    else if c == 61 { tag = TOK_EQUAL; }
+    else if c == 43 { tag = TOK_PLUS; }
+    else if c == 45 { tag = TOK_MINUS; }
+    else if c == 42 { tag = TOK_STAR; }
+    else if c == 47 { tag = TOK_SLASH; }
+    else if c == 37 { tag = TOK_PERCENT; }
+    else if c == 38 { tag = TOK_AMP; }
+    else if c == 33 { tag = TOK_BANG; }
+    else if c == 60 { tag = TOK_LT; }
+    else if c == 62 { tag = TOK_GT; }
+    else if c == 124 { tag = TOK_PIPE; }
+    else if c == 94 { tag = TOK_CARET; }
+
+    return Token {
+        tag: tag,
+        slice: lex.source[start_idx..lex.index],
+        line: tok_line,
+        col: tok_col,
+    };
+}

@@ -1,0 +1,1344 @@
+import "std/fs.oc";
+import "std/mem.oc";
+import "compiler/token.oc";
+import "compiler/ast.oc";
+import "compiler/codegen.oc";
+
+fn elf_append_u16(buf: *mut CodeBuffer, v: u32) {
+    buf_append_u8(buf, (v % 256).as(u8));
+    buf_append_u8(buf, ((v / 256) % 256).as(u8));
+}
+
+fn elf_append_u32(buf: *mut CodeBuffer, v: u32) {
+    buf_append_u8(buf, (v % 256).as(u8));
+    buf_append_u8(buf, ((v / 256) % 256).as(u8));
+    buf_append_u8(buf, ((v / 65536) % 256).as(u8));
+    buf_append_u8(buf, ((v / 16777216) % 256).as(u8));
+}
+
+fn elf_append_u64(buf: *mut CodeBuffer, v: u64) {
+    let low: u32 = (v % 4294967296).as(u32);
+    let high: u32 = (v / 4294967296).as(u32);
+    elf_append_u32(buf, low);
+    elf_append_u32(buf, high);
+}
+
+fn elf_patch_u32(buf: *mut CodeBuffer, offset: usize, v: u32) {
+    buf.buffer[offset] = (v % 256).as(u8);
+    buf.buffer[offset + 1] = ((v / 256) % 256).as(u8);
+    buf.buffer[offset + 2] = ((v / 65536) % 256).as(u8);
+    buf.buffer[offset + 3] = ((v / 16777216) % 256).as(u8);
+}
+
+fn elf_patch_u64(buf: *mut CodeBuffer, offset: usize, v: u64) {
+    let low: u32 = (v % 4294967296).as(u32);
+    let high: u32 = (v / 4294967296).as(u32);
+    elf_patch_u32(buf, offset, low);
+    elf_patch_u32(buf, offset + 4, high);
+}
+
+fn elf_append_i32(buf: *mut CodeBuffer, v: i32) {
+    let mut uv: u64 = 0;
+    if v < 0 {
+        let neg: i32 = -v;
+        uv = 4294967296 - neg.as(u64);
+    } else {
+        uv = v.as(u64);
+    }
+    elf_append_u32(buf, uv.as(u32));
+}
+
+fn elf_patch_i32(buf: *mut CodeBuffer, offset: usize, v: i32) {
+    let mut uv: u64 = 0;
+    if v < 0 {
+        let neg: i32 = -v;
+        uv = 4294967296 - neg.as(u64);
+    } else {
+        uv = v.as(u64);
+    }
+    elf_patch_u32(buf, offset, uv.as(u32));
+}
+
+struct NativeGen {
+    fn_names: [64]string,
+    fn_offsets: [64]usize,
+    fn_count: usize,
+
+    fixup_offsets: [128]usize,
+    fixup_names: [128]string,
+    fixup_is_6byte: [128]bool,
+    fixup_count: usize,
+
+    data_reloc_code: [128]usize,
+    data_reloc_data: [128]usize,
+    data_reloc_count: usize,
+
+    var_names: [64]string,
+    var_offsets: [64]i32,
+    var_is_slice: [64]bool,
+    var_count: usize,
+    curr_off: i32,
+}
+
+fn ng_add_fixup(ng: *mut NativeGen, code_off: usize, fn_name: string, is_6byte: bool) {
+    if ng.fixup_count < 128 {
+        ng.fixup_offsets[ng.fixup_count] = code_off;
+        ng.fixup_names[ng.fixup_count] = fn_name;
+        ng.fixup_is_6byte[ng.fixup_count] = is_6byte;
+        ng.fixup_count = ng.fixup_count + 1;
+    }
+}
+
+fn ng_add_data_reloc(ng: *mut NativeGen, code_off: usize, data_off: usize) {
+    if ng.data_reloc_count < 128 {
+        ng.data_reloc_code[ng.data_reloc_count] = code_off;
+        ng.data_reloc_data[ng.data_reloc_count] = data_off;
+        ng.data_reloc_count = ng.data_reloc_count + 1;
+    }
+}
+
+fn ng_find_var_offset(ng: *mut NativeGen, name: string) -> i32 {
+    let mut i: usize = ng.var_count;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(ng.var_names[i], name) {
+            return ng.var_offsets[i];
+        }
+    }
+    return 0;
+}
+
+fn ng_is_var_slice(ng: *mut NativeGen, name: string) -> bool {
+    let mut i: usize = ng.var_count;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(ng.var_names[i], name) {
+            return ng.var_is_slice[i];
+        }
+    }
+    return false;
+}
+
+fn ng_is_expr_slice(ng: *mut NativeGen, expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_SLICE { return true; }
+    if expr.tag == NODE_IDENT { return ng_is_var_slice(ng, expr.tok.slice); }
+    return false;
+}
+
+fn ng_emit_disp_store_rax(code: *mut CodeBuffer, off: i32) {
+    // mov %rax, disp32(%rbp): 48 89 85 <disp32>
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 133);
+    elf_append_i32(code, off);
+}
+
+fn ng_emit_disp_store_rdx(code: *mut CodeBuffer, off: i32) {
+    // mov %rdx, disp32(%rbp): 48 89 95 <disp32>
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 149);
+    elf_append_i32(code, off);
+}
+
+fn ng_emit_disp_load_rax(code: *mut CodeBuffer, off: i32) {
+    // mov disp32(%rbp), %rax: 48 8b 85 <disp32>
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 133);
+    elf_append_i32(code, off);
+}
+
+fn ng_emit_disp_load_rdx(code: *mut CodeBuffer, off: i32) {
+    // mov disp32(%rbp), %rdx: 48 8b 95 <disp32>
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 149);
+    elf_append_i32(code, off);
+}
+
+fn ng_emit_disp_lea_rax(code: *mut CodeBuffer, off: i32) {
+    // lea disp32(%rbp), %rax: 48 8d 85 <disp32>
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 141);
+    buf_append_u8(code, 133);
+    elf_append_i32(code, off);
+}
+
+fn parse_u64(s: string) -> u64 {
+    let mut res: u64 = 0;
+    if s.len > 2 {
+        if s[0] == 48 { // '0'
+            if s[1] == 120 { // 'x'
+                let mut i: usize = 2;
+                while i < s.len {
+                    let c: u8 = s[i];
+                    if c >= 48 {
+                        if c <= 57 {
+                            res = (res * 16) + (c - 48).as(u64);
+                        }
+                    } else if c >= 97 {
+                        if c <= 102 {
+                            res = (res * 16) + (c - 87).as(u64);
+                        }
+                    } else if c >= 65 {
+                        if c <= 70 {
+                            res = (res * 16) + (c - 55).as(u64);
+                        }
+                    }
+                    i = i + 1;
+                }
+                return res;
+            }
+        }
+    }
+    let mut i: usize = 0;
+    while i < s.len {
+        let c: u8 = s[i];
+        if c >= 48 {
+            if c <= 57 {
+                res = (res * 10) + (c - 48).as(u64);
+            }
+        }
+        i = i + 1;
+    }
+    return res;
+}
+
+fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode) {
+    if expr == (0).as(*mut AstNode) { return; }
+
+    if expr.tag == NODE_INT {
+        let val: u64 = parse_u64(expr.tok.slice);
+        // mov $val, %rax: 48 b8 <u64>
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 184);
+        elf_append_u64(code, val);
+        return;
+    }
+
+    if expr.tag == NODE_BOOL {
+        let mut val: u64 = 0;
+        if str_eq(expr.tok.slice, "true") {
+            val = 1;
+        }
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 184);
+        elf_append_u64(code, val);
+        return;
+    }
+
+    if expr.tag == NODE_STRING {
+        let mut raw: string = expr.tok.slice;
+        if raw.len >= 2 {
+            if raw[0] == 34 {
+                raw = raw[1..raw.len - 1];
+            }
+        }
+        let data_off: usize = data.len;
+        let mut k: usize = 0;
+        while k < raw.len {
+            buf_append_u8(data, raw[k]);
+            k = k + 1;
+        }
+
+        // mov $data_vaddr, %rax (48 b8 <u64 placeholder>)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 184);
+        let patch_off: usize = code.len;
+        elf_append_u64(code, 0);
+        ng_add_data_reloc(ng, patch_off, data_off);
+
+        // mov $len, %rdx (48 c7 c2 <u32>)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 199);
+        buf_append_u8(code, 194);
+        elf_append_u32(code, raw.len.as(u32));
+        return;
+    }
+
+    if expr.tag == NODE_IDENT {
+        let off: i32 = ng_find_var_offset(ng, expr.tok.slice);
+        ng_emit_disp_load_rax(code, off);
+        if ng_is_var_slice(ng, expr.tok.slice) {
+            ng_emit_disp_load_rdx(code, off - 8);
+        }
+        return;
+    }
+
+    if expr.tag == NODE_ADDRESS_OF {
+        if expr.left != (0).as(*mut AstNode) {
+            if expr.left.tag == NODE_IDENT {
+                let off: i32 = ng_find_var_offset(ng, expr.left.tok.slice);
+                ng_emit_disp_lea_rax(code, off);
+            }
+        }
+        return;
+    }
+
+    if expr.tag == NODE_CAST {
+        ng_emit_expr(ng, code, data, expr.left);
+        return;
+    }
+
+    if expr.tag == NODE_UNARY {
+        ng_emit_expr(ng, code, data, expr.left);
+        if expr.tok.tag == TOK_MINUS {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 247);
+            buf_append_u8(code, 216); // neg %rax
+        } else if expr.tok.tag == TOK_BANG {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 133);
+            buf_append_u8(code, 192); // test %rax, %rax
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 148);
+            buf_append_u8(code, 192); // sete %al
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192); // movzx %al, %eax
+        }
+        return;
+    }
+
+    if expr.tag == NODE_INDEX {
+        if ng_is_expr_slice(ng, expr.left) {
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax (ptr)
+            buf_append_u8(code, 82); // push %rdx (len)
+            ng_emit_expr(ng, code, data, expr.right);
+            buf_append_u8(code, 90); // pop %rdx (len)
+            buf_append_u8(code, 89); // pop %rcx (ptr)
+            // cmp %rdx, %rax (48 39 d0)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 208);
+            ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 131); // jae
+            elf_append_u32(code, 0);
+            // movzbl (%rcx,%rax,1), %eax (0f b6 04 01)
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 4);
+            buf_append_u8(code, 1);
+            return;
+        }
+    }
+
+    if expr.tag == NODE_DEREF {
+        ng_emit_expr(ng, code, data, expr.left);
+        // test %rax, %rax (48 85 c0)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 133);
+        buf_append_u8(code, 192);
+        // jz __trap_null_deref (0f 84 <rel32>)
+        ng_add_fixup(ng, code.len, "__trap_null_deref", true);
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 132);
+        elf_append_u32(code, 0);
+        // mov (%rax), %rax (48 8b 00)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 139);
+        buf_append_u8(code, 0);
+        return;
+    }
+
+    if expr.tag == NODE_SLICE {
+        ng_emit_expr(ng, code, data, expr.left); // %rax = target_ptr, %rdx = target_len
+        buf_append_u8(code, 80); // push %rax
+        buf_append_u8(code, 82); // push %rdx
+
+        let range_node: *mut AstNode = expr.right;
+        if range_node != (0).as(*mut AstNode) {
+            if range_node.left != (0).as(*mut AstNode) {
+                ng_emit_expr(ng, code, data, range_node.left);
+            } else {
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 49);
+                buf_append_u8(code, 192);
+            }
+        } else {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 49);
+            buf_append_u8(code, 192);
+        }
+        buf_append_u8(code, 80); // push %rax (start)
+
+        if range_node != (0).as(*mut AstNode) {
+            if range_node.right != (0).as(*mut AstNode) {
+                ng_emit_expr(ng, code, data, range_node.right);
+            } else {
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 139);
+                buf_append_u8(code, 68);
+                buf_append_u8(code, 36);
+                buf_append_u8(code, 8);
+            }
+        } else {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 139);
+            buf_append_u8(code, 68);
+            buf_append_u8(code, 36);
+            buf_append_u8(code, 8);
+        }
+
+        buf_append_u8(code, 91); // pop %rbx (start)
+
+        // cmp %rax, %rbx (48 39 c3)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 57);
+        buf_append_u8(code, 195);
+        ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 135); // ja
+        elf_append_u32(code, 0);
+
+        // mov (%rsp), %rcx (48 8b 0c 24)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 139);
+        buf_append_u8(code, 12);
+        buf_append_u8(code, 36);
+        // cmp %rcx, %rax (48 39 c8)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 57);
+        buf_append_u8(code, 200);
+        ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 135); // ja
+        elf_append_u32(code, 0);
+
+        // sub %rbx, %rax (48 29 d8: end - start = len)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 41);
+        buf_append_u8(code, 216);
+        // mov %rax, %rdx (48 89 c2)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 137);
+        buf_append_u8(code, 194);
+        // add $8, %rsp (48 83 c4 08)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 131);
+        buf_append_u8(code, 196);
+        buf_append_u8(code, 8);
+        buf_append_u8(code, 88); // pop %rax (target_ptr)
+        // add %rbx, %rax (48 01 d8: target_ptr + start)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 1);
+        buf_append_u8(code, 216);
+        return;
+    }
+
+    if expr.tag == NODE_BINARY {
+        ng_emit_expr(ng, code, data, expr.left);
+        buf_append_u8(code, 80); // push %rax
+        ng_emit_expr(ng, code, data, expr.right);
+        // mov %rax, %rbx (48 89 c3)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 137);
+        buf_append_u8(code, 195);
+        buf_append_u8(code, 88); // pop %rax
+
+        if expr.tok.tag == TOK_PLUS {
+            // add %rbx, %rax (48 01 d8)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 1);
+            buf_append_u8(code, 216);
+            ng_add_fixup(ng, code.len, "__trap_overflow", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 128); // jo
+            elf_append_u32(code, 0);
+            return;
+        }
+        if expr.tok.tag == TOK_MINUS {
+            // sub %rbx, %rax (48 29 d8)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 41);
+            buf_append_u8(code, 216);
+            ng_add_fixup(ng, code.len, "__trap_overflow", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 128);
+            elf_append_u32(code, 0);
+            return;
+        }
+        if expr.tok.tag == TOK_STAR {
+            // imul %rbx, %rax (48 0f af c3)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 175);
+            buf_append_u8(code, 195);
+            ng_add_fixup(ng, code.len, "__trap_overflow", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 128);
+            elf_append_u32(code, 0);
+            return;
+        }
+        if expr.tok.tag == TOK_LT {
+            // cmp %rbx, %rax (48 39 d8)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            // setb %al (0f 92 c0)
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 146);
+            buf_append_u8(code, 192);
+            // movzx %al, %eax (0f b6 c0)
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_LTE {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 150);
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_GT {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 151);
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_GTE {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 147);
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_EQEQ {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 148);
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_NEQ {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 57);
+            buf_append_u8(code, 216);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 149);
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 182);
+            buf_append_u8(code, 192);
+            return;
+        }
+        if expr.tok.tag == TOK_SLASH {
+            // test %rbx, %rbx (48 85 db)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 133);
+            buf_append_u8(code, 219);
+            ng_add_fixup(ng, code.len, "__trap_div_zero", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 132); // jz
+            elf_append_u32(code, 0);
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 153); // cqo
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 247);
+            buf_append_u8(code, 251); // idiv %rbx
+            return;
+        }
+        if expr.tok.tag == TOK_PERCENT {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 133);
+            buf_append_u8(code, 219);
+            ng_add_fixup(ng, code.len, "__trap_div_zero", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 132); // jz
+            elf_append_u32(code, 0);
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 153); // cqo
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 247);
+            buf_append_u8(code, 251); // idiv %rbx
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 137);
+            buf_append_u8(code, 208); // mov %rdx, %rax
+            return;
+        }
+        if expr.tok.tag == TOK_AMP {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 33);
+            buf_append_u8(code, 216); // and %rbx, %rax
+            return;
+        }
+        if expr.tok.tag == TOK_PIPE {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 9);
+            buf_append_u8(code, 216); // or %rbx, %rax
+            return;
+        }
+        if expr.tok.tag == TOK_CARET {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 49);
+            buf_append_u8(code, 216); // xor %rbx, %rax
+            return;
+        }
+        if expr.tok.tag == TOK_SHL {
+            buf_append_u8(code, 136);
+            buf_append_u8(code, 217); // mov %bl, %cl
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 211);
+            buf_append_u8(code, 224); // shl %cl, %rax
+            return;
+        }
+        if expr.tok.tag == TOK_SHR {
+            buf_append_u8(code, 136);
+            buf_append_u8(code, 217); // mov %bl, %cl
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 211);
+            buf_append_u8(code, 232); // shr %cl, %rax
+            return;
+        }
+        return;
+    }
+
+    if expr.tag == NODE_CALL {
+        let mut arg_count: usize = 0;
+        let mut a: *mut AstNode = expr.left;
+        while a != (0).as(*mut AstNode) {
+            ng_emit_expr(ng, code, data, a);
+            buf_append_u8(code, 80); // push %rax
+            arg_count = arg_count + 1;
+            a = a.next;
+        }
+
+        let mut idx: usize = arg_count;
+        while idx > 0 {
+            idx = idx - 1;
+            if idx == 0 { buf_append_u8(code, 95); } // pop %rdi
+            else if idx == 1 { buf_append_u8(code, 94); } // pop %rsi
+            else if idx == 2 { buf_append_u8(code, 90); } // pop %rdx
+            else if idx == 3 { buf_append_u8(code, 89); } // pop %rcx
+            else if idx == 4 {
+                buf_append_u8(code, 65);
+                buf_append_u8(code, 88); // pop %r8
+            }
+            else if idx == 5 {
+                buf_append_u8(code, 65);
+                buf_append_u8(code, 89); // pop %r9
+            }
+        }
+
+        let fn_name: string = expr.tok.slice;
+        let mut is_sys: bool = false;
+        let mut sys_nr: u32 = 0;
+        if str_eq(fn_name, "sys_read") { is_sys = true; sys_nr = 0; }
+        else if str_eq(fn_name, "sys_write") { is_sys = true; sys_nr = 1; }
+        else if str_eq(fn_name, "sys_open") { is_sys = true; sys_nr = 2; }
+        else if str_eq(fn_name, "sys_close") { is_sys = true; sys_nr = 3; }
+        else if str_eq(fn_name, "sys_mmap") { is_sys = true; sys_nr = 9; }
+        else if str_eq(fn_name, "sys_munmap") { is_sys = true; sys_nr = 11; }
+        else if str_eq(fn_name, "sys_socket") { is_sys = true; sys_nr = 41; }
+        else if str_eq(fn_name, "sys_connect") { is_sys = true; sys_nr = 42; }
+        else if str_eq(fn_name, "sys_exit") { is_sys = true; sys_nr = 60; }
+        else if str_eq(fn_name, "sys_unlink") { is_sys = true; sys_nr = 87; }
+        else if str_eq(fn_name, "sys_chmod") { is_sys = true; sys_nr = 90; }
+
+        if is_sys {
+            // mov %rcx, %r10 (49 89 ca)
+            buf_append_u8(code, 73);
+            buf_append_u8(code, 137);
+            buf_append_u8(code, 202);
+            // mov $sys_nr, %rax (48 c7 c0 <u32>)
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 199);
+            buf_append_u8(code, 192);
+            elf_append_u32(code, sys_nr);
+            // syscall (0f 05)
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 5);
+            return;
+        }
+
+        ng_add_fixup(ng, code.len, expr.tok.slice, false);
+        buf_append_u8(code, 232); // call rel32
+        elf_append_u32(code, 0);
+        return;
+    }
+}
+
+fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, stmt: *mut AstNode) {
+    if stmt == (0).as(*mut AstNode) { return; }
+
+    if stmt.tag == NODE_LET {
+        ng_emit_expr(ng, code, data, stmt.left);
+        let off: i32 = ng_find_var_offset(ng, stmt.tok.slice);
+        ng_emit_disp_store_rax(code, off);
+        if ng_is_var_slice(ng, stmt.tok.slice) {
+            ng_emit_disp_store_rdx(code, off - 8);
+        }
+        return;
+    }
+
+    if stmt.tag == NODE_ASSIGN {
+        if stmt.left != (0).as(*mut AstNode) {
+            if stmt.left.tag == NODE_IDENT {
+                ng_emit_expr(ng, code, data, stmt.right);
+                let off: i32 = ng_find_var_offset(ng, stmt.left.tok.slice);
+                ng_emit_disp_store_rax(code, off);
+                if ng_is_var_slice(ng, stmt.left.tok.slice) {
+                    ng_emit_disp_store_rdx(code, off - 8);
+                }
+                return;
+            }
+            if stmt.left.tag == NODE_DEREF {
+                ng_emit_expr(ng, code, data, stmt.right);
+                buf_append_u8(code, 80); // push %rax
+                ng_emit_expr(ng, code, data, stmt.left.left); // %rax = deref target
+                // mov %rax, %rcx (48 89 c1)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 193);
+                // test %rcx, %rcx (48 85 c9)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 133);
+                buf_append_u8(code, 201);
+                ng_add_fixup(ng, code.len, "__trap_null_deref", true);
+                buf_append_u8(code, 15);
+                buf_append_u8(code, 132); // jz
+                elf_append_u32(code, 0);
+                buf_append_u8(code, 88); // pop %rax
+                // mov %rax, (%rcx) (48 89 01)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 1);
+                return;
+            }
+        }
+        return;
+    }
+
+    if stmt.tag == NODE_RETURN {
+        if stmt.left != (0).as(*mut AstNode) {
+            ng_emit_expr(ng, code, data, stmt.left);
+        } else {
+            // xor %rax, %rax
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 49);
+            buf_append_u8(code, 192);
+        }
+        // mov %rbp, %rsp (48 89 ec)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 137);
+        buf_append_u8(code, 236);
+        // pop %rbp (5d)
+        buf_append_u8(code, 93);
+        // ret (c3)
+        buf_append_u8(code, 195);
+        return;
+    }
+
+    if stmt.tag == NODE_IF {
+        ng_emit_expr(ng, code, data, stmt.left);
+        // test %rax, %rax (48 85 c0)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 133);
+        buf_append_u8(code, 192);
+        // jz else_target (0f 84 <rel32>)
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 132);
+        let jz_pos: usize = code.len;
+        elf_append_u32(code, 0);
+
+        ng_emit_stmt(ng, code, data, stmt.right);
+
+        if stmt.right != (0).as(*mut AstNode) {
+            if stmt.right.next != (0).as(*mut AstNode) {
+                // jmp if_end (e9 <rel32>)
+                buf_append_u8(code, 233);
+                let jmp_pos: usize = code.len;
+                elf_append_u32(code, 0);
+
+                let else_target: usize = code.len;
+                let jz_rel: i32 = (else_target.as(i64) - (jz_pos + 4).as(i64)).as(i32);
+                elf_patch_i32(code, jz_pos, jz_rel);
+
+                ng_emit_stmt(ng, code, data, stmt.right.next);
+
+                let if_end: usize = code.len;
+                let jmp_rel: i32 = (if_end.as(i64) - (jmp_pos + 4).as(i64)).as(i32);
+                elf_patch_i32(code, jmp_pos, jmp_rel);
+            } else {
+                let if_end: usize = code.len;
+                let jz_rel: i32 = (if_end.as(i64) - (jz_pos + 4).as(i64)).as(i32);
+                elf_patch_i32(code, jz_pos, jz_rel);
+            }
+        } else {
+            let if_end: usize = code.len;
+            let jz_rel: i32 = (if_end.as(i64) - (jz_pos + 4).as(i64)).as(i32);
+            elf_patch_i32(code, jz_pos, jz_rel);
+        }
+        return;
+    }
+
+    if stmt.tag == NODE_WHILE {
+        let loop_start: usize = code.len;
+        ng_emit_expr(ng, code, data, stmt.left);
+        // test %rax, %rax (48 85 c0)
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 133);
+        buf_append_u8(code, 192);
+        // jz loop_end (0f 84 <rel32>)
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 132);
+        let jz_pos: usize = code.len;
+        elf_append_u32(code, 0);
+
+        ng_emit_stmt(ng, code, data, stmt.right);
+
+        // jmp loop_start (e9 <rel32>)
+        buf_append_u8(code, 233);
+        let jmp_pos: usize = code.len;
+        let rel_back: i32 = (loop_start.as(i64) - (jmp_pos + 4).as(i64)).as(i32);
+        elf_append_i32(code, rel_back);
+
+        let loop_end: usize = code.len;
+        let jz_rel: i32 = (loop_end.as(i64) - (jz_pos + 4).as(i64)).as(i32);
+        elf_patch_i32(code, jz_pos, jz_rel);
+        return;
+    }
+
+    if stmt.tag == NODE_BLOCK {
+        let mut s: *mut AstNode = stmt.left;
+        while s != (0).as(*mut AstNode) {
+            ng_emit_stmt(ng, code, data, s);
+            s = s.next;
+        }
+        return;
+    }
+
+    if stmt.tag == NODE_PRINT {
+        let arg: *mut AstNode = stmt.left;
+        if arg != (0).as(*mut AstNode) {
+            if arg.tag == NODE_STRING {
+                let mut raw: string = arg.tok.slice;
+                if raw.len >= 2 {
+                    if raw[0] == 34 {
+                        raw = raw[1..raw.len - 1];
+                    }
+                }
+                let data_off: usize = data.len;
+                let mut k: usize = 0;
+                while k < raw.len {
+                    buf_append_u8(data, raw[k]);
+                    k = k + 1;
+                }
+                buf_append_u8(data, 10); // '\n'
+
+                // mov $1, %rax (sys_write)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 199);
+                buf_append_u8(code, 192);
+                elf_append_u32(code, 1);
+
+                // mov $1, %rdi (stdout)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 199);
+                buf_append_u8(code, 199);
+                elf_append_u32(code, 1);
+
+                // mov $str_addr, %rsi
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 190);
+                let patch_pos: usize = code.len;
+                elf_append_u64(code, 0);
+                ng_add_data_reloc(ng, patch_pos, data_off);
+
+                // mov $len, %rdx
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 199);
+                buf_append_u8(code, 194);
+                elf_append_u32(code, (raw.len + 1).as(u32));
+
+                // syscall
+                buf_append_u8(code, 15);
+                buf_append_u8(code, 5);
+                return;
+            } else if ng_is_expr_slice(ng, arg) {
+                ng_emit_expr(ng, code, data, arg);
+                // %rax = ptr, %rdx = len
+                // mov %rax, %rdi (48 89 c7)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 199);
+                // mov %rdx, %rsi (48 89 d6)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 214);
+                ng_add_fixup(ng, code.len, "__print_slice", false);
+                buf_append_u8(code, 232);
+                elf_append_u32(code, 0);
+                return;
+            } else {
+                ng_emit_expr(ng, code, data, arg);
+                // mov %rax, %rdi (48 89 c7)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 199);
+                ng_add_fixup(ng, code.len, "__print_u64", false);
+                buf_append_u8(code, 232);
+                elf_append_u32(code, 0);
+                return;
+            }
+        }
+        return;
+    }
+
+    ng_emit_expr(ng, code, data, stmt);
+}
+
+fn collect_locals_stmt(ng: *mut NativeGen, stmt: *mut AstNode) {
+    if stmt == (0).as(*mut AstNode) { return; }
+    if stmt.tag == NODE_LET {
+        let mut is_slice: bool = false;
+        if str_eq(stmt.type_name, "string") {
+            is_slice = true;
+        } else if stmt.left != (0).as(*mut AstNode) {
+            if stmt.left.tag == NODE_STRING {
+                is_slice = true;
+            } else if stmt.left.tag == NODE_SLICE {
+                is_slice = true;
+            }
+        }
+        if ng.var_count < 64 {
+            ng.curr_off = ng.curr_off - 8;
+            ng.var_names[ng.var_count] = stmt.tok.slice;
+            ng.var_offsets[ng.var_count] = ng.curr_off;
+            ng.var_is_slice[ng.var_count] = is_slice;
+            ng.var_count = ng.var_count + 1;
+            if is_slice {
+                ng.curr_off = ng.curr_off - 8;
+            }
+        }
+        return;
+    }
+    if stmt.tag == NODE_BLOCK {
+        let mut s: *mut AstNode = stmt.left;
+        while s != (0).as(*mut AstNode) {
+            collect_locals_stmt(ng, s);
+            s = s.next;
+        }
+        return;
+    }
+    if stmt.tag == NODE_IF {
+        collect_locals_stmt(ng, stmt.right);
+        if stmt.right != (0).as(*mut AstNode) {
+            if stmt.right.next != (0).as(*mut AstNode) {
+                collect_locals_stmt(ng, stmt.right.next);
+            }
+        }
+        return;
+    }
+    if stmt.tag == NODE_WHILE {
+        collect_locals_stmt(ng, stmt.right);
+        return;
+    }
+}
+
+fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
+    let mut code_buf: CodeBuffer = buf_init(65536);
+    let mut data_buf: CodeBuffer = buf_init(65536);
+    let code: *mut CodeBuffer = &mut code_buf;
+    let data: *mut CodeBuffer = &mut data_buf;
+
+    let mut ng_state: NativeGen = NativeGen {
+        fn_names: [""],
+        fn_offsets: [0],
+        fn_count: 0,
+        fixup_offsets: [0],
+        fixup_names: [""],
+        fixup_is_6byte: [false],
+        fixup_count: 0,
+        data_reloc_code: [0],
+        data_reloc_data: [0],
+        data_reloc_count: 0,
+        var_names: [""],
+        var_offsets: [0],
+        var_is_slice: [false],
+        var_count: 0,
+        curr_off: 0,
+    };
+    let ng: *mut NativeGen = &mut ng_state;
+
+    // 1. Emit _start (entry point at 0x401000)
+    ng_add_fixup(ng, code.len, "main", false);
+    buf_append_u8(code, 232); // call main
+    elf_append_u32(code, 0);
+    // mov %rax, %rdi
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 199);
+    // mov $60, %rax (sys_exit)
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 192);
+    elf_append_u32(code, 60);
+    // syscall
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 5);
+
+    // 2. Emit all functions in AST
+    let mut decl: *mut AstNode = root.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_FN {
+            if decl.right != (0).as(*mut AstNode) {
+                if ng.fn_count < 64 {
+                    ng.fn_names[ng.fn_count] = decl.tok.slice;
+                    ng.fn_offsets[ng.fn_count] = code.len;
+                    ng.fn_count = ng.fn_count + 1;
+                }
+
+                ng.var_count = 0;
+                ng.curr_off = 0;
+
+                // Collect params
+                let mut p: *mut AstNode = decl.left;
+                while p != (0).as(*mut AstNode) {
+                    let is_slice: bool = str_eq(p.type_name, "string");
+                    if ng.var_count < 64 {
+                        ng.curr_off = ng.curr_off - 8;
+                        ng.var_names[ng.var_count] = p.tok.slice;
+                        ng.var_offsets[ng.var_count] = ng.curr_off;
+                        ng.var_is_slice[ng.var_count] = is_slice;
+                        ng.var_count = ng.var_count + 1;
+                        if is_slice {
+                            ng.curr_off = ng.curr_off - 8;
+                        }
+                    }
+                    p = p.next;
+                }
+
+                // Collect body locals
+                let body_block: *mut AstNode = decl.right;
+                if body_block != (0).as(*mut AstNode) {
+                    let mut s: *mut AstNode = body_block.left;
+                    while s != (0).as(*mut AstNode) {
+                        collect_locals_stmt(ng, s);
+                        s = s.next;
+                    }
+                }
+
+                let mut raw_sz: i32 = 0;
+                if ng.curr_off < 0 {
+                    raw_sz = -ng.curr_off;
+                }
+                let stack_sz: u32 = (((raw_sz + 15) / 16) * 16).as(u32);
+
+                // Prologue:
+                // push %rbp (55)
+                buf_append_u8(code, 85);
+                // mov %rsp, %rbp (48 89 e5)
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 229);
+                // sub $stack_sz, %rsp
+                if stack_sz > 0 {
+                    buf_append_u8(code, 72);
+                    buf_append_u8(code, 129);
+                    buf_append_u8(code, 236);
+                    elf_append_u32(code, stack_sz);
+                }
+
+                // Copy ABI arguments into stack slots
+                p = decl.left;
+                let mut arg_idx: usize = 0;
+                while p != (0).as(*mut AstNode) {
+                    let off: i32 = ng_find_var_offset(ng, p.tok.slice);
+                    if arg_idx == 0 {
+                        // mov %rdi, disp32(%rbp): 48 89 bd <disp32>
+                        buf_append_u8(code, 72);
+                        buf_append_u8(code, 137);
+                        buf_append_u8(code, 189);
+                        elf_append_i32(code, off);
+                    } else if arg_idx == 1 {
+                        // mov %rsi, disp32(%rbp): 48 89 b5 <disp32>
+                        buf_append_u8(code, 72);
+                        buf_append_u8(code, 137);
+                        buf_append_u8(code, 181);
+                        elf_append_i32(code, off);
+                    } else if arg_idx == 2 {
+                        // mov %rdx, disp32(%rbp): 48 89 95 <disp32>
+                        buf_append_u8(code, 72);
+                        buf_append_u8(code, 137);
+                        buf_append_u8(code, 149);
+                        elf_append_i32(code, off);
+                    }
+                    arg_idx = arg_idx + 1;
+                    p = p.next;
+                }
+
+                // Emit statements
+                if body_block != (0).as(*mut AstNode) {
+                    let mut stmt: *mut AstNode = body_block.left;
+                    while stmt != (0).as(*mut AstNode) {
+                        ng_emit_stmt(ng, code, data, stmt);
+                        stmt = stmt.next;
+                    }
+                }
+
+                // Default epilogue: xor %rax, %rax; mov %rbp, %rsp; pop %rbp; ret
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 49);
+                buf_append_u8(code, 192);
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 236);
+                buf_append_u8(code, 93);
+                buf_append_u8(code, 195);
+            }
+        }
+        decl = decl.next;
+    }
+
+    // 3. Emit helper functions
+    // __print_u64
+    if ng.fn_count < 64 {
+        ng.fn_names[ng.fn_count] = "__print_u64";
+        ng.fn_offsets[ng.fn_count] = code.len;
+        ng.fn_count = ng.fn_count + 1;
+    }
+    buf_append_u8(code, 85); // push %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229); // mov %rsp, %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 32); // sub $32, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 116); buf_append_u8(code, 36); buf_append_u8(code, 31); // lea 31(%rsp), %rsi
+    buf_append_u8(code, 198); buf_append_u8(code, 6); buf_append_u8(code, 10); // movb $10, (%rsi)
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 193); elf_append_u32(code, 1); // mov $1, %rcx
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 195); elf_append_u32(code, 10); // mov $10, %rbx
+    // mov %rdi, %rax (48 89 f8)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 248);
+
+    let loop_s: usize = code.len;
+    buf_append_u8(code, 72); buf_append_u8(code, 49); buf_append_u8(code, 210); // xor %rdx, %rdx
+    buf_append_u8(code, 72); buf_append_u8(code, 247); buf_append_u8(code, 243); // div %rbx
+    buf_append_u8(code, 128); buf_append_u8(code, 194); buf_append_u8(code, 48); // add $48, %dl
+    buf_append_u8(code, 72); buf_append_u8(code, 255); buf_append_u8(code, 206); // dec %rsi
+    buf_append_u8(code, 136); buf_append_u8(code, 22); // mov %dl, (%rsi)
+    buf_append_u8(code, 72); buf_append_u8(code, 255); buf_append_u8(code, 193); // inc %rcx
+    buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 192); // test %rax, %rax
+    // jnz loop_s (75 <rel8>)
+    let loop_e: usize = code.len + 2;
+    let rel8: i32 = (loop_s.as(i64) - loop_e.as(i64)).as(i32);
+    let mut u8_val: u32 = 0;
+    if rel8 < 0 {
+        let neg: i32 = -rel8;
+        u8_val = 256 - ((neg.as(u32)) % 256);
+    } else {
+        u8_val = (rel8.as(u32)) % 256;
+    }
+    buf_append_u8(code, 117);
+    buf_append_u8(code, (u8_val % 256).as(u8));
+
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // sys_write
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1); // stdout
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 202); // mov %rcx, %rdx
+    buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236); // mov %rbp, %rsp
+    buf_append_u8(code, 93); // pop %rbp
+    buf_append_u8(code, 195); // ret
+
+    // __print_slice
+    if ng.fn_count < 64 {
+        ng.fn_names[ng.fn_count] = "__print_slice";
+        ng.fn_offsets[ng.fn_count] = code.len;
+        ng.fn_count = ng.fn_count + 1;
+    }
+    buf_append_u8(code, 85); // push %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229); // mov %rsp, %rbp
+    buf_append_u8(code, 87); // push %rdi (ptr)
+    buf_append_u8(code, 86); // push %rsi (len)
+    buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 85); buf_append_u8(code, 240); // mov -16(%rbp), %rdx (count)
+    buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 117); buf_append_u8(code, 248); // mov -8(%rbp), %rsi (buf)
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1); // stdout
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // sys_write
+    buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+    // write newline '\n':
+    buf_append_u8(code, 106); buf_append_u8(code, 10); // push $10
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 230); // mov %rsp, %rsi
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, 1); // count=1
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1); // stdout
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // sys_write
+    buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236); // mov %rbp, %rsp
+    buf_append_u8(code, 93); // pop %rbp
+    buf_append_u8(code, 195); // ret
+
+    // Trap functions
+    let traps: [4]string = ["__trap_null_deref", "__trap_slice_bounds", "__trap_overflow", "__trap_div_zero"];
+    let trap_msgs: [4]string = ["panic: null pointer dereference\n", "panic: slice index out of bounds\n", "panic: integer overflow\n", "panic: division by zero\n"];
+    let mut ti: usize = 0;
+    while ti < 4 {
+        if ng.fn_count < 64 {
+            ng.fn_names[ng.fn_count] = traps[ti];
+            ng.fn_offsets[ng.fn_count] = code.len;
+            ng.fn_count = ng.fn_count + 1;
+        }
+        let tmsg: string = trap_msgs[ti];
+        let t_data_off: usize = data.len;
+        let mut tk: usize = 0;
+        while tk < tmsg.len {
+            buf_append_u8(data, tmsg[tk]);
+            tk = tk + 1;
+        }
+
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // sys_write
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 2); // stderr
+        buf_append_u8(code, 72); buf_append_u8(code, 190);
+        let t_patch: usize = code.len;
+        elf_append_u64(code, 0);
+        ng_add_data_reloc(ng, t_patch, t_data_off);
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, tmsg.len.as(u32));
+        buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 60); // sys_exit
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1); // exit code 1
+        buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+        ti = ti + 1;
+    }
+
+    // 4. Resolve branch fixups
+    let mut fi: usize = 0;
+    while fi < ng.fixup_count {
+        let f_off: usize = ng.fixup_offsets[fi];
+        let f_name: string = ng.fixup_names[fi];
+        let is_6: bool = ng.fixup_is_6byte[fi];
+
+        let mut target_off: usize = 0;
+        let mut k: usize = 0;
+        while k < ng.fn_count {
+            if str_eq(ng.fn_names[k], f_name) {
+                target_off = ng.fn_offsets[k];
+                break;
+            }
+            k = k + 1;
+        }
+
+        let mut add_len: usize = 5;
+        let mut add_pos: usize = 1;
+        if is_6 {
+            add_len = 6;
+            add_pos = 2;
+        }
+        let next_ip: usize = f_off + add_len;
+        let rel32: i32 = (target_off.as(i64) - next_ip.as(i64)).as(i32);
+        let patch_pos: usize = f_off + add_pos;
+        elf_patch_i32(code, patch_pos, rel32);
+        fi = fi + 1;
+    }
+
+    // 5. Patch data relocations
+    let total_code_len: usize = code.len;
+    let data_base_vaddr: u64 = 4198400 + total_code_len.as(u64); // 0x401000 + code.len
+
+    let mut ri: usize = 0;
+    while ri < ng.data_reloc_count {
+        let c_pos: usize = ng.data_reloc_code[ri];
+        let d_off: usize = ng.data_reloc_data[ri];
+        let target_vaddr: u64 = data_base_vaddr + d_off.as(u64);
+        elf_patch_u64(code, c_pos, target_vaddr);
+        ri = ri + 1;
+    }
+
+    // 6. Assemble ELF
+    let mut elf_buf: CodeBuffer = buf_init(131072);
+    let elf: *mut CodeBuffer = &mut elf_buf;
+
+    // Ehdr (64 bytes)
+    buf_append_u8(elf, 127); // 0x7F
+    buf_append_u8(elf, 69);  // 'E'
+    buf_append_u8(elf, 76);  // 'L'
+    buf_append_u8(elf, 70);  // 'F'
+    buf_append_u8(elf, 2);   // 64-bit
+    buf_append_u8(elf, 1);   // little-endian
+    buf_append_u8(elf, 1);   // version
+    buf_append_u8(elf, 0);   // SYSV
+    let mut p: usize = 0;
+    while p < 8 {
+        buf_append_u8(elf, 0);
+        p = p + 1;
+    }
+    elf_append_u16(elf, 2);  // ET_EXEC
+    elf_append_u16(elf, 62); // EM_X86_64
+    elf_append_u32(elf, 1);  // EV_CURRENT
+    elf_append_u64(elf, 4198400); // e_entry = 0x401000
+    elf_append_u64(elf, 64);      // e_phoff = 64
+    elf_append_u64(elf, 0);       // e_shoff = 0
+    elf_append_u32(elf, 0);       // e_flags = 0
+    elf_append_u16(elf, 64);      // e_ehsize = 64
+    elf_append_u16(elf, 56);      // e_phentsize = 56
+    elf_append_u16(elf, 1);       // e_phnum = 1
+    elf_append_u16(elf, 0);       // e_shentsize = 0
+    elf_append_u16(elf, 0);       // e_shnum = 0
+    elf_append_u16(elf, 0);       // e_shstrndx = 0
+
+    // Phdr (56 bytes at offset 64)
+    elf_append_u32(elf, 1); // p_type = PT_LOAD
+    elf_append_u32(elf, 7); // p_flags = PF_R | PF_W | PF_X
+    elf_append_u64(elf, 0); // p_offset = 0
+    elf_append_u64(elf, 4194304); // p_vaddr = 0x400000
+    elf_append_u64(elf, 4194304); // p_paddr = 0x400000
+    let total_sz: u64 = 4096 + total_code_len.as(u64) + data.len.as(u64);
+    elf_append_u64(elf, total_sz); // p_filesz
+    elf_append_u64(elf, total_sz); // p_memsz
+    elf_append_u64(elf, 4096);    // p_align = 0x1000
+
+    // Zero padding from offset 120 to 4096 (3976 bytes)
+    p = 0;
+    while p < 3976 {
+        buf_append_u8(elf, 0);
+        p = p + 1;
+    }
+
+    // Append code
+    p = 0;
+    while p < code.len {
+        buf_append_u8(elf, code.buffer[p]);
+        p = p + 1;
+    }
+
+    // Append data
+    p = 0;
+    while p < data.len {
+        buf_append_u8(elf, data.buffer[p]);
+        p = p + 1;
+    }
+
+    let elf_str: string = buf_to_string(elf);
+    let ok: bool = write_file(out_file_str, elf_str);
+
+    buf_deinit(elf);
+    buf_deinit(code);
+    buf_deinit(data);
+
+    if !ok { return false; }
+
+    chmod_exec(out_file_str);
+
+    return true;
+}
