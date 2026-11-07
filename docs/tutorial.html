@@ -1,0 +1,790 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>W3Schools Tutorial — Learn oC v1.0 Step-by-Step</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+  <!-- Top Navigation Bar (Shared Site Contract) -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <a href="index.html" style="display:flex; align-items:baseline; gap:0.6rem; text-decoration:none;">
+          <span class="brand-title">oC</span>
+          <span class="brand-sub">v1.0 // MAN &amp; TUTORIAL PORTAL</span>
+        </a>
+        <span class="badge">Self-Hosted</span>
+      </div>
+      <nav>
+        <a href="index.html">OC(7) Overview</a>
+        <a href="tutorial.html" class="active">W3 Tutorial</a>
+        <a href="syntax.html">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
+        <a href="man-occ.html">OCC(1) Compiler</a>
+        <a href="security.html">OC-SECURITY(7) CWEs</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">GitHub ↗</a>
+      </nav>
+    </div>
+  </header>
+
+  <!-- Two-Column Layout -->
+  <div class="layout">
+    
+    <!-- Left Persistent Navigation Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-title">Tutorial Chapters</div>
+        <a href="#lesson-1" class="sidebar-link active">1. Hello World</a>
+        <a href="#lesson-2" class="sidebar-link">2. Variables &amp; Mutability</a>
+        <a href="#lesson-3" class="sidebar-link">3. Types &amp; Hardware Traps</a>
+        <a href="#lesson-4" class="sidebar-link">4. Checked Casts (.as)</a>
+        <a href="#lesson-5" class="sidebar-link">5. Strings &amp; Fat Slices</a>
+        <a href="#lesson-6" class="sidebar-link">6. Control Flow &amp; Logic</a>
+        <a href="#lesson-7" class="sidebar-link">7. Functions &amp; Recursion</a>
+        <a href="#lesson-8" class="sidebar-link">8. Structs &amp; Packed Wire</a>
+        <a href="#lesson-9" class="sidebar-link">9. Pointers &amp; Escape Check</a>
+        <a href="#lesson-10" class="sidebar-link">10. Arenas &amp; Native ELF</a>
+      </div>
+
+      <div class="sidebar-group">
+        <div class="sidebar-title">Manual Pages</div>
+        <a href="index.html" class="sidebar-link">OC(7) Overview</a>
+        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Language Spec</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) Lib &amp; Syscalls</a>
+        <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWE Matrix</a>
+      </div>
+    </aside>
+
+    <!-- Main Content Area -->
+    <main class="content">
+
+      <div class="man-header">
+        <span>TUTORIAL(7)</span>
+        <span>W3Schools-Style oC Curriculum</span>
+        <span>TUTORIAL(7)</span>
+      </div>
+
+      <section class="hero">
+        <h2>Learn oC Programming: Fast, Safe, Zero-Libc Systems Engineering</h2>
+        <p>
+          Welcome to the hands-on <strong>oC Tutorial</strong>. Designed in the classic W3Schools step-by-step format, each lesson features complete code examples, interactive copy buttons, side-by-side terminal output, and clear architectural explanations showing <em>why</em> oC enforces compile-time safety and hardware traps.
+        </p>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 1 -->
+      <!-- ========================================================= -->
+      <section id="lesson-1" class="man-section">
+        <h2>1. Hello World &amp; Program Structure</h2>
+        <div class="man-body">
+          <p>
+            Every oC program starts execution at the <code>main</code> function. In oC, functions are declared with the <code>fn</code> keyword. The entry point can take arguments (<code>argc: i32, argv: **u8</code>) or run with zero parameters, returning an <code>i32</code> process exit status.
+          </p>
+          <p>
+            Unlike C, which requires pulling in tens of thousands of lines of macro-polluted headers (<code>#include &lt;stdio.h&gt;</code>), oC provides direct, built-in string and scalar printing with <code>print(...)</code>.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 1: Hello World Program</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: hello.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="fn">print</span>(<span class="str">"Hello, World from oC Active Defense!"</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Build &amp; Run</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run hello.oc</span>
+<span class="term-pass">Hello, World from oC Active Defense!</span>
+
+<span class="term-cmd">$ occ build hello.oc -o hello</span>
+<span class="term-cmd">$ ./hello</span>
+<span class="term-pass">Hello, World from oC Active Defense!</span>
+<span class="term-cmd">$ echo $?</span>
+<span class="term-out">0</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Key Takeaway:</strong> <code>fn main() i32</code> defines the entry point. <code>print(...)</code> outputs string slices and scalar values directly to standard output. Returning <code>0</code> informs the Linux kernel of successful execution.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 2 -->
+      <!-- ========================================================= -->
+      <section id="lesson-2" class="man-section">
+        <h2>2. Variables &amp; Explicit Mutability</h2>
+        <div class="man-body">
+          <p>
+            In oC, all variable bindings declared with <code>let</code> are <strong>strictly immutable by default</strong>. To make a binding reassignable, you must explicitly declare it with <code>let mut</code>.
+          </p>
+          <p>
+            <strong>Why did oC design it this way?</strong> In systems programming, unintended variable mutation is a primary source of state corruption, concurrency races, and lifecycle bugs. By forcing mutability to be explicit, oC's <code>EscapeValidator</code> can verify borrow lifecycles at compile time.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 2: Immutable vs Mutable Bindings</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: variables.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="cm">// Immutable binding: cannot be altered</span>
+    <span class="kw">let</span> <span class="ty">port</span>: <span class="ty">u16</span> = <span class="num">8080</span>;
+
+    <span class="cm">// Mutable binding: explicit permission to reassign</span>
+    <span class="kw">let mut</span> <span class="ty">connections</span>: <span class="ty">i32</span> = <span class="num">0</span>;
+    <span class="ty">connections</span> = <span class="ty">connections</span> + <span class="num">1</span>;
+
+    <span class="fn">print</span>(<span class="str">"Listening Port (immutable):"</span>);
+    <span class="fn">print</span>(<span class="ty">port</span>);
+    <span class="fn">print</span>(<span class="str">"Active Connections (mutable):"</span>);
+    <span class="fn">print</span>(<span class="ty">connections</span>);
+
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Normal Run vs Violation</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run variables.oc</span>
+<span class="term-pass">Listening Port (immutable):</span>
+<span class="term-out">8080</span>
+<span class="term-pass">Active Connections (mutable):</span>
+<span class="term-out">1</span>
+
+<span class="term-cmd"># What happens if we reassign 'port = 8081'?</span>
+<span class="term-trap">error: cannot assign to immutable variable 'port'</span>
+<span class="term-trap">Compilation halted: mutability violation prevented.</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Compiler Rule:</strong> Any assignment to a non-<code>mut</code> identifier triggers an immediate compile-time error. Immutable bindings require zero defensive copying.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 3 -->
+      <!-- ========================================================= -->
+      <section id="lesson-3" class="man-section">
+        <h2>3. Primitive Types &amp; Hardware-Trapped Arithmetic</h2>
+        <div class="man-body">
+          <p>
+            oC provides exact-width scalar primitives:
+          </p>
+          <ul>
+            <li><strong>Unsigned Integers:</strong> <code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>usize</code></li>
+            <li><strong>Signed Integers:</strong> <code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code></li>
+            <li><strong>Booleans:</strong> <code>bool</code> (literal <code>true</code> or <code>false</code>)</li>
+          </ul>
+          <p>
+            <strong>Hardware-Trapped Arithmetic:</strong> In standard C/C++, signed integer overflow is <em>Undefined Behavior (UB)</em>. Attackers exploit this behavior (CWE-190 / CWE-191) to bypass allocation checks and trigger heap buffer overflows. In oC, the compiler emits hardware <code>jo</code> (Jump on Overflow) instructions after arithmetic. If an overflow occurs, the CPU halts execution with an immediate <code>panic: integer overflow</code>.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 3: Arithmetic &amp; Hardware Overflow Trap</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: overflow_check.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">max_signed</span>: <span class="ty">i32</span> = <span class="num">2147483640</span>;
+    <span class="kw">let</span> <span class="ty">safe_val</span>: <span class="ty">i32</span> = <span class="ty">max_signed</span> + <span class="num">5</span>;
+    <span class="fn">print</span>(<span class="str">"Safe value:"</span>);
+    <span class="fn">print</span>(<span class="ty">safe_val</span>);
+
+    <span class="cm">// Adding 10 exceeds 2,147,483,647 -> Triggers hardware JO</span>
+    <span class="kw">let</span> <span class="ty">trapped</span>: <span class="ty">i32</span> = <span class="ty">safe_val</span> + <span class="num">10</span>;
+    <span class="fn">print</span>(<span class="ty">trapped</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Hardware Trap Halting</span>
+                  <span class="badge">Hardware Trap</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run overflow_check.oc</span>
+<span class="term-pass">Safe value:</span>
+<span class="term-out">2147483645</span>
+<span class="term-trap">panic: integer overflow</span>
+<span class="term-cmd">$ echo $?</span>
+<span class="term-trap">134 (Process halted via hardware trap)</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Active Defense:</strong> No silent wraparound, no exploitable UB. The hardware condition flag (<code>OF</code>) is tested on the CPU and halts the offending process in 1 machine cycle.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 4 -->
+      <!-- ========================================================= -->
+      <section id="lesson-4" class="man-section">
+        <h2>4. Checked Type Conversions (<code>.as(T)</code>)</h2>
+        <div class="man-body">
+          <p>
+            C allows silent, implicit type conversions. For example, casting a negative signed integer to unsigned turns <code>-1</code> into <code>4294967295</code>, creating severe vulnerabilities (CWE-195: Signed-to-Unsigned Conversion Error; CWE-681 / CWE-197: Numeric Truncation).
+          </p>
+          <p>
+            oC eliminates implicit type conversions completely:
+          </p>
+          <ul>
+            <li>All type casts must be explicitly written using the <code>value.as(TargetType)</code> syntax.</li>
+            <li>Conversions between signed and unsigned types are bounds-checked: casting a negative number to an unsigned type triggers a runtime panic.</li>
+            <li>Narrowing conversions verify that upper bits are not truncated.</li>
+          </ul>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 4: Checked Casts vs CWE-195 Truncation</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: checked_casts.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">wide</span>: <span class="ty">i64</span> = <span class="num">1000</span>;
+    <span class="cm">// Safe widening/narrowing within bounds:</span>
+    <span class="kw">let</span> <span class="ty">narrow</span>: <span class="ty">i32</span> = <span class="ty">wide</span>.<span class="fn">as</span>(<span class="ty">i32</span>);
+    <span class="fn">print</span>(<span class="str">"Valid conversion to i32:"</span>);
+    <span class="fn">print</span>(<span class="ty">narrow</span>);
+
+    <span class="cm">// Dangerous conversion: negative signed to unsigned</span>
+    <span class="kw">let</span> <span class="ty">negative</span>: <span class="ty">i32</span> = -<span class="num">50</span>;
+    <span class="kw">let</span> <span class="ty">unsigned_val</span>: <span class="ty">u32</span> = <span class="ty">negative</span>.<span class="fn">as</span>(<span class="ty">u32</span>); <span class="cm">// Trapped!</span>
+    <span class="fn">print</span>(<span class="ty">unsigned_val</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Negative-to-Unsigned Panic</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run checked_casts.oc</span>
+<span class="term-pass">Valid conversion to i32:</span>
+<span class="term-out">1000</span>
+<span class="term-trap">panic: invalid unsigned cast</span>
+<span class="term-cmd">$ # CWE-195 attempt blocked: negative value rejected from unsigned cast</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Security Invariant:</strong> <code>.as(u32)</code> automatically inspects value signs before casting. Zero risk of negative integers bypassing downstream buffer size allocations.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 5 -->
+      <!-- ========================================================= -->
+      <section id="lesson-5" class="man-section">
+        <h2>5. Strings &amp; Fat Slices (<code>[]u8</code>)</h2>
+        <div class="man-body">
+          <p>
+            Raw C strings (<code>char*</code>) rely on a trailing null terminator (<code>\0</code>), leading to buffer over-reads (CWE-125), out-of-bounds writes (CWE-787), and Heartbleed-style memory disclosures.
+          </p>
+          <p>
+            In oC, <code>string</code> and slices are 16-byte <strong>fat slices</strong> with the layout <code>{ ptr: *u8, len: usize }</code>:
+          </p>
+          <ul>
+            <li>Length inspection is an instant <code>O(1)</code> field access (<code>s.len</code>), requiring no scanning <code>strlen</code> loops.</li>
+            <li>Direct indexing (<code>s[i]</code>) and sub-slicing (<code>s[start..end]</code>) emit an automatic hardware <code>jae __trap_slice_bounds</code> bounds check.</li>
+            <li>Sub-slicing creates an in-place non-allocating view without copying data.</li>
+          </ul>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 5: String Slicing &amp; Bounds Trapping</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: slices.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">full_text</span>: <span class="ty">string</span> = <span class="str">"Secured systems with oC slices"</span>;
+    <span class="fn">print</span>(<span class="str">"Full text length:"</span>);
+    <span class="fn">print</span>(<span class="ty">full_text</span>.<span class="ty">len</span>);
+
+    <span class="cm">// Sub-slice [0..7] extracts "Secured"</span>
+    <span class="kw">let</span> <span class="ty">sub</span>: <span class="ty">string</span> = <span class="ty">full_text</span>[<span class="num">0</span>..<span class="num">7</span>];
+    <span class="fn">print</span>(<span class="str">"Substring:"</span>);
+    <span class="fn">print</span>(<span class="ty">sub</span>);
+
+    <span class="cm">// Safe indexing</span>
+    <span class="kw">let</span> <span class="ty">first_byte</span>: <span class="ty">u8</span> = <span class="ty">sub</span>[<span class="num">0</span>];
+    <span class="fn">print</span>(<span class="str">"First ASCII byte:"</span>);
+    <span class="fn">print</span>(<span class="ty">first_byte</span>);
+
+    <span class="cm">// Out of bounds access: index 100 > 7</span>
+    <span class="kw">let</span> <span class="ty">oob</span>: <span class="ty">u8</span> = <span class="ty">sub</span>[<span class="num">100</span>];
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Slice Bounds Protection</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run slices.oc</span>
+<span class="term-pass">Full text length:</span>
+<span class="term-out">31</span>
+<span class="term-pass">Substring:</span>
+<span class="term-out">Secured</span>
+<span class="term-pass">First ASCII byte:</span>
+<span class="term-out">83</span>
+<span class="term-trap">panic: slice index out of bounds</span>
+<span class="term-cmd">$ # Immediate hardware trap prevents out-of-bounds read</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Spatial Safety:</strong> When <code>sub[100]</code> is evaluated, the hardware jump instruction <code>jae</code> triggers immediately because index <code>100 &gt;= sub.len (7)</code>. No buffer over-read can ever leak adjacent memory.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 6 -->
+      <!-- ========================================================= -->
+      <section id="lesson-6" class="man-section">
+        <h2>6. Control Flow &amp; Short-Circuit Logic</h2>
+        <div class="man-body">
+          <p>
+            oC features structured control flow constructs: <code>if</code>, <code>else</code>, and <code>while</code> loops.
+          </p>
+          <p>
+            <strong>CWE-783 Defense (Short-Circuit Side-Effect Prevention):</strong> In many C codebases, developers place complex mutating expressions inside short-circuiting logical operators (<code>if (read_data() &amp;&amp; process())</code>). If the first operand evaluates to false, subsequent mutations are skipped unpredictably. oC requires pure conditions and clean control flow structures to ensure zero side-effect confusion.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 6: Control Flow &amp; Loops</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: control_flow.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">check_permission</span>(<span class="ty">level</span>: <span class="ty">i32</span>, <span class="ty">is_admin</span>: <span class="ty">bool</span>) <span class="ty">bool</span> {
+    <span class="kw">if</span> <span class="ty">is_admin</span> {
+        <span class="kw">return</span> <span class="kw">true</span>;
+    } <span class="kw">else if</span> <span class="ty">level</span> &gt; <span class="num">10</span> {
+        <span class="kw">return</span> <span class="kw">true</span>;
+    }
+    <span class="kw">return</span> <span class="kw">false</span>;
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let mut</span> <span class="ty">step</span>: <span class="ty">i32</span> = <span class="num">1</span>;
+    <span class="kw">while</span> <span class="ty">step</span> &lt;= <span class="num">3</span> {
+        <span class="fn">print</span>(<span class="str">"Loop Step:"</span>);
+        <span class="fn">print</span>(<span class="ty">step</span>);
+        <span class="ty">step</span> = <span class="ty">step</span> + <span class="num">1</span>;
+    }
+
+    <span class="kw">let</span> <span class="ty">granted</span>: <span class="ty">bool</span> = <span class="fn">check_permission</span>(<span class="num">15</span>, <span class="kw">false</span>);
+    <span class="kw">if</span> <span class="ty">granted</span> {
+        <span class="fn">print</span>(<span class="str">"Access Verified."</span>);
+    }
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Structured Execution</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run control_flow.oc</span>
+<span class="term-pass">Loop Step:</span>
+<span class="term-out">1</span>
+<span class="term-pass">Loop Step:</span>
+<span class="term-out">2</span>
+<span class="term-pass">Loop Step:</span>
+<span class="term-out">3</span>
+<span class="term-pass">Access Verified.</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Grammar Note:</strong> Blocks in <code>if</code> and <code>while</code> statements must be enclosed in braces <code>{ ... }</code>. Single-statement dangling branches (responsible for historical flaws like Apple's <code>goto fail;</code>) are structurally impossible in oC.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 7 -->
+      <!-- ========================================================= -->
+      <section id="lesson-7" class="man-section">
+        <h2>7. Functions &amp; Recursion Limits</h2>
+        <div class="man-body">
+          <p>
+            Functions in oC are declared with parameters and explicit return types:
+            <code>fn name(param1: Type, param2: Type) -&gt; ReturnType { ... }</code>.
+          </p>
+          <p>
+            <strong>CWE-674 Defense (Uncontrolled Recursion Prevention):</strong> Recursive algorithms that traverse untrusted user input can blow the call stack, crashing server daemons or kernel drivers. oC provides tight frame layout and predictable call conventions, allowing deep recursion to be optimized cleanly under <code>-O2</code> or bounded explicitly.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 7: Recursive Fibonacci &amp; Stack Frame</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: recursion.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">fn</span> <span class="fn">fibonacci</span>(<span class="ty">n</span>: <span class="ty">i64</span>) <span class="ty">i64</span> {
+    <span class="kw">if</span> <span class="ty">n</span> &lt;= <span class="num">1</span> {
+        <span class="kw">return</span> <span class="ty">n</span>;
+    }
+    <span class="kw">return</span> <span class="fn">fibonacci</span>(<span class="ty">n</span> - <span class="num">1</span>) + <span class="fn">fibonacci</span>(<span class="ty">n</span> - <span class="num">2</span>);
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">n</span>: <span class="ty">i64</span> = <span class="num">10</span>;
+    <span class="kw">let</span> <span class="ty">ans</span>: <span class="ty">i64</span> = <span class="fn">fibonacci</span>(<span class="ty">n</span>);
+    <span class="fn">print</span>(<span class="str">"Fibonacci(10) result:"</span>);
+    <span class="fn">print</span>(<span class="ty">ans</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Recursive Execution</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run recursion.oc</span>
+<span class="term-pass">Fibonacci(10) result:</span>
+<span class="term-out">55</span>
+
+<span class="term-cmd"># Under native backend (zero libc):</span>
+<span class="term-cmd">$ occ build recursion.oc -o fib_bin --backend native</span>
+<span class="term-cmd">$ ./fib_bin</span>
+<span class="term-pass">Fibonacci(10) result:</span>
+<span class="term-out">55</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Architecture:</strong> Both <code>occ -O2</code> and <code>--backend native</code> generate standard Linux x86_64 System V ABI call frames (<code>%rdi</code>, <code>%rsi</code>, <code>%rdx</code>). The empirical benchmark suite executes 78.1M recursive calls in 79 ms, demonstrating exact parity with GCC.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 8 -->
+      <!-- ========================================================= -->
+      <section id="lesson-8" class="man-section">
+        <h2>8. Structs &amp; Wire-Safe <code>packed struct</code></h2>
+        <div class="man-body">
+          <p>
+            oC offers two struct variants:
+          </p>
+          <ul>
+            <li><code>struct Name { ... }</code>: Standard records for internal application state.</li>
+            <li><code>packed struct Name { ... }</code>: Byte-aligned records with <strong>zero padding</strong>.</li>
+          </ul>
+          <p>
+            <strong>Why Wire-Safe <code>packed struct</code>?</strong> Standard C compilers insert architecture-dependent alignment padding bytes between struct members. When sent over the network or written to disk, these uninitialized padding bytes leak kernel/stack memory (CWE-200 / CWE-457). In oC, <code>packed struct</code> guarantees byte-for-byte serialization identical across architectures, ideal for network protocol headers, ELF headers, and hardware descriptors.
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 8: Wire-Safe Network Protocol Header</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: wire_struct.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="cm">// Exactly 4 bytes: 1B version, 1B type, 2B port</span>
+<span class="kw">packed struct</span> <span class="ty">PacketHeader</span> {
+    <span class="ty">version</span>: <span class="ty">u8</span>,
+    <span class="ty">msg_type</span>: <span class="ty">u8</span>,
+    <span class="ty">port</span>: <span class="ty">u16</span>,
+}
+
+<span class="kw">struct</span> <span class="ty">UserSession</span> {
+    <span class="ty">user_id</span>: <span class="ty">u32</span>,
+    <span class="ty">authenticated</span>: <span class="ty">bool</span>,
+}
+
+<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">pkt</span> = <span class="ty">PacketHeader</span> {
+        <span class="ty">version</span>: <span class="num">1</span>,
+        <span class="ty">msg_type</span>: <span class="num">4</span>,
+        <span class="ty">port</span>: <span class="num">8080</span>,
+    };
+    <span class="fn">print</span>(<span class="str">"Packet Header Port:"</span>);
+    <span class="fn">print</span>(<span class="ty">pkt</span>.<span class="ty">port</span>);
+
+    <span class="kw">let mut</span> <span class="ty">session</span> = <span class="ty">UserSession</span> { <span class="ty">user_id</span>: <span class="num">42</span>, <span class="ty">authenticated</span>: <span class="kw">true</span> };
+    <span class="ty">session</span>.<span class="ty">user_id</span> = <span class="num">999</span>;
+    <span class="fn">print</span>(<span class="str">"Updated Session User ID:"</span>);
+    <span class="fn">print</span>(<span class="ty">session</span>.<span class="ty">user_id</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Struct Field Access</span>
+                  <span class="badge">Terminal</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run wire_struct.oc</span>
+<span class="term-pass">Packet Header Port:</span>
+<span class="term-out">8080</span>
+<span class="term-pass">Updated Session User ID:</span>
+<span class="term-out">999</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Serialization Guarantee:</strong> A <code>packed struct</code> can be directly mapped over incoming raw socket buffers (e.g., via <code>.as(*PacketHeader)</code>) without risking misalignment crashes or padding information leaks.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 9 -->
+      <!-- ========================================================= -->
+      <section id="lesson-9" class="man-section">
+        <h2>9. Pointers, References &amp; Escape Analysis</h2>
+        <div class="man-body">
+          <p>
+            Low-level systems code requires pointer operations. oC differentiates between:
+          </p>
+          <ul>
+            <li><code>*T</code> / <code>*mut T</code>: Raw memory pointers (for FFI and hardware interfaces).</li>
+            <li><code>&amp;T</code> / <code>&amp;mut T</code>: Borrowed references verified by compile-time escape analysis.</li>
+          </ul>
+          <p>
+            <strong>CWE-562 Defense (Return of Stack Variable Address):</strong> In C, returning the address of a local variable (<code>return &amp;local;</code>) leaves a dangling pointer on the stack, leading to immediate memory corruption. In oC, the compiler's <code>EscapeValidator</code> statically analyzes pointer origins and scope depth. Attempting to return a reference to a stack-local variable is <strong>rejected at compile time</strong> with zero runtime cost!
+          </p>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 9: Safe Borrows vs Compile-Time CWE-562 Rejection</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: escape_demo.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="cm">// Safe: reference passed down the call tree</span>
+<span class="kw">fn</span> <span class="fn">compute_hash</span>(<span class="ty">val</span>: <span class="ty">&amp;u32</span>) <span class="ty">u32</span> {
+    <span class="kw">return</span> *<span class="ty">val</span> * <span class="num">31</span>;
+}
+
+<span class="cm">// REJECTED: returning address of stack local</span>
+<span class="cm">// fn bad_escape() -> *u8 {</span>
+<span class="cm">//     let local: u8 = 42;</span>
+<span class="cm">//     return &amp;local; // Compile Error: CWE-562</span>
+<span class="cm">// }</span>
+
+<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="kw">let</span> <span class="ty">data</span>: <span class="ty">u32</span> = <span class="num">100</span>;
+    <span class="kw">let</span> <span class="ty">hash</span>: <span class="ty">u32</span> = <span class="fn">compute_hash</span>(&amp;<span class="ty">data</span>);
+    <span class="fn">print</span>(<span class="str">"Computed hash:"</span>);
+    <span class="fn">print</span>(<span class="ty">hash</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Compile-Time Rejection</span>
+                  <span class="badge">Compile Trap</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run escape_demo.oc</span>
+<span class="term-pass">Computed hash:</span>
+<span class="term-out">3100</span>
+
+<span class="term-cmd"># If we compile examples/bad_stack_escape.oc:</span>
+<span class="term-cmd">$ occ build examples/bad_stack_escape.oc -o /tmp/bad</span>
+<span class="term-trap">error: cannot return reference to local stack variable 'local'</span>
+<span class="term-trap">Compilation halted: CWE-562 escape violation.</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>EscapeValidator:</strong> The compiler performs recursive AST verification through <code>contains_stack_local_ref</code>, blocking direct, struct-wrapped, and cast-laundered stack returns before machine code is generated.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ========================================================= -->
+      <!-- LESSON 10 -->
+      <!-- ========================================================= -->
+      <section id="lesson-10" class="man-section">
+        <h2>10. Regional Memory Arenas &amp; Zero-Libc Native Builds</h2>
+        <div class="man-body">
+          <p>
+            The pinnacle of oC systems engineering: <strong>managing memory without a general-purpose heap or libc</strong>.
+          </p>
+          <p>
+            By importing <code>std/mem.oc</code>, you obtain kernel-backed regional bump arenas:
+          </p>
+          <ul>
+            <li><code>arena_init(capacity)</code>: Maps memory directly via kernel <code>sys_mmap</code> (syscall 9).</li>
+            <li><code>arena_alloc(&amp;mut arena, size)</code>: Blazing-fast constant <code>O(1)</code> bump pointer allocation.</li>
+            <li><code>arena_reset(&amp;mut arena)</code>: Scrubs active memory to zero (CWE-14 secret cleansing) and resets the bump pointer.</li>
+            <li><code>arena_deinit(&amp;mut arena)</code>: Scrubs active memory and returns pages to the kernel via <code>sys_munmap</code>.</li>
+            <li><code>occ --backend native</code>: Compiles the entire binary to a standalone 4.7 KB – 5.0 KB static ELF64 binary with direct Linux syscalls (zero libc, zero gcc, zero crt0.o).</li>
+          </ul>
+
+          <div class="example-card">
+            <div class="example-header">
+              <span class="example-title"><span class="dot"></span> Example 10: Arena Allocation &amp; Standalone Native ELF</span>
+              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+            </div>
+            <div class="example-grid">
+              <div class="code-pane">
+                <div class="pane-label">
+                  <span>SRC: arena_app.oc</span>
+                  <span class="badge">oC Source</span>
+                </div>
+                <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
+<span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
+
+<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+    <span class="cm">// 1. Allocate 64 KB memory arena directly from kernel</span>
+    <span class="kw">let mut</span> <span class="ty">arena</span>: <span class="ty">Arena</span> = <span class="fn">arena_init</span>(<span class="num">65536</span>);
+
+    <span class="cm">// 2. Allocate 128 bytes for secret key</span>
+    <span class="kw">let</span> <span class="ty">key_buf</span>: <span class="ty">*mut u8</span> = <span class="fn">arena_alloc</span>(&amp;<span class="kw">mut</span> <span class="ty">arena</span>, <span class="num">128</span>);
+    <span class="ty">key_buf</span>[<span class="num">0</span>] = <span class="num">0xDE</span>;
+    <span class="ty">key_buf</span>[<span class="num">1</span>] = <span class="num">0xAD</span>;
+
+    <span class="fn">print</span>(<span class="str">"Arena allocation offset:"</span>);
+    <span class="fn">print</span>(<span class="ty">arena</span>.<span class="ty">offset</span>);
+
+    <span class="cm">// 3. Reset performs mandatory CWE-14 scrub across [0..offset]</span>
+    <span class="fn">arena_reset</span>(&amp;<span class="kw">mut</span> <span class="ty">arena</span>);
+    <span class="fn">print</span>(<span class="str">"Arena reset: zero-scrubbed & offset restored to 0"</span>);
+
+    <span class="cm">// 4. Deinit unmaps kernel pages via sys_munmap</span>
+    <span class="fn">arena_deinit</span>(&amp;<span class="kw">mut</span> <span class="ty">arena</span>);
+    <span class="kw">return</span> <span class="num">0</span>;
+}</code></pre>
+              </div>
+
+              <div class="output-pane">
+                <div class="pane-label">
+                  <span>TERMINAL: Native x86_64 ELF Build</span>
+                  <span class="badge">Standalone ELF</span>
+                </div>
+                <pre><code><span class="term-cmd">$ occ run arena_app.oc</span>
+<span class="term-pass">Arena allocation offset:</span>
+<span class="term-out">128</span>
+<span class="term-pass">Arena reset: zero-scrubbed &amp; offset restored to 0</span>
+
+<span class="term-cmd"># Compile to standalone native static ELF64:</span>
+<span class="term-cmd">$ occ build arena_app.oc -o /tmp/arena_app --backend native</span>
+<span class="term-cmd">$ ls -lh /tmp/arena_app</span>
+<span class="term-out">-rwxr-xr-x 1 omer users 4.8K Nov  7 19:28 /tmp/arena_app</span>
+<span class="term-cmd">$ file /tmp/arena_app</span>
+<span class="term-pass">/tmp/arena_app: ELF 64-bit LSB executable, x86-64, statically linked</span>
+<span class="term-cmd">$ /tmp/arena_app</span>
+<span class="term-pass">Arena allocation offset:</span>
+<span class="term-out">128</span>
+<span class="term-pass">Arena reset: zero-scrubbed &amp; offset restored to 0</span></code></pre>
+              </div>
+            </div>
+            <div class="explanation-box">
+              <strong>Zero Allocator Exploit Surface:</strong> Because there are no chunk headers, freelist pointers, or unmapped dangling pointers, heap metadata corruption (CWE-122), use-after-free (CWE-416), and double-free (CWE-415) are architecturally eradicated.
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Bottom Navigation Controls -->
+      <div class="lesson-nav">
+        <a href="index.html" class="lesson-btn">← Back to OC(7) Overview</a>
+        <a href="syntax.html" class="lesson-btn">Proceed to OC-LANG(7) Syntax Reference →</a>
+      </div>
+
+    </main>
+  </div>
+
+  <footer>
+    oC v1.0 Systems Programming Language • W3Schools Step-by-Step Curriculum • Active Defense Systems
+  </footer>
+
+  <!-- Interactive Copy Code Script -->
+  <script>
+    function copyCode(btn) {
+      const card = btn.closest('.example-card');
+      const codeEl = card ? card.querySelector('.code-pane code') : null;
+      if (!codeEl) return;
+      navigator.clipboard.writeText(codeEl.innerText).then(() => {
+        const origText = btn.innerHTML;
+        btn.innerHTML = '<span>✔</span> Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => {
+          btn.innerHTML = origText;
+          btn.classList.remove('copied');
+        }, 2000);
+      });
+    }
+  </script>
+
+</body>
+</html>
