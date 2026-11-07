@@ -1,0 +1,27 @@
+import "std/mem.oc";
+
+fn main() -> i32 {
+    let mut arena: Arena = arena_init(262144);
+    let mut acc: u64 = 0;
+
+    // 50,000 request waves * 256 variable-sized objects = 12,800,000 allocations
+    // With full CWE-14 memory scrubbing on every arena_reset!
+    let mut wave: u32 = 0;
+    while wave < 50000 {
+        let mut obj: u32 = 0;
+        while obj < 256 {
+            let sz: usize = (64 + ((wave + obj) % 192)).as(usize);
+            let p: *mut u8 = arena_alloc(&mut arena, sz);
+            p[0] = ((wave + obj) % 251).as(u8);
+            p[sz - 1] = ((wave ^ obj) % 251).as(u8);
+            acc = acc + p[0].as(u64) + p[sz - 1].as(u64);
+            obj = obj + 1;
+        }
+        arena_reset(&mut arena);
+        wave = wave + 1;
+    }
+
+    arena_deinit(&mut arena);
+    print(acc);
+    return 0;
+}

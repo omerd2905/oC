@@ -1,0 +1,36 @@
+fn fib(n: u64) -> u64 {
+    if n <= 1 {
+        return n;
+    }
+    return fib(n - 1) + fib(n - 2);
+}
+
+fn collatz_steps(start: u64) -> u64 {
+    let mut n: u64 = start;
+    let mut steps: u64 = 0;
+    while n > 1 {
+        if (n % 2) == 0 {
+            n = n / 2;
+        } else {
+            n = (n * 3) + 1;
+        }
+        steps = steps + 1;
+    }
+    return steps;
+}
+
+fn main() -> i32 {
+    // 1. 78,176,337 recursive calls (fib(38))
+    let f38: u64 = fib(38);
+
+    // 2. 200,000 Collatz hailstone trajectories (branch + idiv/imul overflow trap stress)
+    let mut total_steps: u64 = 0;
+    let mut seed: u64 = 1;
+    while seed <= 200000 {
+        total_steps = total_steps + collatz_steps(seed);
+        seed = seed + 1;
+    }
+
+    print(f38 + total_steps);
+    return 0;
+}
