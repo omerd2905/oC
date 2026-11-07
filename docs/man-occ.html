@@ -1,0 +1,644 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OCC(1) — Self-Hosted Zero-Libc oC Compiler Reference Manual</title>
+  <link rel="stylesheet" href="style.css">
+  <style>
+    /* Manual Portal Layout & W3-Style Example Extensions */
+    body {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 1.5rem 2rem 4rem;
+    }
+    .topbar {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .topbar .brand {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .topbar .brand-link {
+      text-decoration: none;
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+    }
+    .topbar .brand-link .logo {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.03em;
+    }
+    .topbar .brand-link .brand-title {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+    .layout {
+      display: flex;
+      gap: 2.25rem;
+      align-items: flex-start;
+    }
+    .sidebar {
+      width: 290px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 1.5rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1rem;
+      font-size: 0.88rem;
+      max-height: calc(100vh - 3rem);
+      overflow-y: auto;
+    }
+    .sidebar-section-title {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 1rem 0 0.5rem;
+      padding-left: 0.5rem;
+    }
+    .sidebar-section-title:first-child {
+      margin-top: 0;
+    }
+    .sidebar-nav {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .sidebar-nav a {
+      display: block;
+      color: var(--text);
+      text-decoration: none;
+      padding: 0.38rem 0.65rem;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      border-left: 2px solid transparent;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .sidebar-nav a:hover, .sidebar-nav a.active {
+      background: rgba(88, 166, 255, 0.1);
+      color: var(--cyan);
+      border-left-color: var(--cyan);
+    }
+    .content {
+      flex: 1;
+      min-width: 0;
+    }
+    .man-header {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--accent);
+      border-radius: 8px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2rem;
+    }
+    .man-meta {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.75rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .example-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 1.75rem 0 2rem;
+      overflow: hidden;
+    }
+    .example-card-header {
+      background: rgba(35, 43, 62, 0.5);
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 1.15rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+    }
+    .example-card-title {
+      color: var(--cyan);
+      font-weight: 600;
+    }
+    .example-card-badge {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--accent);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.74rem;
+      border: 1px solid rgba(63, 185, 80, 0.3);
+    }
+    .example-card-body {
+      padding: 1rem 1.25rem;
+    }
+    .output-label {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 0.85rem 0 0.35rem;
+    }
+    .terminal-out {
+      background: #040608;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 4px;
+      padding: 0.75rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      color: #7ee787;
+      overflow-x: auto;
+    }
+    .danger-out {
+      background: #040608;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--danger);
+      border-radius: 4px;
+      padding: 0.75rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      color: #ff7b72;
+      overflow-x: auto;
+    }
+    .explanation {
+      margin-top: 0.85rem;
+      font-size: 0.9rem;
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .pipeline-box {
+      background: var(--code-bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 1.25rem;
+      margin: 1.25rem 0;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.85rem;
+      line-height: 1.5;
+      color: var(--cyan);
+      overflow-x: auto;
+    }
+    @media (max-width: 900px) {
+      .layout {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        position: static;
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Top bar contract -->
+  <header class="topbar">
+    <div class="brand">
+      <a href="index.html" class="brand-link">
+        <span class="logo">oC</span>
+        <span class="brand-title">// MAN &amp; TUTORIAL PORTAL</span>
+      </a>
+      <span class="badge">v1.0 Self-Hosted</span>
+    </div>
+    <nav>
+      <a href="index.html">OC(7) Overview</a>
+      <a href="tutorial.html">W3 Tutorial</a>
+      <a href="syntax.html">OC-LANG(7) Syntax</a>
+      <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
+      <a href="man-occ.html" class="active">OCC(1) Compiler</a>
+      <a href="security.html">OC-SECURITY(7) CWEs</a>
+      <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub ↗</a>
+    </nav>
+  </header>
+
+  <div class="layout">
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section-title">Manual Page Sections</div>
+      <ul class="sidebar-nav">
+        <li><a href="#name">1. NAME</a></li>
+        <li><a href="#synopsis">2. SYNOPSIS</a></li>
+        <li><a href="#description">3. DESCRIPTION &amp; Architecture</a></li>
+        <li><a href="#commands">4. COMMANDS (build vs run)</a></li>
+        <li><a href="#options">5. OPTIONS &amp; Flags</a></li>
+        <li><a href="#bootstrap">6. BOOTSTRAP &amp; Self-Hosting</a></li>
+        <li><a href="#diagnostics">7. DIAGNOSTICS &amp; Exit Codes</a></li>
+        <li><a href="#see-also">8. SEE ALSO</a></li>
+      </ul>
+
+      <div class="sidebar-section-title">Cross Portal Links</div>
+      <ul class="sidebar-nav">
+        <li><a href="index.html">OC(7) Overview</a></li>
+        <li><a href="tutorial.html">W3Schools oC Tutorial</a></li>
+        <li><a href="syntax.html">OC-LANG(7) Grammar Spec</a></li>
+        <li><a href="stdlib.html">OC-STD(3) Standard Library</a></li>
+        <li><a href="security.html">OC-SECURITY(7) CWE Matrix</a></li>
+      </ul>
+    </aside>
+
+    <!-- Main Content -->
+    <main class="content">
+
+      <!-- Section 1: NAME -->
+      <section id="name">
+        <div class="man-header">
+          <h2>OCC(1) — oC Systems Compiler Reference Manual</h2>
+          <p>User command reference for the self-hosted zero-libc oC toolchain and native x86_64 ELF64 generator.</p>
+          <div class="man-meta">
+            <span><strong>Standard:</strong> Pure oC v1.0.0</span>
+            <span><strong>Target ABI:</strong> Linux x86_64 ELF64</span>
+            <span><strong>Section:</strong> 1 (User Commands)</span>
+          </div>
+        </div>
+
+        <h2>NAME</h2>
+        <p>
+          <strong>occ</strong> — self-hosted zero-libc oC compiler and native x86_64 ELF64 generator.
+        </p>
+      </section>
+
+      <!-- Section 2: SYNOPSIS -->
+      <section id="synopsis">
+        <h2>SYNOPSIS</h2>
+        <pre><code><strong>occ</strong> &lt;<strong>build</strong>|<strong>run</strong>&gt; <em>input.oc</em> [<strong>-o</strong> <em>output</em>] [<strong>-O1</strong>|<strong>-O2</strong>|<strong>-O3</strong>] [<strong>--backend</strong> &lt;<strong>c</strong>|<strong>native</strong>&gt;]</code></pre>
+      </section>
+
+      <!-- Section 3: DESCRIPTION -->
+      <section id="description">
+        <h2>DESCRIPTION</h2>
+        <p>
+          <strong>occ</strong> is the primary compiler driver for the <code>oC</code> systems programming language. Engineered from the ground up without libc or runtime dependencies, <code>occ</code> compiles entire programs using regional bump arenas, validates lifetime and borrow constraints at compile time via <code>EscapeValidator</code>, and generates either highly-optimized C11 code or standalone Linux <code>x86_64</code> ELF64 binaries.
+        </p>
+
+        <h3>Compiler Architecture Pipeline</h3>
+        <div class="pipeline-box">
++-----------------------------------------------------------------------------------+
+|                            OCC PIPELINE ARCHITECTURE                              |
++-----------------------------------------------------------------------------------+
+|  [Input .oc Files]                                                                |
+|          |                                                                        |
+|          v                                                                        |
+|  [ModuleLoader]  ---> Recursive import resolution, 64-module cycle deduplication  |
+|          |                                                                        |
+|          v                                                                        |
+|  [Lexer]         ---> 15 Keywords, radices (0x, 0b), string escapes, 8-prec tokens|
+|          |                                                                        |
+|          v                                                                        |
+|  [Parser AST]    ---> Pratt precedence climbing, struct layouts, fat slice nodes  |
+|          |                                                                        |
+|          v                                                                        |
+|  [EscapeValidator] -> Active defense: stack-escape, UAF, cross-arena borrow check|
+|          |            (Zero runtime cost: 0.00 ns overhead)                       |
+|          +------------------------------------+                                   |
+|          |                                    |                                   |
+|          v                                    v                                   |
+|  [--backend c (Default)]              [--backend native]                          |
+|  - C11 Transpiler                     - 1-Pass x86_64 Machine Code Emitter        |
+|  - Runtime bounds asserts             - Direct Linux Syscalls (0x0f 0x05)         |
+|  - Host GCC pipeline (-O1/-O2/-O3)    - ELF64 Header &amp; Section Assembler          |
+|  - Vectorized SIMD binaries           - Hardware Traps (__trap_overflow, bounds)  |
+|  - Dynamic / Static C binary          - Standalone Static ELF64 (&lt; 5 KB, 0 libc)  |
++-----------------------------------------------------------------------------------+</div>
+
+        <p>
+          The compilation process proceeds through four distinct, deterministic phases:
+        </p>
+        <ol>
+          <li>
+            <strong>Module Ingestion &amp; Deduplication:</strong> Starting at the root compilation unit, <code>ModuleLoader</code> scans top-level <code>import</code> statements, resolves relative paths, and maintains a 64-entry visited registry to prevent circular imports or redundant parsing.
+          </li>
+          <li>
+            <strong>Lexical &amp; Syntactic Analysis:</strong> The Pratt parser creates a structured AST rooted at <code>NODE_PROGRAM</code>, holding function declarations, struct definitions, and typed expressions. All allocations occur inside a 32 MB regional bump arena without heap fragmentation.
+          </li>
+          <li>
+            <strong>Active Safety Validation (<code>EscapeValidator</code>):</strong> Before any code emission, the AST is verified for memory safety. The validator analyzes variable lifetimes, detects pointers escaping stack frames, tracks arena lifetimes (flagging Use-After-Free if variables are used after <code>arena_reset</code> or <code>arena_deinit</code>), and catches cross-arena escapes. Violations halt the build immediately with exit code 1.
+          </li>
+          <li>
+            <strong>Backend Code Generation:</strong> The AST is dispatched to either the optimizing C11 backend or the native machine-code generator.
+          </li>
+        </ol>
+      </section>
+
+      <!-- Section 4: COMMANDS -->
+      <section id="commands">
+        <h2>COMMANDS</h2>
+        <p>
+          <code>occ</code> accepts one of two primary subcommands:
+        </p>
+
+        <h3><code>build &lt;input.oc&gt;</code></h3>
+        <p>
+          Compiles the specified source file and its imported dependencies into an executable binary. If <code>-o &lt;output&gt;</code> is omitted, the compiler outputs the binary to <code>a.out</code> in the current directory.
+        </p>
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Subcommand: build</span>
+            <span class="example-card-badge">Native Backend</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>$ occ build examples/native_fibonacci.oc -o /tmp/native_fib --backend native</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ ls -lh /tmp/native_fib<br>-rwxr-xr-x 1 omer users 4.7K Nov  7 19:20 /tmp/native_fib</div>
+            <p class="explanation">
+              <strong>Outcome:</strong> A standalone, 4.7 KB static ELF64 executable is produced with zero reliance on <code>libc.so</code>.
+            </p>
+          </div>
+        </div>
+
+        <h3><code>run &lt;input.oc&gt;</code></h3>
+        <p>
+          Compiles the source file to a temporary location (default: <code>/tmp/occ_run_bin</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller.
+        </p>
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Subcommand: run</span>
+            <span class="example-card-badge">Instant Run</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>$ occ run examples/core_suite.oc</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run examples/core_suite.oc<br>=== oC Core Suite: Regional Memory, Strings, &amp; Sockets ===<br>[1/4] Regional bump arena alloc/reset test... PASS<br>[2/4] Fat slice indexing &amp; sub-slicing test... PASS<br>[3/4] Socket networking &amp; loopback echo... PASS<br>[4/4] Hardware integer overflow trap... PASS<br>All 4 suites completed successfully.</div>
+            <p class="explanation">
+              <strong>Convenience:</strong> Ideal for test suites, scripts, and continuous integration workflows.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 5: OPTIONS -->
+      <section id="options">
+        <h2>OPTIONS &amp; COMPILER FLAGS</h2>
+        <p>
+          The compiler supports the following command-line flags and parameters:
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Flag</th>
+              <th>Arguments</th>
+              <th>Default</th>
+              <th>Description &amp; Behavioral Details</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>-o</code></td>
+              <td><code>&lt;path&gt;</code></td>
+              <td><code>a.out</code> (build)<br><code>/tmp/occ_run_bin</code> (run)</td>
+              <td>
+                Specifies the output binary path. The path is verified by <code>is_safe_path()</code> against shell metacharacters (<code>;</code>, <code>&amp;</code>, <code>|</code>, <code>`</code>, <code>$</code>, <code>&gt;</code>, <code>&lt;</code>, quotes) to prevent command injection.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--backend</code></td>
+              <td><code>native</code> | <code>c</code></td>
+              <td><code>c</code></td>
+              <td>
+                Selects the code generation backend. <code>native</code> emits direct <code>x86_64</code> ELF64 machine code; <code>c</code> transpiles to C11 and invokes host GCC.
+              </td>
+            </tr>
+            <tr>
+              <td><code>-O1</code></td>
+              <td><em>None</em></td>
+              <td><em>Disabled</em></td>
+              <td>
+                Enables level 1 optimization in the C backend. Passed directly to host GCC.
+              </td>
+            </tr>
+            <tr>
+              <td><code>-O2</code></td>
+              <td><em>None</em></td>
+              <td><em>Disabled</em></td>
+              <td>
+                Enables level 2 optimization in the C backend (loop unrolling, instruction scheduling, and vectorization).
+              </td>
+            </tr>
+            <tr>
+              <td><code>-O3</code></td>
+              <td><em>None</em></td>
+              <td><em>Disabled</em></td>
+              <td>
+                Enables aggressive level 3 optimization in the C backend, including auto-vectorization across mathematical loops.
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Backend Comparison &amp; Binary Size Metrics</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Metric / Feature</th>
+              <th><code>--backend native</code></th>
+              <th><code>--backend c</code> (Default / <code>-O2</code>)</th>
+              <th>Standard Dynamic C (<code>gcc -O2</code>)</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Binary Size</strong></td>
+              <td><strong>4.7 KB – 5.2 KB</strong></td>
+              <td>~16 KB (Dynamic) / ~850 KB (Static)</td>
+              <td>16.0 KB (Dynamic)</td>
+            </tr>
+            <tr>
+              <td><strong>Libc Dependency</strong></td>
+              <td><strong>Zero Libc (Direct Syscalls)</strong></td>
+              <td>Requires host C library</td>
+              <td>Requires glibc</td>
+            </tr>
+            <tr>
+              <td><strong>Compilation Speed</strong></td>
+              <td><strong>Instantaneous (&lt; 5 ms)</strong></td>
+              <td>~40 ms (Includes GCC invocation)</td>
+              <td>~35 ms</td>
+            </tr>
+            <tr>
+              <td><strong>Vectorization / SIMD</strong></td>
+              <td>Scalar 1-pass x86_64</td>
+              <td>AVX2 / SSE4.2 via GCC</td>
+              <td>AVX2 / SSE4.2 via GCC</td>
+            </tr>
+            <tr>
+              <td><strong>Hardware Traps</strong></td>
+              <td>Inline <code>jo</code> / <code>jz</code> / <code>syscall</code> traps</td>
+              <td>Runtime assertion macros</td>
+              <td>Undefined behavior / manual checks</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- Section 6: BOOTSTRAP & SELF-HOSTING -->
+      <section id="bootstrap">
+        <h2>BOOTSTRAP &amp; SELF-HOSTING</h2>
+        <p>
+          <code>occ</code> is <strong>100% self-hosted</strong>. The entire compiler is written in <code>oC</code> itself and builds itself without any external language tools.
+        </p>
+
+        <h3>Stage 2 == Stage 3 Bit-for-Bit Verification</h3>
+        <p>
+          Deterministic compilation is verified via a 3-stage bootstrap pipeline executed by <code>./showcase.sh</code>:
+        </p>
+        <pre><code># 1. Stage 1 compiler builds compiler/main.oc into Stage 2 binary
+$ occ build compiler/main.oc -o /tmp/occ_stage2
+
+# 2. Stage 2 compiler builds compiler/main.oc into Stage 3 binary
+$ /tmp/occ_stage2 build compiler/main.oc -o /tmp/occ_stage3
+
+# 3. Bit-for-bit checksum comparison
+$ cmp /tmp/occ_stage2 /tmp/occ_stage3
+# Output: Exit code 0 (Identical bitstreams, zero diff bytes)</code></pre>
+        <p>
+          When <code>cmp</code> returns 0, the compiler is proven to be an idempotent, self-hosting fixed-point.
+        </p>
+
+        <h3>Regional Arena Memory Footprint</h3>
+        <p>
+          The entire self-hosted compilation of all 10 compiler modules is completed inside a single <strong>32 MB regional bump arena</strong> initialized at startup via:
+        </p>
+        <pre><code>let mut arena: Arena = arena_init(33554432); // 32 megabytes via sys_mmap</code></pre>
+        <p>
+          The 10 modular components parsed and compiled are:
+        </p>
+        <ul>
+          <li><code>std/io.oc</code> — Low-level terminal I/O and integer-to-string formatters</li>
+          <li><code>std/fs.oc</code> — POSIX file reading, writing, and unlinking syscall wrappers</li>
+          <li><code>std/mem.oc</code> — <code>sys_mmap</code> regional bump arena and scrubbing allocators</li>
+          <li><code>compiler/token.oc</code> — Lexical token tags and token structures</li>
+          <li><code>compiler/lexer.oc</code> — Deterministic lexical scanner and keyword lookup</li>
+          <li><code>compiler/ast.oc</code> — AST node representations and allocation arena helpers</li>
+          <li><code>compiler/parser.oc</code> — Pratt expression parser &amp; <code>EscapeValidator</code></li>
+          <li><code>compiler/codegen.oc</code> — C11 backend code generator and type mapper</li>
+          <li><code>compiler/elf.oc</code> — Direct x86_64 machine code generator and ELF64 serializer</li>
+          <li><code>compiler/main.oc</code> — Driver, path security sanitizer, and CLI option processor</li>
+        </ul>
+      </section>
+
+      <!-- Section 7: DIAGNOSTICS & EXIT CODES -->
+      <section id="diagnostics">
+        <h2>DIAGNOSTICS &amp; EXIT CODES</h2>
+
+        <h3>Exit Status Codes</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Exit Code</th>
+              <th>Meaning</th>
+              <th>Causes</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>0</code></td>
+              <td>Success</td>
+              <td>Successful build or successful program execution with return code 0.</td>
+            </tr>
+            <tr>
+              <td><code>1</code></td>
+              <td>Compiler / Execution Error</td>
+              <td>
+                Parse error, <code>EscapeValidator</code> memory safety violation, unsafe CLI path, native ELF emission failure, or child program termination via hardware trap (<code>SIGILL</code> / <code>SIGTRAP</code>).
+              </td>
+            </tr>
+            <tr>
+              <td><code>N</code> (2..255)</td>
+              <td>Child Return Code</td>
+              <td>In <code>run</code> mode, non-zero exit code returned by the compiled program.</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>Compile-Time Active Defense Rejections</h3>
+        <p>
+          The <code>EscapeValidator</code> outputs clear diagnostic messages indicating the exact variable and lifetime boundary violated:
+        </p>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Diagnostic: Stack Reference Escape Rejected</span>
+            <span class="example-card-badge">CWE-562 Defense</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>// examples/bad_stack_escape.oc
+fn leak_stack() -> *mut i32 {
+    let mut local: i32 = 42;
+    return &amp;mut local; // Illegal stack address escape
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="danger-out">$ occ build examples/bad_stack_escape.oc<br>error: cannot return reference to local stack variable 'local'<br>[occ terminated with exit code 1]</div>
+            <p class="explanation">
+              <strong>Prevention:</strong> CWE-562 (Return of Stack Variable Address) is completely prevented before any assembly or C code is generated.
+            </p>
+          </div>
+        </div>
+
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Diagnostic: Use-After-Free via Arena Reset Rejected</span>
+            <span class="example-card-badge">CWE-416 Defense</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>// examples/exploits/UAF_Arena_Reset.oc
+let mut a = arena_init(4096);
+let ptr = arena_alloc(&amp;mut a, 64);
+arena_reset(&amp;mut a);
+ptr[0] = 0xAA; // Illegal access after arena invalidation</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="danger-out">$ occ build examples/exploits/UAF_Arena_Reset.oc<br>error: use-after-free: variable 'ptr' used after arena 'a' was reset<br>[occ terminated with exit code 1]</div>
+            <p class="explanation">
+              <strong>Prevention:</strong> CWE-416 (Use After Free) is eliminated statically at compile time with 0.00 ns runtime cost.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 8: SEE ALSO -->
+      <section id="see-also">
+        <h2>SEE ALSO</h2>
+        <ul>
+          <li><a href="index.html">OC(7)</a> — Active-defense systems language overview &amp; performance benchmarks</li>
+          <li><a href="tutorial.html">W3Schools Tutorial</a> — Step-by-step introduction to oC systems programming</li>
+          <li><a href="syntax.html">OC-LANG(7)</a> — Complete oC language syntax, grammar, types, and operator precedence</li>
+          <li><a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a> — Standard library API reference and Linux syscall ABI</li>
+          <li><a href="security.html">OC-SECURITY(7)</a> — 17-CWE active defense elimination matrix</li>
+          <li><a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub Repository</a> — Source code, issue tracker, and showcase benchmarks</li>
+        </ul>
+      </section>
+
+      <!-- Footer -->
+      <footer>
+        occ v1.0.0 Self-Hosted Compiler Manual • OCC(1) User Commands Reference
+      </footer>
+
+    </main>
+  </div>
+
+</body>
+</html>

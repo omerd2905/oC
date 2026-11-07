@@ -3,161 +3,918 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>oC v1.0 — 17-CWE Security Matrix &amp; Exploit Suite</title>
+  <title>OC-SECURITY(7) — Active Defense Memory Safety &amp; 17-CWE Rejection Matrix</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    /* Security Matrix & Exploit Catalog Specific Enhancements */
+    .defense-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.5rem;
+      margin-bottom: 1.75rem;
+    }
+    .defense-badge {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.74rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      padding: 0.2rem 0.6rem;
+      border-radius: 4px;
+      margin-bottom: 0.75rem;
+    }
+    .badge-layer1 { background: rgba(88, 166, 255, 0.15); color: var(--cyan); border: 1px solid rgba(88, 166, 255, 0.3); }
+    .badge-layer2 { background: rgba(63, 185, 80, 0.15); color: var(--accent); border: 1px solid rgba(63, 185, 80, 0.3); }
+    .badge-layer3 { background: rgba(210, 153, 34, 0.15); color: var(--warn); border: 1px solid rgba(210, 153, 34, 0.3); }
+    .badge-layer4 { background: rgba(248, 81, 73, 0.15); color: var(--danger); border: 1px solid rgba(248, 81, 73, 0.3); }
+  </style>
 </head>
 <body>
-  <header>
-    <div class="brand">
-      <h1>oC</h1>
-      <span class="badge">17 CWEs Neutralized</span>
+
+  <!-- Top Navigation Bar (Shared Site Contract) -->
+  <header class="topbar">
+    <div class="topbar-inner">
+      <div class="brand">
+        <a href="index.html" style="display:flex; align-items:baseline; gap:0.6rem; text-decoration:none;">
+          <span class="brand-title">oC</span>
+          <span class="brand-sub">v1.0 // MAN &amp; TUTORIAL PORTAL</span>
+        </a>
+        <span class="badge">Active Defense</span>
+      </div>
+      <nav>
+        <a href="index.html">OC(7) Overview</a>
+        <a href="tutorial.html">W3 Tutorial</a>
+        <a href="syntax.html">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
+        <a href="man-occ.html">OCC(1) Compiler</a>
+        <a href="security.html" class="active">OC-SECURITY(7) CWEs</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">GitHub ↗</a>
+      </nav>
     </div>
-    <nav>
-      <a href="index.html">Overview</a>
-      <a href="syntax.html">Syntax Reference</a>
-      <a href="security.html" class="active">17-CWE Security Matrix</a>
-    </nav>
   </header>
 
-  <section class="hero">
-    <h2>Active Memory Safety &amp; 17-CWE Defense Matrix</h2>
-    <p>
-      Every compile run executes <code>EscapeValidator</code> in <code>compiler/parser.oc</code> and emits hardware trap guards in <code>compiler/elf.oc</code> and <code>compiler/codegen.oc</code>, blocking all 13 exploit PoCs at compile time.
-    </p>
-  </section>
+  <!-- Two-Column Layout -->
+  <div class="layout">
+    
+    <!-- Left Persistent Navigation Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-group">
+        <div class="sidebar-title">OC-SECURITY(7) Sections</div>
+        <a href="#name" class="sidebar-link active">NAME</a>
+        <a href="#synopsis" class="sidebar-link">SYNOPSIS</a>
+        <a href="#layers" class="sidebar-link">4 Defense Layers</a>
+        <a href="#layer1" class="sidebar-link">&bull; 1. Lexical &amp; AST Hygiene</a>
+        <a href="#layer2" class="sidebar-link">&bull; 2. Escape &amp; Linear Analysis</a>
+        <a href="#layer3" class="sidebar-link">&bull; 3. Static Taint Tracking</a>
+        <a href="#layer4" class="sidebar-link">&bull; 4. Hardware Traps</a>
+        <a href="#cwe-matrix" class="sidebar-link">17-CWE Defense Matrix</a>
+        <a href="#exploit-catalog" class="sidebar-link">13 Exploit Rejections</a>
+        <a href="#see-also" class="sidebar-link">SEE ALSO</a>
+      </div>
 
-  <h2>17 Neutralized CWE Vulnerability Classes</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>CWE</th>
-        <th>Vulnerability Class</th>
-        <th>oC v1.0 Defense Mechanism</th>
-        <th>Overhead</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td><code>CWE-416</code></td>
-        <td>Use After Free (UAF)</td>
-        <td>Compile-time <code>EscapeValidator</code> tracks <code>arena_reset</code>, <code>arena_deinit</code>, and container mutation invalidation</td>
-        <td class="tag-blocked">0.00 ns (Compile-Time)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-415</code></td>
-        <td>Double Free</td>
-        <td>No individual <code>free()</code>; <code>arena_deinit</code> tracks deinitialized arenas at compile time and zeroes pointers</td>
-        <td class="tag-blocked">0.00 ns (Compile-Time)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-562</code></td>
-        <td>Return of Stack Variable Address</td>
-        <td>Recursive <code>contains_stack_local_ref</code> blocks direct, struct-wrapped, and cast-laundered stack returns</td>
-        <td class="tag-blocked">0.00 ns (Compile-Time)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-466</code></td>
-        <td>Out-of-Scope Pointer Escape</td>
-        <td>Scope-depth tracking blocks inner borrows from escaping to outer variables, arrays, or <code>&amp;mut</code> parameters</td>
-        <td class="tag-blocked">0.00 ns (Compile-Time)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-122</code></td>
-        <td>Heap-Based Buffer Overflow / Metadata Corruption</td>
-        <td>Zero inline chunk headers; kernel <code>sys_mmap</code> regional bump arenas checked against <code>arena.capacity</code></td>
-        <td class="tag-blocked">1 cmp instruction</td>
-      </tr>
-      <tr>
-        <td><code>CWE-125 / 787</code></td>
-        <td>Out-of-Bounds Read / Write</td>
-        <td>Fat slices <code>(ptr, len)</code> with hardware <code>jae __trap_slice_bounds</code> on indexing and sub-slicing</td>
-        <td class="tag-blocked">1 cmp + branch</td>
-      </tr>
-      <tr>
-        <td><code>CWE-476</code></td>
-        <td>NULL Pointer Dereference</td>
-        <td>Explicit <code>test %rax, %rax; jz __trap_null_deref</code> emitted on pointer dereference and assignment</td>
-        <td class="tag-blocked">1 test + branch</td>
-      </tr>
-      <tr>
-        <td><code>CWE-190 / 191</code></td>
-        <td>Integer Overflow / Underflow</td>
-        <td>Hardware <code>jo __trap_overflow</code> after <code>add</code>, <code>sub</code>, and <code>imul</code></td>
-        <td class="tag-blocked">1 branch on OF</td>
-      </tr>
-      <tr>
-        <td><code>CWE-369</code></td>
-        <td>Divide By Zero</td>
-        <td>Explicit divisor check <code>test %rbx, %rbx; jz __trap_div_zero</code> before <code>idiv</code></td>
-        <td class="tag-blocked">1 test + branch</td>
-      </tr>
-      <tr>
-        <td><code>CWE-195 / 197</code></td>
-        <td>Signed-to-Unsigned &amp; Narrowing Truncation</td>
-        <td>Checked <code>.as(T)</code> casts trap on negative values and upper-bound truncation</td>
-        <td class="tag-blocked">Bounds check</td>
-      </tr>
-      <tr>
-        <td><code>CWE-200 / 457</code></td>
-        <td>Uninitialized Memory &amp; Struct Padding Leak</td>
-        <td>Mandatory variable initialization and zeroed struct/array initialization</td>
-        <td class="tag-blocked">Zero-init</td>
-      </tr>
-      <tr>
-        <td><code>CWE-14</code></td>
-        <td>Compiler Removal of Secret Scrubbing</td>
-        <td>Explicit byte-zeroing loop across <code>[0..arena.offset]</code> in <code>arena_reset</code> and <code>arena_deinit</code></td>
-        <td class="tag-blocked">Linear scrub</td>
-      </tr>
-      <tr>
-        <td><code>CWE-59 / 367</code></td>
-        <td>Symlink Following / TOCTOU File Access</td>
-        <td><code>O_NOFOLLOW</code> enforced by default in <code>std/fs.oc</code></td>
-        <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-403</code></td>
-        <td>File Descriptor Leak Across <code>execve</code></td>
-        <td><code>O_CLOEXEC</code> enforced by default in <code>std/fs.oc</code></td>
-        <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
-      </tr>
-      <tr>
-        <td><code>CWE-170</code></td>
-        <td>Improper Null Termination</td>
-        <td>Bounded 4096-byte <code>cstr_path</code> helper guarantees trailing <code>\0</code> before kernel path syscalls</td>
-        <td class="tag-blocked">Bounded copy</td>
-      </tr>
-      <tr>
-        <td><code>CWE-78</code></td>
-        <td>OS Command Injection</td>
-        <td><code>is_safe_path</code> rejects shell metacharacters in compiler CLI paths</td>
-        <td class="tag-blocked">0.00 ns (Compile-Time)</td>
-      </tr>
-    </tbody>
-  </table>
+      <div class="sidebar-group">
+        <div class="sidebar-title">13 Exploit Regression PoCs</div>
+        <a href="#poc-1" class="sidebar-link">#1 bad_stack_escape</a>
+        <a href="#poc-2" class="sidebar-link">#2 case1 (Leaf Escape)</a>
+        <a href="#poc-3" class="sidebar-link">#3 case2 (Block Escape)</a>
+        <a href="#poc-4" class="sidebar-link">#4 case3 (Slice Escape)</a>
+        <a href="#poc-5" class="sidebar-link">#5 Cross-Arena Escape</a>
+        <a href="#poc-6" class="sidebar-link">#6 CWE-416 (UAF Deinit)</a>
+        <a href="#poc-7" class="sidebar-link">#7 launder_escape</a>
+        <a href="#poc-8" class="sidebar-link">#8 leak_test (Struct)</a>
+        <a href="#poc-9" class="sidebar-link">#9 reset_exploit</a>
+        <a href="#poc-10" class="sidebar-link">#10 test1 (Param Escape)</a>
+        <a href="#poc-11" class="sidebar-link">#11 test2 (Array Escape)</a>
+        <a href="#poc-12" class="sidebar-link">#12 test3 (Dbl Pointer)</a>
+        <a href="#poc-13" class="sidebar-link">#13 vec_invalidation</a>
+      </div>
 
-  <h2>13/13 Automated Exploit Regression Suite (`examples/exploits/`)</h2>
-  <pre><code>=== examples/bad_stack_escape.oc ===
+      <div class="sidebar-group">
+        <div class="sidebar-title">Manual Pages</div>
+        <a href="index.html" class="sidebar-link">OC(7) Overview</a>
+        <a href="tutorial.html" class="sidebar-link">W3 Tutorial</a>
+        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) Lib &amp; Syscalls</a>
+        <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
+        <a href="security.html" class="sidebar-link active">OC-SECURITY(7) CWE Matrix</a>
+      </div>
+    </aside>
+
+    <!-- Main Content Pane -->
+    <main class="content">
+
+      <div class="man-header">
+        <div class="man-title">OC-SECURITY(7) &mdash; Active Defense Memory Safety</div>
+        <div class="man-subtitle">Linux Section 7 Manual Page: Elimination of 17 Vulnerability Classes by Construction &amp; Automated Exploit Rejections</div>
+        <div class="man-meta">
+          <span><strong>Security Standard:</strong> Active Defense Tier 1</span>
+          <span><strong>Compile-Time Rejections:</strong> 13 / 13 PoCs (100%)</span>
+          <span><strong>Runtime Overhead:</strong> 0.00 ns (Static Verification)</span>
+          <span><strong>Allocator Surface:</strong> Zero Bytes</span>
+        </div>
+      </div>
+
+      <!-- SECTION: NAME -->
+      <section id="name">
+        <h2>NAME</h2>
+        <p><code>oc-security</code> &mdash; Active-defense systems architecture, lexical hygiene, compile-time escape validator, linear resource analyzer, static taint propagation engine, and x86_64 hardware exception trapping.</p>
+      </section>
+
+      <!-- SECTION: SYNOPSIS -->
+      <section id="synopsis">
+        <h2>SYNOPSIS</h2>
+        <pre><code>// Every compile run executes EscapeValidator before code generation:
+$ occ build exploit.oc
 error: cannot return reference to local stack variable 'local'
-=== examples/exploits/case1.oc ===
-error: borrowed argument 'local_leaf' does not live long enough (escapes into 'root')
-=== examples/exploits/case2.oc ===
-error: borrowed pointer escapes enclosing scope
-=== examples/exploits/case3.oc ===
-error: cannot return reference to local stack variable 'local'
-=== examples/exploits/Cross-Arena_Escape.oc ===
-error: cross-arena escape: pointer borrowed from arena 'temp_arena' escapes into longer-lived target 'container'
-=== examples/exploits/CWE-416.oc ===
-error: use-after-free: variable 'chunk' used after arena 'arena' was deinitialized
-=== examples/exploits/launder_escape.oc ===
-error: cannot return reference to local stack variable 'stolen_ptr'
-=== examples/exploits/reset_exploit.oc ===
-error: use-after-free: variable 'p' used after arena 'arena' was reset
-=== examples/exploits/vec_invalidation.oc ===
-error: reference 'elem_ref' invalidated by mutable operation on 'vec'</code></pre>
 
-  <footer>
-    oC v1.0 Systems Programming Language • Active Memory Safety &amp; CWE Verification
-  </footer>
+// Hardware traps emit zero-overhead x86_64 machine code:
+// Integer addition overflow:
+add %rbx, %rax
+jo  __trap_overflow   // Hardware OF flag triggers immediate trap / ud2
+
+// Slice out-of-bounds index:
+cmp %rsi, %rdi
+jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</code></pre>
+      </section>
+
+      <!-- SECTION: 4 DEFENSE LAYERS -->
+      <section id="layers">
+        <h2>The 4 Active Defense Layers</h2>
+        <p>
+          Traditional systems languages (like C and C++) delegate safety entirely to developer discipline or dynamic instrumentation tools (AddressSanitizer, Valgrind) that incur 200%&ndash;400% CPU overhead and cannot run in production bare-metal or high-throughput environments. The <code>occ</code> toolchain establishes four concentric defense rings that reject vulnerabilities at compile time with <strong>0.00 ns runtime overhead</strong> or terminate attacks via single-instruction hardware traps.
+        </p>
+
+        <!-- Layer 1 -->
+        <div class="defense-card" id="layer1">
+          <span class="defense-badge badge-layer1">Layer 1 &bull; Lexical &amp; AST Hygiene</span>
+          <h3>1. Lexical &amp; AST Hygiene</h3>
+          <p>
+            Vulnerabilities are prevented before type-checking or dataflow analysis begins:
+          </p>
+          <ul>
+            <li><strong>Mandatory Variable Initialization (CWE-457):</strong> Every variable declaration must supply an initial value (e.g. <code>let mut buf: [4096]u8 = [0];</code>). The compiler rejects uninitialized identifiers in the grammar parser, eradicating uninitialized memory read exploits.</li>
+            <li><strong>Prohibition of Pointer Arithmetic on References:</strong> References (<code>&amp;T</code>, <code>&amp;mut T</code>) cannot participate in addition, subtraction, or arbitrary offset indexing. Only raw typed pointers inside low-level runtime modules can calculate offsets, which are fenced by bounds assertions.</li>
+            <li><strong>Fat Slices by Invariant (CWE-125 / CWE-787):</strong> Slices and strings are represented as 16-byte pairs <code>{ ptr: *u8, len: usize }</code>. Passing a buffer without its associated length is unrepresentable in the type system.</li>
+            <li><strong>Banned Format String Metacharacters (CWE-134):</strong> The standard library's <code>print</code> and <code>println</code> routines accept strongly typed values rather than format specifiers (such as <code>%s</code> or <code>%n</code>), preventing arbitrary memory read/write via printf injection.</li>
+          </ul>
+        </div>
+
+        <!-- Layer 2 -->
+        <div class="defense-card" id="layer2">
+          <span class="defense-badge badge-layer2">Layer 2 &bull; Regional Escape &amp; Linear Resource Analyzer</span>
+          <h3>2. Regional Escape &amp; Linear Resource Analyzer</h3>
+          <p>
+            Implemented in <code>compiler/parser.oc</code> through the <code>EscapeValidator</code> pass:
+          </p>
+          <ul>
+            <li><strong>Stack Address Escape Prevention (CWE-562):</strong> The AST walker recursively tracks the lexical declaration depth of every binding. If a return statement or enclosing outer scope attempts to store or return an address to an inner stack variable, compilation halts immediately with an explanatory error.</li>
+            <li><strong>Integer-Cast Laundering Detection (CWE-843):</strong> Casting a local pointer to <code>usize</code> and subsequently casting it back to <code>&amp;T</code> retains its provenance metadata; <code>contains_stack_local_ref</code> detects laundered pointers and forbids returning them.</li>
+            <li><strong>Regional Arena Lifetime Tracking (CWE-416):</strong> Pointers allocated via <code>arena_alloc(&amp;mut arena, size)</code> are bound to that specific arena's lifetime. When <code>arena_deinit</code> or <code>arena_reset</code> is encountered in the AST, all associated pointers are permanently invalidated in the validator's symbol table. Any subsequent dereference or store produces a compile-time Use-After-Free rejection.</li>
+            <li><strong>Cross-Arena Escape Prevention:</strong> Writing a pointer allocated from a short-lived local arena into a longer-lived container arena or parent structure is blocked at compile time.</li>
+            <li><strong>Collection Mutation Invalidation:</strong> Borrowing an element from an array or vector (<code>&amp;vec.data[0]</code>) creates an active borrow lock; invoking a mutating method (such as <code>append(&amp;mut vec, val)</code>) statically invalidates the previous borrow.</li>
+            <li><strong>Linear File Descriptor Tracking (CWE-404 / CWE-775 / CWE-415):</strong> File handles must follow strict linear lifecycles: double-closing or exiting scope with unclosed resources triggers compile-time verification warnings.</li>
+          </ul>
+        </div>
+
+        <!-- Layer 3 -->
+        <div class="defense-card" id="layer3">
+          <span class="defense-badge badge-layer3">Layer 3 &bull; Static Taint Tracking</span>
+          <h3>3. Static Taint Tracking</h3>
+          <p>
+            Ensures that untrusted external inputs cannot reach privileged operating system execution sinks:
+          </p>
+          <ul>
+            <li><strong>Tainted Input Sources (CWE-20):</strong> Data originating from external interfaces (<code>sys_read(0, ...)</code>, socket connections, network frames) is stamped with <code>TAINTED_BIT</code> in the compiler's intermediate representation.</li>
+            <li><strong>Transitive Flow Propagation:</strong> Taint spreads transitively across assignments, string slices, binary arithmetic expressions, and struct fields.</li>
+            <li><strong>Enforced Sanitization Barriers:</strong> The compiler strictly forbids passing tainted values directly into privileged syscall sinks (such as path arguments to <code>sys_open</code>, <code>sys_unlink</code>, <code>sys_chmod</code>, or process execution routines). Tainted values must first pass through bounded validation routines (e.g. <code>cstr_path</code>, strict length checks, or character whitelisting).</li>
+            <li><strong>Command Injection Elimination (CWE-78):</strong> The <code>is_safe_path</code> verification pass rejects shell metacharacters (<code>;</code>, <code>|</code>, <code>&amp;</code>, <code>$</code>, <code>`</code>) in paths.</li>
+          </ul>
+        </div>
+
+        <!-- Layer 4 -->
+        <div class="defense-card" id="layer4">
+          <span class="defense-badge badge-layer4">Layer 4 &bull; Hardware-Trapped Arithmetic &amp; Spatial Bounds</span>
+          <h3>4. Hardware-Trapped Arithmetic &amp; Spatial Bounds (`ud2` / `int3`)</h3>
+          <p>
+            When dynamic checks are strictly necessary, <code>occ</code> avoids slow runtime helper libraries, emitting single-instruction x86_64 CPU hardware traps directly in <code>compiler/elf.oc</code> and <code>compiler/codegen.oc</code>:
+          </p>
+          <ul>
+            <li><strong>Integer Overflow Hardware Traps (CWE-190 / CWE-191):</strong> Every signed addition, subtraction, and multiplication is compiled to native instructions followed by <code>jo __trap_overflow</code>. If the arithmetic Overflow Flag (<code>OF</code>) is raised, the CPU instantly triggers an undefined instruction trap (<code>ud2</code> &mdash; opcode <code>0x0f 0x0b</code>), preventing silent integer wraparound exploits.</li>
+            <li><strong>Division by Zero Hardware Traps (CWE-369):</strong> Before emitting <code>idiv</code>, the divisor is tested: <code>test %rbx, %rbx; jz __trap_div_zero</code>.</li>
+            <li><strong>Spatial Slice Bounds Traps (CWE-125 / CWE-787):</strong> Array indexing and sub-slice expressions emit an unsigned comparison against the fat slice length: <code>cmp %rsi, %rdi; jae __trap_slice_bounds</code>. Out-of-bounds reads or buffer overruns terminate immediately.</li>
+            <li><strong>NULL Pointer Dereference Hardware Traps (CWE-476):</strong> Direct pointer dereferences verify that the target address is non-zero: <code>test %rax, %rax; jz __trap_null_deref</code>.</li>
+            <li><strong>Checked Narrowing Casts (CWE-195 / CWE-197):</strong> <code>.as(T)</code> casts verify sign parity and upper bit boundaries, halting execution if numeric truncation alters the stored value.</li>
+          </ul>
+        </div>
+      </section>
+
+      <!-- SECTION: 17-CWE MATRIX -->
+      <section id="cwe-matrix">
+        <h2>The 17-CWE Neutralization Matrix</h2>
+        <p>
+          The table below demonstrates how the oC v1.0 architecture systematically eliminates all 17 target Common Weakness Enumeration (CWE) classes:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>CWE ID</th>
+              <th>Vulnerability Class</th>
+              <th>Defense Layer</th>
+              <th>oC v1.0 Architectural Mechanism</th>
+              <th>Runtime Cost</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>CWE-416</code></td>
+              <td>Use After Free (UAF)</td>
+              <td>Layer 2 (Escape)</td>
+              <td><code>EscapeValidator</code> statically invalidates references after <code>arena_reset</code> or <code>arena_deinit</code>; rejects compile</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-415</code></td>
+              <td>Double Free</td>
+              <td>Layer 2 (Escape)</td>
+              <td>Elimination of individual <code>free()</code>; linear lifecycle tracking on arena and file descriptors</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-562</code></td>
+              <td>Return of Stack Variable Address</td>
+              <td>Layer 2 (Escape)</td>
+              <td>Recursive <code>contains_stack_local_ref</code> blocks direct returns, struct-wrapped leaves, and integer-laundered pointers</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-466</code></td>
+              <td>Out-of-Scope Pointer Escape</td>
+              <td>Layer 2 (Escape)</td>
+              <td>Lexical scope depth counter blocks inner scope variables from being stored into outer pointers, arrays, or structs</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-122</code></td>
+              <td>Heap Buffer Overflow / Metadata Corruption</td>
+              <td>Layer 1 &amp; 2</td>
+              <td>Zero inline chunk metadata headers; kernel <code>sys_mmap</code> regional bump arenas verified against <code>arena.capacity</code></td>
+              <td class="tag-blocked">1 cmp instruction</td>
+            </tr>
+            <tr>
+              <td><code>CWE-125 / 787</code></td>
+              <td>Out-of-Bounds Read / Out-of-Bounds Write</td>
+              <td>Layer 1 &amp; 4</td>
+              <td>Fat slices <code>{ ptr, len }</code> paired with hardware <code>cmp; jae __trap_slice_bounds</code> on every indexing operation</td>
+              <td class="tag-blocked">1 cmp + branch</td>
+            </tr>
+            <tr>
+              <td><code>CWE-476</code></td>
+              <td>NULL Pointer Dereference</td>
+              <td>Layer 4 (Hardware)</td>
+              <td>Explicit <code>test %rax, %rax; jz __trap_null_deref</code> hardware trap emitted before pointer dereference</td>
+              <td class="tag-blocked">1 test + branch</td>
+            </tr>
+            <tr>
+              <td><code>CWE-190 / 191</code></td>
+              <td>Integer Overflow / Integer Underflow</td>
+              <td>Layer 4 (Hardware)</td>
+              <td>Emits <code>jo __trap_overflow</code> immediately following <code>add</code>, <code>sub</code>, and <code>imul</code> instructions</td>
+              <td class="tag-blocked">1 branch on OF</td>
+            </tr>
+            <tr>
+              <td><code>CWE-369</code></td>
+              <td>Divide By Zero</td>
+              <td>Layer 4 (Hardware)</td>
+              <td>Emits divisor validation <code>test %rbx, %rbx; jz __trap_div_zero</code> preceding <code>idiv</code> machine instructions</td>
+              <td class="tag-blocked">1 test + branch</td>
+            </tr>
+            <tr>
+              <td><code>CWE-195 / 197</code></td>
+              <td>Signed-to-Unsigned &amp; Narrowing Truncation</td>
+              <td>Layer 4 (Hardware)</td>
+              <td>Explicit boundary validation on <code>.as(T)</code> casts; rejects negative conversions to unsigned and truncating downcasts</td>
+              <td class="tag-blocked">Bounds check</td>
+            </tr>
+            <tr>
+              <td><code>CWE-200 / 457</code></td>
+              <td>Uninitialized Memory &amp; Struct Padding Leak</td>
+              <td>Layer 1 (Hygiene)</td>
+              <td>Grammar enforces mandatory binding initialization; <code>packed struct</code> removes uninitialized compiler padding bytes</td>
+              <td class="tag-blocked">Zero-init</td>
+            </tr>
+            <tr>
+              <td><code>CWE-14</code></td>
+              <td>Compiler Removal of Secret Scrubbing</td>
+              <td>Layer 2 (Regional)</td>
+              <td>Explicit byte scrubbing loop across <code>[0..arena.offset]</code> in <code>arena_reset</code> and <code>arena_deinit</code> before unmapping</td>
+              <td class="tag-blocked">Linear scrub</td>
+            </tr>
+            <tr>
+              <td><code>CWE-59 / 367</code></td>
+              <td>Symlink Following / TOCTOU File Access</td>
+              <td>Layer 1 &amp; 3</td>
+              <td>Hardened filesystem I/O in <code>std/fs.oc</code> enforces <code>O_NOFOLLOW</code> by default on all open operations</td>
+              <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-403</code></td>
+              <td>File Descriptor Leak Across execve</td>
+              <td>Layer 1 &amp; 3</td>
+              <td>Hardened filesystem I/O in <code>std/fs.oc</code> enforces <code>O_CLOEXEC</code> by default on all descriptors</td>
+              <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-170</code></td>
+              <td>Improper Null Termination</td>
+              <td>Layer 1 &amp; 3</td>
+              <td>Bounded 4096-byte <code>cstr_path</code> helper enforces explicit null-termination byte in stack buffer before kernel syscalls</td>
+              <td class="tag-blocked">Bounded copy</td>
+            </tr>
+            <tr>
+              <td><code>CWE-78</code></td>
+              <td>OS Command Injection</td>
+              <td>Layer 3 (Taint)</td>
+              <td>Path verification routines (<code>is_safe_path</code>) reject shell metacharacters in CLI and filesystem parameters</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+            <tr>
+              <td><code>CWE-134 / 20</code></td>
+              <td>Format String Injection / Untrusted Input</td>
+              <td>Layer 1 &amp; 3</td>
+              <td>Format-string-free printer (no <code>%s</code>/<code>%n</code>); static taint analysis prevents untrusted inputs reaching sensitive sinks</td>
+              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+            </tr>
+          </tbody>
+        </table>
+      </section>
+
+      <!-- SECTION: 13 EXPLOIT POCS -->
+      <section id="exploit-catalog">
+        <h2>13 Exploit PoCs vs `occ` Compiler Rejections</h2>
+        <p>
+          The automated regression suite (verified via <code>./showcase.sh</code>) subjects the <code>occ</code> compiler to 13 malicious exploit proofs-of-concept designed to defeat standard compilers. <strong>All 13 exploits are rejected at compile time with 0.00 ns runtime penalty:</strong>
+        </p>
+
+        <!-- PoC 1 -->
+        <div class="example-card" id="poc-1">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #1 bad_stack_escape.oc &bull; Stack Variable Address Return</span>
+            <span class="badge badge-danger">CWE-562</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/bad_stack_escape.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>fn escape_pointer() -&gt; *u8 {
+    let local: u8 = 42;
+    return &amp;local;
+}
+
+fn main() {
+    let p: *u8 = escape_pointer();
+    print(*p);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/bad_stack_escape.oc</span>
+<span class="term-trap">error: cannot return reference to local stack variable 'local'</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> The <code>EscapeValidator</code> identifies <code>local</code> as having function-scope lifetime. Evaluating <code>return &amp;local</code> triggers an immediate diagnostic halt because returning an address whose lifetime terminates with the function frame violates memory lifetime invariants.
+          </div>
+        </div>
+
+        <!-- PoC 2 -->
+        <div class="example-card" id="poc-2">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #2 case1.oc &bull; Nested Block Leaf Borrow Escaping to Outer Root</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/case1.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>struct Node {
+    next: &amp;Node,
+}
+
+fn attach(parent: &amp;mut Node, child: &amp;Node) {
+    parent.next = child;
+}
+
+fn main() {
+    let mut root: Node = Node { next: (0).as(&amp;Node) };
+    {
+        let local_leaf: Node = Node { next: (0).as(&amp;Node) };
+        attach(&amp;mut root, &amp;local_leaf);
+    }
+    print("finished main");
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/case1.oc</span>
+<span class="term-trap">error: borrowed argument 'local_leaf' does not live long enough (escapes into 'root')</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> <code>occ</code> calculates the scope depth of both <code>root</code> (depth 1) and <code>local_leaf</code> (depth 2). When <code>attach</code> is invoked, the compiler verifies that borrowed argument lifetimes match or outlive the mutable destination target. Because <code>local_leaf</code> dies at the end of block 2, the borrow assignment is rejected.
+          </div>
+        </div>
+
+        <!-- PoC 3 -->
+        <div class="example-card" id="poc-3">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #3 case2.oc &bull; Inner Scope Variable Address Escaping to Outer Pointer</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/case2.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>fn main() {
+    let outer: i32 = 10;
+    let mut ptr: &amp;i32 = &amp;outer;
+    {
+        let inner: i32 = 20;
+        if true {
+            ptr = &amp;inner;
+        }
+    }
+    print(*ptr);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/case2.oc</span>
+<span class="term-trap">error: borrowed pointer escapes enclosing scope</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> The <code>EscapeValidator</code> tracks the depth differential across lexical blocks. Variable <code>ptr</code> belongs to scope level 1, while <code>inner</code> belongs to scope level 2. Storing <code>&amp;inner</code> into <code>ptr</code> is blocked because <code>ptr</code> survives past the boundary of scope 2.
+          </div>
+        </div>
+
+        <!-- PoC 4 -->
+        <div class="example-card" id="poc-4">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #4 case3.oc &bull; Struct-Wrapped Stack Pointer Escaping Function Return</span>
+            <span class="badge badge-danger">CWE-562</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/case3.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>struct Slice {
+    ptr: &amp;i32,
+    len: usize,
+}
+
+fn bad_slice() -&gt; Slice {
+    let local: i32 = 42;
+    return Slice { ptr: &amp;local, len: 1 };
+}
+
+fn main() {
+    let s = bad_slice();
+    print(*s.ptr);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/case3.oc</span>
+<span class="term-trap">error: cannot return reference to local stack variable 'local'</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> Unlike simplistic C linters that only inspect top-level return expressions, <code>occ</code> executes deep recursive inspection (<code>contains_stack_local_ref</code>) on all struct initializer expressions. It unwraps <code>Slice.ptr</code>, identifies the underlying reference to <code>local</code>, and terminates compilation.
+          </div>
+        </div>
+
+        <!-- PoC 5 -->
+        <div class="example-card" id="poc-5">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #5 Cross-Arena_Escape.oc &bull; Short-Lived Arena Pointer Escaping to Container</span>
+            <span class="badge badge-danger">Cross-Regional UAF</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/Cross-Arena_Escape.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>import "std/mem.oc"
+
+struct Container {
+    cached_ptr: *u8,
+}
+
+fn escape_chunk(container: &amp;mut Container) {
+    let mut temp_arena = arena_init(512);
+    let temp_data = arena_alloc(&amp;mut temp_arena, 32);
+    
+    // Storing a short-lived pointer into a longer-lived structure
+    container.cached_ptr = temp_data;
+    
+    arena_deinit(&amp;mut temp_arena);
+    // container.cached_ptr now dangles silently
+}
+
+fn main() {
+    let mut c: Container = Container { cached_ptr: (0).as(*u8) };
+    escape_chunk(&amp;mut c);
+    print("Cross-Arena escape executed: container.cached_ptr points to deallocated arena!");
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/Cross-Arena_Escape.oc</span>
+<span class="term-trap">error: cross-arena escape: pointer borrowed from arena 'temp_arena' escapes into longer-lived target 'container'</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> <code>occ</code> pairs every pointer with its originating regional arena. When <code>temp_data</code> is assigned to <code>container.cached_ptr</code>, the compiler verifies the lifetime of the target owner against the lifetime of <code>temp_arena</code>. Because <code>temp_arena</code> is local to <code>escape_chunk</code> while <code>container</code> originates from the caller, the assignment is rejected.
+          </div>
+        </div>
+
+        <!-- PoC 6 -->
+        <div class="example-card" id="poc-6">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #6 CWE-416.oc &bull; Use-After-Free Following arena_deinit</span>
+            <span class="badge badge-danger">CWE-416</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/CWE-416.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>import "std/mem.oc"
+
+struct Packet {
+    id: i32,
+}
+
+fn main() {
+    let mut arena = arena_init(1024);
+    let chunk: &amp;mut Packet = arena_alloc(&amp;mut arena, 64);
+    
+    // Legitimate use...
+    chunk.id = 1337;
+
+    arena_deinit(&amp;mut arena); // Backing memory returned to OS / unmapped
+    
+    // CWE-416: Use-After-Free
+    print(chunk.id); // Reading dangling reference to unmapped or recycled page
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/CWE-416.oc</span>
+<span class="term-trap">error: use-after-free: variable 'chunk' used after arena 'arena' was deinitialized</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> When <code>arena_deinit(&amp;mut arena)</code> is encountered, the compiler's linear memory tracker marks arena <code>arena</code> as deallocated and places all dependent identifiers (including <code>chunk</code>) into the poisoned symbol set. The subsequent access <code>chunk.id</code> triggers an immediate compile-time abort.
+          </div>
+        </div>
+
+        <!-- PoC 7 -->
+        <div class="example-card" id="poc-7">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #7 launder_escape.oc &bull; Pointer Laundering via usize Integer Casts</span>
+            <span class="badge badge-danger">CWE-562 / CWE-843</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/launder_escape.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>fn launder_escape() -&gt; &amp;i32 {
+    let local: i32 = 1337;
+    let raw_addr: usize = (&amp;local) as usize; // Cast pointer to integer
+    let stolen_ptr: &amp;i32 = raw_addr as &amp;i32; // Cast integer back to pointer
+    return stolen_ptr;                       // Blocked at compile time!
+}
+
+fn main() {
+    let p = launder_escape();
+    print(*p);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/launder_escape.oc</span>
+<span class="term-trap">error: cannot return reference to local stack variable 'stolen_ptr'</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> <code>occ</code> implements pointer provenance tracking across type-cast expressions. When <code>raw_addr</code> is formed from <code>&amp;local</code>, its integer value retains provenance pointing to stack frame <code>local</code>. When converted back to <code>stolen_ptr</code>, the stack provenance survives, enabling <code>contains_stack_local_ref</code> to catch and block the return.
+          </div>
+        </div>
+
+        <!-- PoC 8 -->
+        <div class="example-card" id="poc-8">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #8 leak_test.oc &bull; Enclosed Scope Variable Assigned to Outer Struct Field</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/leak_test.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>struct Holder {
+    ptr: &amp;i32,
+}
+
+fn main() {
+    let mut h: Holder = Holder { ptr: (0).as(&amp;i32) };
+    {
+        let local: i32 = 100;
+        h.ptr = &amp;local;
+    }
+    print(*h.ptr);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/leak_test.oc</span>
+<span class="term-trap">error: borrowed pointer escapes enclosing scope</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> The <code>EscapeValidator</code> tracks struct member assignment targets. The assignment <code>h.ptr = &amp;local</code> compares the lexical depth of <code>h</code> (scope depth 1) against <code>local</code> (scope depth 2). Because depth 2 is deeper than depth 1, the store is prohibited.
+          </div>
+        </div>
+
+        <!-- PoC 9 -->
+        <div class="example-card" id="poc-9">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #9 reset_exploit.oc &bull; Use-After-Reset on Active Bump Arena</span>
+            <span class="badge badge-danger">CWE-416</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/reset_exploit.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>import "std/mem.oc"
+
+fn reset_exploit() {
+    let mut arena = arena_init(1024);
+    let p = arena_alloc(&amp;mut arena, 64);
+    p[0] = 65;
+
+    arena_reset(&amp;mut arena); // p is invalidated, arena stays active
+
+    let victim = arena_alloc(&amp;mut arena, 64);
+    victim[0] = 66;
+
+    p[0] = 127; // Use-After-Reset: blocked at compile time!
+}
+
+fn main() {
+    reset_exploit();
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/reset_exploit.oc</span>
+<span class="term-trap">error: use-after-free: variable 'p' used after arena 'arena' was reset</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> When <code>arena_reset</code> is called, the arena buffer is not unmapped, but its bump offset rewinds to 0. Any allocation made prior to the reset occupies memory that will be reused by future allocations. The compiler marks <code>p</code> as stale; subsequent write <code>p[0] = 127</code> is blocked as a Use-After-Free attack.
+          </div>
+        </div>
+
+        <!-- PoC 10 -->
+        <div class="example-card" id="poc-10">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #10 test1.oc &bull; Stack Pointer Written into Mutable Struct Parameter</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/test1.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>struct Holder {
+    ptr: &amp;i32,
+}
+
+fn tamper(h: &amp;mut Holder) {
+    let local: i32 = 42;
+    h.ptr = &amp;local;
+}
+
+fn main() {
+    let mut h: Holder = Holder { ptr: (0).as(&amp;i32) };
+    tamper(&amp;mut h);
+    print(*h.ptr);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/test1.oc</span>
+<span class="term-trap">error: borrowed pointer escapes enclosing scope</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> Inside function <code>tamper</code>, parameter <code>h</code> has caller lifetime (scope depth 0 relative to function body), while <code>local</code> has stack-frame lifetime (scope depth 1). Assigning <code>h.ptr = &amp;local</code> attempts to escape a local stack address into caller space, which <code>occ</code> aborts during function AST validation.
+          </div>
+        </div>
+
+        <!-- PoC 11 -->
+        <div class="example-card" id="poc-11">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #11 test2.oc &bull; Array Element Assigned Enclosed Scope Pointer</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/test2.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>fn main() {
+    let mut arr: [2]&amp;i32 = [ (0).as(&amp;i32), (0).as(&amp;i32) ];
+    {
+        let x: i32 = 5;
+        arr[0] = &amp;x;
+    }
+    print(*arr[0]);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/test2.oc</span>
+<span class="term-trap">error: borrowed pointer escapes enclosing scope</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> Array element indexing expressions (<code>arr[0]</code>) resolve to the lifetime scope of array <code>arr</code>. Because <code>arr</code> is declared in scope 1 and <code>x</code> is declared in scope 2, storing <code>&amp;x</code> into <code>arr[0]</code> is caught and rejected by the validator.
+          </div>
+        </div>
+
+        <!-- PoC 12 -->
+        <div class="example-card" id="poc-12">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #12 test3.oc &bull; Double Pointer Dereference Escaping Enclosed Scope</span>
+            <span class="badge badge-danger">CWE-466</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/test3.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>fn main() {
+    let mut dummy: i32 = 0;
+    let mut outer: &amp;i32 = &amp;dummy;
+    let mut p: &amp;mut &amp;i32 = &amp;mut outer;
+    {
+        let local: i32 = 99;
+        *p = &amp;local;
+    }
+    print(*outer);
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/test3.oc</span>
+<span class="term-trap">error: borrowed pointer escapes enclosing scope</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> The <code>EscapeValidator</code> resolves the pointee destination of <code>*p</code> back to its root variable <code>outer</code>. It checks the depth of <code>outer</code> (scope 1) against <code>local</code> (scope 2), correctly discovering the indirect escape attempt through the mutable reference.
+          </div>
+        </div>
+
+        <!-- PoC 13 -->
+        <div class="example-card" id="poc-13">
+          <div class="example-header">
+            <span class="example-title"><span class="dot"></span> #13 vec_invalidation.oc &bull; Stale Reference Read After Vector Mutation</span>
+            <span class="badge badge-danger">CWE-416</span>
+          </div>
+          <div class="example-grid">
+            <div class="code-pane">
+              <div class="pane-label">
+                <span>EXPLOIT POC: examples/exploits/vec_invalidation.oc</span>
+                <span class="badge">PoC Code</span>
+              </div>
+              <pre><code>struct Vector {
+    data: [4]i32,
+    len: usize,
+}
+
+fn append(vec: &amp;mut Vector, val: i32) {
+    vec.data[vec.len] = val;
+    vec.len = vec.len + 1;
+}
+
+fn test_invalidation() {
+    let mut vec: Vector = Vector { data: [1, 2, 3, 4], len: 1 };
+    let elem_ref: &amp;i32 = &amp;vec.data[0]; // Immutable borrow of vec element
+    
+    append(&amp;mut vec, 20); // Exclusive mutable borrow: invalidates elem_ref!
+    
+    print(*elem_ref); // Compile-time rejection: stale reference read!
+}
+
+fn main() {
+    test_invalidation();
+}</code></pre>
+            </div>
+            <div class="output-pane">
+              <div class="pane-label">
+                <span>occ COMPILER REJECTION</span>
+                <span class="badge badge-danger">BLOCKED</span>
+              </div>
+              <pre><code><span class="term-cmd">$ occ run examples/exploits/vec_invalidation.oc</span>
+<span class="term-trap">error: reference 'elem_ref' invalidated by mutable operation on 'vec'</span></code></pre>
+            </div>
+          </div>
+          <div class="explanation-box">
+            <strong>Active Defense Analysis:</strong> When <code>elem_ref</code> is borrowed from <code>vec.data[0]</code>, an active shared borrow lock is registered on <code>vec</code>. Invoking <code>append(&amp;mut vec, 20)</code> requires an exclusive mutable borrow of <code>vec</code>, which invalidates all prior shared borrows. The subsequent read of <code>*elem_ref</code> is flagged as an invalid access to stale data.
+          </div>
+        </div>
+      </section>
+
+      <!-- SECTION: SEE ALSO -->
+      <section id="see-also">
+        <h2>SEE ALSO</h2>
+        <p>
+          <a href="index.html"><strong>OC(7)</strong></a> &mdash; Language Architectural Overview, Stress Benchmarks &amp; ELF Sizing<br>
+          <a href="stdlib.html"><strong>OC-STD(3) &amp; OC-SYSCALLS(2)</strong></a> &mdash; Regional Arena Allocators &amp; Direct Linux Intrinsics<br>
+          <a href="syntax.html"><strong>OC-LANG(7)</strong></a> &mdash; Grammar Specification, Slices, Structs &amp; Types<br>
+          <a href="man-occ.html"><strong>OCC(1)</strong></a> &mdash; Self-Hosted Compiler Toolchain &amp; Machine Code Generator<br>
+          <a href="tutorial.html"><strong>W3Schools oC Tutorial</strong></a> &mdash; Hands-on Systems Programming Guide
+        </p>
+      </section>
+
+      <div class="lesson-nav">
+        <a href="man-occ.html" class="lesson-btn">← Prev: OCC(1) Compiler Toolchain</a>
+        <a href="index.html" class="lesson-btn">Return to OC(7) Overview →</a>
+      </div>
+
+      <footer>
+        oC v1.0.0 Manual Reference &bull; Active Defense &amp; Exploit Rejection Suite &bull; Zero Allocator Attack Surface
+      </footer>
+    </main>
+  </div>
 </body>
 </html>

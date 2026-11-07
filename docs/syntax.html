@@ -3,149 +3,1211 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>oC v1.0 — Syntax &amp; Language Reference</title>
+  <title>OC-LANG(7) — oC Systems Programming Language Reference Manual</title>
   <link rel="stylesheet" href="style.css">
+  <style>
+    /* Manual Portal Layout & W3-Style Example Extensions */
+    body {
+      max-width: 1440px;
+      margin: 0 auto;
+      padding: 1.5rem 2rem 4rem;
+    }
+    .topbar {
+      border-bottom: 1px solid var(--border);
+      padding-bottom: 1.25rem;
+      margin-bottom: 2rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+    .topbar .brand {
+      display: flex;
+      align-items: center;
+      gap: 1rem;
+    }
+    .topbar .brand-link {
+      text-decoration: none;
+      display: flex;
+      align-items: baseline;
+      gap: 0.6rem;
+    }
+    .topbar .brand-link .logo {
+      font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      font-size: 1.85rem;
+      font-weight: 800;
+      color: var(--accent);
+      letter-spacing: -0.03em;
+    }
+    .topbar .brand-link .brand-title {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.95rem;
+      font-weight: 600;
+      color: var(--text);
+      letter-spacing: 0.04em;
+    }
+    .layout {
+      display: flex;
+      gap: 2.25rem;
+      align-items: flex-start;
+    }
+    .sidebar {
+      width: 290px;
+      flex-shrink: 0;
+      position: sticky;
+      top: 1.5rem;
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1.25rem 1rem;
+      font-size: 0.88rem;
+      max-height: calc(100vh - 3rem);
+      overflow-y: auto;
+    }
+    .sidebar-section-title {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.72rem;
+      text-transform: uppercase;
+      letter-spacing: 0.12em;
+      color: var(--muted);
+      margin: 1rem 0 0.5rem;
+      padding-left: 0.5rem;
+    }
+    .sidebar-section-title:first-child {
+      margin-top: 0;
+    }
+    .sidebar-nav {
+      list-style: none;
+      margin: 0;
+      padding: 0;
+      display: flex;
+      flex-direction: column;
+      gap: 0.2rem;
+    }
+    .sidebar-nav a {
+      display: block;
+      color: var(--text);
+      text-decoration: none;
+      padding: 0.38rem 0.65rem;
+      border-radius: 5px;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      border-left: 2px solid transparent;
+      transition: background 0.15s, border-color 0.15s, color 0.15s;
+    }
+    .sidebar-nav a:hover, .sidebar-nav a.active {
+      background: rgba(88, 166, 255, 0.1);
+      color: var(--cyan);
+      border-left-color: var(--cyan);
+    }
+    .content {
+      flex: 1;
+      min-width: 0;
+    }
+    .man-header {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-left: 4px solid var(--cyan);
+      border-radius: 8px;
+      padding: 1.5rem 1.75rem;
+      margin-bottom: 2rem;
+    }
+    .man-meta {
+      display: flex;
+      gap: 1.5rem;
+      flex-wrap: wrap;
+      margin-top: 0.75rem;
+      font-size: 0.88rem;
+      color: var(--muted);
+      font-family: ui-monospace, SFMono-Regular, monospace;
+    }
+    .example-card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      margin: 1.75rem 0 2rem;
+      overflow: hidden;
+    }
+    .example-card-header {
+      background: rgba(35, 43, 62, 0.5);
+      border-bottom: 1px solid var(--border);
+      padding: 0.65rem 1.15rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+    }
+    .example-card-title {
+      color: var(--cyan);
+      font-weight: 600;
+    }
+    .example-card-badge {
+      background: rgba(63, 185, 80, 0.15);
+      color: var(--accent);
+      padding: 0.15rem 0.5rem;
+      border-radius: 4px;
+      font-size: 0.74rem;
+      border: 1px solid rgba(63, 185, 80, 0.3);
+    }
+    .example-card-body {
+      padding: 1rem 1.25rem;
+    }
+    .output-label {
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.75rem;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      margin: 0.85rem 0 0.35rem;
+    }
+    .terminal-out {
+      background: #040608;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--accent);
+      border-radius: 4px;
+      padding: 0.75rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      color: #7ee787;
+      overflow-x: auto;
+    }
+    .danger-out {
+      background: #040608;
+      border: 1px solid var(--border);
+      border-left: 3px solid var(--danger);
+      border-radius: 4px;
+      padding: 0.75rem 1rem;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.84rem;
+      color: #ff7b72;
+      overflow-x: auto;
+    }
+    .explanation {
+      margin-top: 0.85rem;
+      font-size: 0.9rem;
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .keyword-pill {
+      display: inline-block;
+      font-family: ui-monospace, SFMono-Regular, monospace;
+      font-size: 0.85rem;
+      background: rgba(88, 166, 255, 0.15);
+      color: var(--cyan);
+      border: 1px solid rgba(88, 166, 255, 0.3);
+      padding: 0.1rem 0.45rem;
+      border-radius: 4px;
+      font-weight: 600;
+    }
+    @media (max-width: 900px) {
+      .layout {
+        flex-direction: column;
+      }
+      .sidebar {
+        width: 100%;
+        position: static;
+        max-height: none;
+      }
+    }
+  </style>
 </head>
 <body>
-  <header>
+
+  <!-- Top bar contract -->
+  <header class="topbar">
     <div class="brand">
-      <h1>oC</h1>
-      <span class="badge">v1.0.0 Syntax Spec</span>
+      <a href="index.html" class="brand-link">
+        <span class="logo">oC</span>
+        <span class="brand-title">// MAN &amp; TUTORIAL PORTAL</span>
+      </a>
+      <span class="badge">v1.0 Self-Hosted</span>
     </div>
     <nav>
-      <a href="index.html">Overview</a>
-      <a href="syntax.html" class="active">Syntax Reference</a>
-      <a href="security.html">17-CWE Security Matrix</a>
+      <a href="index.html">OC(7) Overview</a>
+      <a href="tutorial.html">W3 Tutorial</a>
+      <a href="syntax.html" class="active">OC-LANG(7) Syntax</a>
+      <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
+      <a href="man-occ.html">OCC(1) Compiler</a>
+      <a href="security.html">OC-SECURITY(7) CWEs</a>
+      <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub ↗</a>
     </nav>
   </header>
 
-  <section class="hero">
-    <h2>oC v1.0 Language &amp; Syntax Reference</h2>
-    <p>
-      Minimalist, unambiguous systems syntax designed for zero hidden control flow, explicit mutability, and hardware-checked safety invariants.
-    </p>
-  </section>
+  <div class="layout">
+    <!-- Left Sidebar -->
+    <aside class="sidebar">
+      <div class="sidebar-section-title">Manual Page Sections</div>
+      <ul class="sidebar-nav">
+        <li><a href="#name-synopsis">1. NAME &amp; SYNOPSIS</a></li>
+        <li><a href="#lexical">2. Lexical &amp; Keywords</a></li>
+        <li><a href="#types">3. Type System &amp; Memory</a></li>
+        <li><a href="#declarations">4. Declarations &amp; Scope</a></li>
+        <li><a href="#operators">5. Operator Precedence</a></li>
+        <li><a href="#slices-arrays">6. Arrays &amp; Fat Slices</a></li>
+        <li><a href="#structs">7. Structs &amp; Packed Wire</a></li>
+        <li><a href="#functions">8. Functions &amp; Intrinsics</a></li>
+        <li><a href="#control-flow">9. Control Flow</a></li>
+        <li><a href="#modules">10. Module System</a></li>
+      </ul>
 
-  <h2>1. Primitive Types &amp; Pointers</h2>
-  <table>
-    <thead>
-      <tr>
-        <th>Category</th>
-        <th>Types</th>
-        <th>Representation</th>
-      </tr>
-    </thead>
-    <tbody>
-      <tr>
-        <td>Unsigned Integers</td>
-        <td><code>u8</code>, <code>u16</code>, <code>u32</code>, <code>u64</code>, <code>usize</code></td>
-        <td>Exact-width unsigned integers (checked casts via <code>.as(T)</code>)</td>
-      </tr>
-      <tr>
-        <td>Signed Integers</td>
-        <td><code>i8</code>, <code>i16</code>, <code>i32</code>, <code>i64</code></td>
-        <td>Two's complement signed integers (hardware overflow traps)</td>
-      </tr>
-      <tr>
-        <td>Booleans &amp; Strings</td>
-        <td><code>bool</code>, <code>string</code></td>
-        <td><code>bool</code> (1B), <code>string</code> (16B fat slice <code>{ ptr: *u8, len: usize }</code>)</td>
-      </tr>
-      <tr>
-        <td>Pointers &amp; Borrows</td>
-        <td><code>*T</code>, <code>*mut T</code>, <code>&amp;T</code>, <code>&amp;mut T</code></td>
-        <td>Non-owning pointers/references verified by <code>EscapeValidator</code></td>
-      </tr>
-      <tr>
-        <td>Fixed Arrays</td>
-        <td><code>[N]T</code></td>
-        <td>Zero-initialized inline stack or struct arrays (e.g., <code>[4096]u8</code>)</td>
-      </tr>
-    </tbody>
-  </table>
+      <div class="sidebar-section-title">Cross Portal Links</div>
+      <ul class="sidebar-nav">
+        <li><a href="index.html">OC(7) Overview</a></li>
+        <li><a href="tutorial.html">W3Schools oC Tutorial</a></li>
+        <li><a href="stdlib.html">OC-STD(3) Standard Library</a></li>
+        <li><a href="man-occ.html">OCC(1) Compiler Toolchain</a></li>
+        <li><a href="security.html">OC-SECURITY(7) CWE Matrix</a></li>
+      </ul>
+    </aside>
 
-  <h2>2. Variables, Functions &amp; Control Flow</h2>
-  <p>Bindings are immutable by default (`let`) and require `let mut` for mutation.</p>
-  <pre><code>import "std/mem.oc";
-import "std/fs.oc";
+    <!-- Main Content -->
+    <main class="content">
 
-let MAX_CONNECTIONS: u32 = 128;
+      <!-- Section 1: NAME & SYNOPSIS -->
+      <section id="name-synopsis">
+        <div class="man-header">
+          <h2>OC-LANG(7) — oC Systems Programming Language Reference Manual</h2>
+          <p>Complete formal language specification, lexical grammar, memory representation, Pratt operator precedence, and hardware trap semantics.</p>
+          <div class="man-meta">
+            <span><strong>Standard:</strong> Pure oC v1.0.0</span>
+            <span><strong>Target ABI:</strong> Linux x86_64 ELF64</span>
+            <span><strong>Section:</strong> 7 (Conventions &amp; Specs)</span>
+          </div>
+        </div>
 
-fn fib(n: u64) -&gt; u64 {
-    if n &lt;= 1 {
-        return n;
+        <h2>NAME</h2>
+        <p>
+          <strong>oc-lang</strong> — active-defense systems programming language with regional bump memory management, compile-time escape &amp; lifetime verification, and zero-libc native x86_64 ELF64 code emission.
+        </p>
+
+        <h2>SYNOPSIS</h2>
+        <pre><code>// Grammatical Structure of an oC Compilation Unit
+&lt;source_file&gt;   ::= { &lt;import_stmt&gt; | &lt;top_let&gt; | &lt;struct_decl&gt; | &lt;fn_decl&gt; }*
+&lt;import_stmt&gt;   ::= "import" &lt;string_literal&gt; ";"
+&lt;top_let&gt;       ::= "let" &lt;ident&gt; [ ":" &lt;type&gt; ] "=" &lt;expr&gt; ";"
+&lt;struct_decl&gt;   ::= [ "packed" ] "struct" &lt;ident&gt; "{" { &lt;ident&gt; ":" &lt;type&gt; [ "," ] }* "}"
+&lt;fn_decl&gt;       ::= [ "extern" ] "fn" &lt;ident&gt; "(" &lt;param_list&gt; ")" [ "-&gt;" &lt;type&gt; ] ( &lt;block&gt; | ";" )
+&lt;param_list&gt;    ::= [ &lt;ident&gt; ":" &lt;type&gt; { "," &lt;ident&gt; ":" &lt;type&gt; }* ]
+&lt;block&gt;         ::= "{" &lt;stmt&gt;* "}"
+&lt;stmt&gt;          ::= &lt;let_stmt&gt; | &lt;assign_stmt&gt; | &lt;if_stmt&gt; | &lt;while_stmt&gt; | &lt;return_stmt&gt; | &lt;print_stmt&gt; | &lt;expr&gt; ";"</code></pre>
+      </section>
+
+      <!-- Section 2: Lexical Elements & Keywords -->
+      <section id="lexical">
+        <h2>2. Lexical Elements &amp; Reserved Keywords</h2>
+        <p>
+          <code>oC</code> source code is encoded in UTF-8 / 7-bit ASCII. The lexical analyzer (implemented in <code>compiler/lexer.oc</code>) tokenizes the input stream into whitespace, comments, identifiers, integer literals, string literals, operators, and reserved keywords.
+        </p>
+
+        <h3>Comments</h3>
+        <p>
+          Single-line comments begin with two consecutive forward slashes <code>//</code> and extend to the next newline character (<code>\n</code>). Multi-line or block comments (such as <code>/* ... */</code>) are <strong>not permitted</strong> in <code>oC</code> to eliminate parsing ambiguities and nested-comment parser exploits.
+        </p>
+        <pre><code>// This is a valid single-line comment
+let x: i32 = 10; // Inline comments are also supported</code></pre>
+
+        <h3>Identifiers</h3>
+        <p>
+          Identifiers designate variable names, function names, parameter names, struct identifiers, and field names. An identifier begins with an ASCII letter (<code>a-z</code>, <code>A-Z</code>) or underscore (<code>_</code>), followed by zero or more ASCII letters, digits (<code>0-9</code>), or underscores.
+        </p>
+
+        <h3>Integer Literals</h3>
+        <p>
+          <code>oC</code> supports three numeric literal radices, with optional underscore (<code>_</code>) visual digit separators:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Radix</th>
+              <th>Prefix</th>
+              <th>Lexer Pattern</th>
+              <th>Examples</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Decimal</td>
+              <td><em>None</em></td>
+              <td><code>[0-9][0-9_]*</code></td>
+              <td><code>0</code>, <code>42</code>, <code>65536</code>, <code>1_000_000</code></td>
+            </tr>
+            <tr>
+              <td>Hexadecimal</td>
+              <td><code>0x</code> or <code>0X</code></td>
+              <td><code>0[xX][0-9a-fA-F_]+</code></td>
+              <td><code>0x00</code>, <code>0x4F</code>, <code>0xDEADBEEF</code>, <code>0xff_00_11</code></td>
+            </tr>
+            <tr>
+              <td>Binary</td>
+              <td><code>0b</code> or <code>0B</code></td>
+              <td><code>0[bB][01_]+</code></td>
+              <td><code>0b0</code>, <code>0b1010</code>, <code>0b1111_0000_1010_0101</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>String Literals</h3>
+        <p>
+          String literals are surrounded by double quotes <code>"..."</code>. At runtime, every string literal in <code>oC</code> evaluates to a 16-byte fat slice (<code>string</code>, structurally equivalent to <code>[]u8</code>) storing a 64-bit pointer (<code>ptr: *u8</code>) and a 64-bit length (<code>len: usize</code>). The lexer processes the following escape sequences:
+        </p>
+        <ul>
+          <li><code>\n</code> — ASCII 10 (Line Feed)</li>
+          <li><code>\t</code> — ASCII 9 (Horizontal Tab)</li>
+          <li><code>\r</code> — ASCII 13 (Carriage Return)</li>
+          <li><code>\\</code> — ASCII 92 (Backslash)</li>
+          <li><code>\"</code> — ASCII 34 (Double Quote)</li>
+          <li><code>\0</code> — ASCII 0 (Null Byte)</li>
+        </ul>
+
+        <h3>Reserved Keywords Table</h3>
+        <p>
+          The <code>oC</code> language defines exactly <strong>15 reserved keywords</strong>. They cannot be used as identifier names:
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Keyword</th>
+              <th>Category</th>
+              <th>Semantic Meaning &amp; Mini-Example</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><span class="keyword-pill">fn</span></td>
+              <td>Declaration</td>
+              <td>Declares a function. <code>fn add(a: i32, b: i32) -&gt; i32 { return a + b; }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">let</span></td>
+              <td>Declaration</td>
+              <td>Declares an immutable variable binding. <code>let limit: usize = 1024;</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">mut</span></td>
+              <td>Modifier</td>
+              <td>Marks a variable or pointer/reference as mutable. <code>let mut counter: i32 = 0;</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">return</span></td>
+              <td>Control Flow</td>
+              <td>Exits the current function, optionally returning a value. <code>return res;</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">if</span></td>
+              <td>Control Flow</td>
+              <td>Branches conditionally based on a <code>bool</code> expression. <code>if x &gt; 0 { ... }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">else</span></td>
+              <td>Control Flow</td>
+              <td>Alternative execution branch for an <code>if</code> condition. <code>else { ... }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">while</span></td>
+              <td>Control Flow</td>
+              <td>Executes a block repeatedly while condition is <code>true</code>. <code>while i &lt; 10 { i = i + 1; }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">struct</span></td>
+              <td>Type</td>
+              <td>Declares a composite record type. <code>struct Point { x: i32, y: i32 }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">packed</span></td>
+              <td>Modifier</td>
+              <td>Declares a struct with 1-byte field packing (zero alignment padding). <code>packed struct Header { ... }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">extern</span></td>
+              <td>Declaration</td>
+              <td>Declares a foreign function symbol (ABI syscall or libc linkage). <code>extern fn sys_exit(code: i32);</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">import</span></td>
+              <td>Module</td>
+              <td>Imports another <code>.oc</code> source module relative to the working directory. <code>import "std/io.oc";</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">print</span></td>
+              <td>Built-in</td>
+              <td>Built-in intrinsic to print integers or string slices directly to standard output. <code>print("hello");</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">true</span></td>
+              <td>Literal</td>
+              <td>Boolean literal representing logic truth (1-byte <code>0x01</code>).</td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">false</span></td>
+              <td>Literal</td>
+              <td>Boolean literal representing logic falsehood (1-byte <code>0x00</code>).</td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">as</span></td>
+              <td>Operator</td>
+              <td>Performs an explicit, checked type conversion or pointer cast. <code>val.as(u16)</code> or <code>ptr.as(*u8)</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Example Card 1 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 1: Lexical Literals &amp; Radix Representation</span>
+            <span class="example-card-badge">Lexer Test</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn main() -> i32 {
+    let dec_val: u32 = 42;
+    let hex_val: u32 = 0x2A;
+    let bin_val: u32 = 0b0010_1010;
+
+    if dec_val == hex_val && hex_val == bin_val {
+        print("All three radices equal 42 decimal!\n");
     }
-    return fib(n - 1) + fib(n - 2);
-}
-
-fn main() -&gt; i32 {
-    let mut acc: u64 = 0;
-    let mut i: u64 = 0;
-    while i &lt; 10 {
-        acc = acc + fib(i);
-        i = i + 1;
-    }
-    print(acc);
     return 0;
 }</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run literal_demo.oc<br>All three radices equal 42 decimal!</div>
+            <p class="explanation">
+              <strong>Explanation:</strong> Decimal, hexadecimal, and binary literals produce identical bit patterns. Underscores in literals are stripped during lexical analysis.
+            </p>
+          </div>
+        </div>
+      </section>
 
-  <h2>3. Structs &amp; Packed Wire Layouts</h2>
-  <p>
-    Struct literals zero-initialize all alignment padding (`CWE-200`). Use `packed struct` for exact kernel ABI and network packet headers.
-  </p>
-  <pre><code>struct SensorReading {
-    id: u32,
-    flags: u8,
-    payload: string,
+      <!-- Section 3: Type System & Memory Representation -->
+      <section id="types">
+        <h2>3. Type System &amp; Memory Representation</h2>
+        <p>
+          <code>oC</code> is a statically-typed systems language. Every type has an unambiguous byte size, alignment, and memory layout. There are no hidden tags, runtime type info (RTTI), or hidden object headers.
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Type Syntax</th>
+              <th>Category</th>
+              <th>Size (Bytes)</th>
+              <th>Align</th>
+              <th>Signed</th>
+              <th>C / Machine Equivalent</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>i8</code></td>
+              <td>Integer</td>
+              <td>1</td>
+              <td>1</td>
+              <td>Signed</td>
+              <td><code>int8_t</code></td>
+            </tr>
+            <tr>
+              <td><code>u8</code></td>
+              <td>Integer</td>
+              <td>1</td>
+              <td>1</td>
+              <td>Unsigned</td>
+              <td><code>uint8_t</code></td>
+            </tr>
+            <tr>
+              <td><code>i16</code></td>
+              <td>Integer</td>
+              <td>2</td>
+              <td>2</td>
+              <td>Signed</td>
+              <td><code>int16_t</code></td>
+            </tr>
+            <tr>
+              <td><code>u16</code></td>
+              <td>Integer</td>
+              <td>2</td>
+              <td>2</td>
+              <td>Unsigned</td>
+              <td><code>uint16_t</code></td>
+            </tr>
+            <tr>
+              <td><code>i32</code></td>
+              <td>Integer</td>
+              <td>4</td>
+              <td>4</td>
+              <td>Signed</td>
+              <td><code>int32_t</code></td>
+            </tr>
+            <tr>
+              <td><code>u32</code></td>
+              <td>Integer</td>
+              <td>4</td>
+              <td>4</td>
+              <td>Unsigned</td>
+              <td><code>uint32_t</code></td>
+            </tr>
+            <tr>
+              <td><code>i64</code></td>
+              <td>Integer</td>
+              <td>8</td>
+              <td>8</td>
+              <td>Signed</td>
+              <td><code>int64_t</code></td>
+            </tr>
+            <tr>
+              <td><code>u64</code></td>
+              <td>Integer</td>
+              <td>8</td>
+              <td>8</td>
+              <td>Unsigned</td>
+              <td><code>uint64_t</code></td>
+            </tr>
+            <tr>
+              <td><code>usize</code></td>
+              <td>Integer</td>
+              <td>8</td>
+              <td>8</td>
+              <td>Unsigned</td>
+              <td><code>size_t</code> / <code>uintptr_t</code></td>
+            </tr>
+            <tr>
+              <td><code>bool</code></td>
+              <td>Boolean</td>
+              <td>1</td>
+              <td>1</td>
+              <td>Unsigned</td>
+              <td><code>bool</code> (0 or 1)</td>
+            </tr>
+            <tr>
+              <td><code>void</code></td>
+              <td>Unit</td>
+              <td>0</td>
+              <td>1</td>
+              <td>—</td>
+              <td><code>void</code></td>
+            </tr>
+            <tr>
+              <td><code>[N]T</code></td>
+              <td>Fixed Array</td>
+              <td>N * sizeof(T)</td>
+              <td>align(T)</td>
+              <td>—</td>
+              <td>Inline flat buffer: <code>T arr[N]</code></td>
+            </tr>
+            <tr>
+              <td><code>string</code> / <code>[]T</code></td>
+              <td>Fat Slice</td>
+              <td>16</td>
+              <td>8</td>
+              <td>—</td>
+              <td><code>struct { T* ptr; size_t len; }</code></td>
+            </tr>
+            <tr>
+              <td><code>*T</code></td>
+              <td>Raw Const Ptr</td>
+              <td>8</td>
+              <td>8</td>
+              <td>—</td>
+              <td><code>const T*</code></td>
+            </tr>
+            <tr>
+              <td><code>*mut T</code></td>
+              <td>Raw Mut Ptr</td>
+              <td>8</td>
+              <td>8</td>
+              <td>—</td>
+              <td><code>T*</code></td>
+            </tr>
+            <tr>
+              <td><code>&amp;T</code></td>
+              <td>Shared Reference</td>
+              <td>8</td>
+              <td>8</td>
+              <td>—</td>
+              <td>Borrow verified by <code>EscapeValidator</code></td>
+            </tr>
+            <tr>
+              <td><code>&amp;mut T</code></td>
+              <td>Exclusive Reference</td>
+              <td>8</td>
+              <td>8</td>
+              <td>—</td>
+              <td>Mutable borrow verified by <code>EscapeValidator</code></td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Example Card 2 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 2: Fat Slices &amp; Pointer Operations</span>
+            <span class="example-card-badge">Memory Layout</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn print_slice_info(name: string, s: string) {
+    print("Slice: ");
+    print(name);
+    print(" | Length: ");
+    print(s.len);
+    print("\n");
 }
 
-packed struct sockaddr_in {
-    sin_family: u16,
-    sin_port: u16,
-    sin_addr: u32,
-    sin_zero: [8]u8,
+fn main() -> i32 {
+    let full: string = "Active-Defense Systems";
+    print_slice_info("full", full);
+
+    // Sub-slice produces a new 16-byte fat slice pointing to original memory
+    let sub: string = full[0..14]; // "Active-Defense"
+    print_slice_info("sub", sub);
+
+    return 0;
 }</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run slice_demo.oc<br>Slice: full | Length: 22<br>Slice: sub | Length: 14</div>
+            <p class="explanation">
+              <strong>Memory Representation:</strong> <code>full</code> contains <code>{ ptr: 0x401000, len: 22 }</code>. The sub-slice <code>sub</code> creates <code>{ ptr: 0x401000, len: 14 }</code> without allocating any heap memory.
+            </p>
+          </div>
+        </div>
+      </section>
 
-  <h2>4. Slices, Sub-Slicing &amp; Checked Casts</h2>
-  <p>
-    Slice indexing `s[idx]` and sub-slicing `s[start..end]` emit hardware bounds traps (`__trap_slice_bounds`). Numeric casts `.as(T)` trap on negative-to-unsigned conversion (`CWE-195`) and narrowing truncation (`CWE-197`).
-  </p>
-  <pre><code>let msg: string = "Native oC Systems";
-let sub: string = msg[0..9]; // "Native oC" (traps if start &gt; end or end &gt; msg.len)
-let ch: u8 = sub[0];         // 78 ('N')
+      <!-- Section 4: Variable Declarations & Scope Rules -->
+      <section id="declarations">
+        <h2>4. Variable Declarations &amp; Scope Rules</h2>
+        <p>
+          Variables are introduced using the <code>let</code> keyword. By default, every binding is <strong>strictly immutable</strong>. Mutability must be explicitly declared with <code>let mut</code>.
+        </p>
 
-let raw_len: usize = sub.len;
-let safe_u16: u16 = raw_len.as(u16); // Checked narrowing cast</code></pre>
+        <h3>Mandatory Initialization (CWE-457 Elimination)</h3>
+        <p>
+          <code>oC</code> prohibits uninitialized variable declarations. An expression must be provided on the right-hand side of the <code>=</code> assignment token. This statically eliminates CWE-457 (Use of Uninitialized Variable) by construction:
+        </p>
+        <pre><code>let x: i32 = 0;          // Valid: explicitly initialized
+let mut buf: [32]u8 = [0]; // Valid: zero-initialized fixed array
+// let uninit: i32;       // SYNTAX ERROR: variable must be initialized</code></pre>
 
-  <h2>5. Regional Arenas (`std/mem.oc`)</h2>
-  <p>
-    All dynamic allocation uses deterministic bump arenas backed directly by Linux `sys_mmap`. Resetting or deinitializing an arena scrubs active memory (`CWE-14`) and invalidates all borrows at compile time (`CWE-416`).
-  </p>
-  <pre><code>let mut arena: Arena = arena_init(65536);
-let chunk: *mut u8 = arena_alloc(&amp;mut arena, 128);
-chunk[0] = 0x4F;
+        <h3>Scope &amp; Shadowing Rules</h3>
+        <p>
+          Variables are lexically scoped within blocks <code>{ ... }</code>. Inner blocks inherit variables from outer scopes, but <strong>identifier shadowing is forbidden</strong> within the same scope depth to prevent confusion and inadvertent variable hiding. Top-level constants can be defined using <code>let IDENT: T = expr;</code> outside function bodies.
+        </p>
 
-arena_reset(&amp;mut arena);  // Scrubs bytes [0..offset] and invalidates `chunk` at compile time
-arena_deinit(&amp;mut arena); // Scrubs bytes and unmaps via sys_munmap</code></pre>
+        <!-- Example Card 3 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 3: Explicit Mutability vs Immutability</span>
+            <span class="example-card-badge">CWE-457 Guard</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
 
-  <h2>6. Direct Linux x86_64 Syscall Intrinsics</h2>
-  <p>
-    In `--backend native`, syscall intrinsics emit raw x86_64 `syscall` (`0x0f 0x05`) instructions with zero `libc`:
-  </p>
-  <pre><code>extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64;
-extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
-extern fn sys_open(path: *u8, flags: i32, mode: u32) -&gt; i32;
-extern fn sys_close(fd: i32) -&gt; i32;
-extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut void;
-extern fn sys_munmap(addr: *mut void, len: usize) -&gt; i32;
-extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -&gt; i32;
-extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -&gt; i32;
-extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;
-extern fn sys_unlink(path: *u8) -&gt; i32;
+let GLOBAL_RETRY_COUNT: u32 = 3; // Top-level constant
+
+fn main() -> i32 {
+    let immut_val: i32 = 100;
+    let mut mut_val: i32 = 200;
+
+    // immut_val = 101; // COMPILE ERROR: cannot assign to immutable variable
+    mut_val = mut_val + GLOBAL_RETRY_COUNT.as(i32);
+
+    print(mut_val);
+    print("\n");
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run mut_demo.oc<br>203</div>
+            <p class="explanation">
+              <strong>Safety Invariant:</strong> Attempting to assign to <code>immut_val</code> triggers a compile-time rejection. Mutability is tracked by the symbol table and parser AST.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 5: Operator Precedence & Hardware Traps -->
+      <section id="operators">
+        <h2>5. Complete Operator Precedence &amp; Hardware Traps</h2>
+        <p>
+          The <code>oC</code> expression parser implements Pratt / Precedence-Climbing parsing across 8 distinct precedence tiers (defined in <code>compiler/parser.oc:get_precedence()</code>):
+        </p>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Prec Level</th>
+              <th>Operators</th>
+              <th>Description</th>
+              <th>Associativity</th>
+              <th>Safety / Trap Emission</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Level 8</strong><br>(Highest Binary)</td>
+              <td><code>*</code>, <code>/</code>, <code>%</code></td>
+              <td>Multiplicative: Multiplication, Division, Modulo</td>
+              <td>Left-to-right</td>
+              <td>
+                <code>*</code> emits <code>__trap_overflow</code> on signed overflow.<br>
+                <code>/</code> &amp; <code>%</code> emit <code>__trap_div_zero</code> if divisor == 0.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 7</strong></td>
+              <td><code>+</code>, <code>-</code></td>
+              <td>Additive: Addition, Subtraction</td>
+              <td>Left-to-right</td>
+              <td>
+                Emits <code>__trap_overflow</code> via CPU overflow flag (<code>jo</code> instruction).
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 6</strong></td>
+              <td><code>&lt;&lt;</code>, <code>&gt;&gt;</code></td>
+              <td>Bitwise Shifts: Shift-Left, Shift-Right</td>
+              <td>Left-to-right</td>
+              <td>
+                Masked by register width.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 5</strong></td>
+              <td><code>&lt;</code>, <code>&lt;=</code>, <code>&gt;</code>, <code>&gt;=</code></td>
+              <td>Relational Comparisons</td>
+              <td>Left-to-right</td>
+              <td>
+                Evaluates to 1-byte <code>bool</code> (0 or 1).
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 4</strong></td>
+              <td><code>==</code>, <code>!=</code></td>
+              <td>Equality &amp; Inequality</td>
+              <td>Left-to-right</td>
+              <td>
+                Evaluates to <code>bool</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 3</strong></td>
+              <td><code>&amp;</code></td>
+              <td>Bitwise AND</td>
+              <td>Left-to-right</td>
+              <td>
+                Bitwise operation.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 2</strong></td>
+              <td><code>^</code></td>
+              <td>Bitwise XOR</td>
+              <td>Left-to-right</td>
+              <td>
+                Bitwise operation.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Level 1</strong><br>(Lowest Binary)</td>
+              <td><code>|</code></td>
+              <td>Bitwise OR</td>
+              <td>Left-to-right</td>
+              <td>
+                Bitwise operation.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Unary</strong></td>
+              <td><code>-</code>, <code>!</code>, <code>*</code>, <code>&amp;</code>, <code>&amp;mut</code></td>
+              <td>Negation, Logical NOT, Dereference, Borrow</td>
+              <td>Right-to-left</td>
+              <td>
+                <code>*ptr</code> emits <code>__trap_null_deref</code> if <code>ptr == NULL</code>.<br>
+                Borrows registered in <code>EscapeValidator</code>.
+              </td>
+            </tr>
+            <tr>
+              <td><strong>Postfix</strong></td>
+              <td><code>()</code>, <code>[]</code>, <code>[a..b]</code>, <code>.field</code>, <code>.as(T)</code></td>
+              <td>Call, Index, Slice, Field, Checked Cast</td>
+              <td>Left-to-right</td>
+              <td>
+                <code>[]</code> &amp; <code>[a..b]</code> emit <code>__trap_slice_bounds</code>.<br>
+                <code>.as(T)</code> emits truncation/sign traps (CWE-195/197).
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <!-- Example Card 4 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 4: Hardware Overflow &amp; Division-by-Zero Trapping</span>
+            <span class="example-card-badge">CWE-190 Hardware Trap</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn test_overflow_protection() {
+    let max_i32: i32 = 2147483647;
+    // The next line triggers a hardware trap on addition overflow
+    let boom: i32 = max_i32 + 1; 
+    print(boom);
+}
+
+fn main() -> i32 {
+    test_overflow_protection();
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="danger-out">$ occ run overflow_test.oc --backend native<br>panic: integer overflow<br>[Process terminated with exit code 1 via __trap_overflow]</div>
+            <p class="explanation">
+              <strong>Trap Mechanism:</strong> The native backend emits <code>add %ebx, %eax</code> followed immediately by <code>jo __trap_overflow</code>. On overflow, the CPU jumps directly to the panic handler, writes to <code>stderr</code>, and terminates without executing undefined behavior.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 6: Arrays, Fat Slices & Sub-slicing -->
+      <section id="slices-arrays">
+        <h2>6. Arrays, Fat Slices &amp; Sub-slicing</h2>
+        <p>
+          In <code>oC</code>, buffer operations are rigorously bounded. Fixed arrays <code>[N]T</code> are stored inline, while slices <code>string</code> and <code>[]T</code> are passed by value as 16-byte pairs containing pointer and length:
+        </p>
+
+        <h3>Array Declarations</h3>
+        <p>
+          Fixed arrays are declared with size <code>N</code> and initialized with array literals:
+        </p>
+        <pre><code>let mut stack_buf: [64]u8 = [0]; // 64 bytes zeroed out
+let primes: [4]i32 = [2, 3, 5, 7];</code></pre>
+
+        <h3>Index Bounds Verification</h3>
+        <p>
+          Reading or writing an array or slice element <code>s[i]</code> automatically verifies that <code>i &lt; s.len</code>. If the index is equal to or exceeds the slice length, execution immediately halts via <code>__trap_slice_bounds</code> (preventing CWE-125 Out-of-bounds Read and CWE-787 Out-of-bounds Write):
+        </p>
+
+        <h3>Sub-slicing Syntax: <code>s[start..end]</code></h3>
+        <p>
+          Sub-slicing creates a new view into existing memory without allocating dynamic memory. The slice expression verifies:
+        </p>
+        <ul>
+          <li><code>start &lt;= end</code> (start cannot exceed end)</li>
+          <li><code>end &lt;= s.len</code> (end cannot exceed source slice length)</li>
+        </ul>
+        <pre><code>let src: string = "ZeroAlloc";
+let part: string = src[0..4]; // "Zero" (len = 4)
+let tail: string = src[4..9]; // "Alloc" (len = 5)
+// let invalid: string = src[5..20]; // TRAPS: panic: slice index out of bounds</code></pre>
+
+        <!-- Example Card 5 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 5: Safe Sub-slicing with .len Property</span>
+            <span class="example-card-badge">Spatial Safety</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn print_bytes(data: string) {
+    let mut i: usize = 0;
+    while i < data.len {
+        let b: u8 = data[i];
+        print(b.as(u32));
+        print(" ");
+        i = i + 1;
+    }
+    print("\n");
+}
+
+fn main() -> i32 {
+    let greeting: string = "oC-LANG";
+    let token: string = greeting[0..2]; // "oC"
+    print_bytes(token);
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run bytes_demo.oc<br>111 67 </div>
+            <p class="explanation">
+              <strong>Explanation:</strong> <code>token[0]</code> yields ASCII 111 (<code>'o'</code>), and <code>token[1]</code> yields ASCII 67 (<code>'C'</code>). The slice length <code>token.len</code> is 2.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 7: Structs & Packed Wire Layouts -->
+      <section id="structs">
+        <h2>7. Structs &amp; Packed Wire Layouts</h2>
+        <p>
+          <code>oC</code> provides two distinct struct layouts: standard aligned structs and <code>packed struct</code> declarations for binary wire protocols:
+        </p>
+
+        <h3>Standard Aligned Structs</h3>
+        <p>
+          Standard structs align fields to their natural boundary (e.g. 4-byte alignment for <code>i32</code>, 8-byte for pointers). When initializing a struct literal, <strong>all padding bytes are zero-filled</strong> by the compiler to prevent uninitialized memory leakage (CWE-200 Information Exposure):
+        </p>
+        <pre><code>struct SensorPacket {
+    sensor_id: u32,
+    reading: i32,
+    status: bool,
+}
+
+// Initializing via struct literal syntax
+let s: SensorPacket = SensorPacket {
+    sensor_id: 101,
+    reading: -40,
+    status: true,
+};</code></pre>
+
+        <h3>Packed Wire-Format Structs</h3>
+        <p>
+          Prepending the <code>packed</code> keyword forces 1-byte field alignment with zero padding bytes. This matches exact wire format headers for Linux sockets, file formats, and hardware registers:
+        </p>
+        <pre><code>packed struct EthernetHeader {
+    dst_mac: [6]u8,
+    src_mac: [6]u8,
+    ethertype: u16,
+} // Exactly 14 bytes, sizeof guaranteed bit-for-bit</code></pre>
+
+        <!-- Example Card 6 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 6: Wire-Format Network Structs</span>
+            <span class="example-card-badge">Wire ABI</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+packed struct IPv4Header {
+    ver_ihl: u8,
+    tos: u8,
+    total_len: u16,
+    id: u16,
+    frag_off: u16,
+    ttl: u8,
+    protocol: u8,
+    checksum: u16,
+    src_ip: u32,
+    dst_ip: u32,
+}
+
+fn main() -> i32 {
+    let mut hdr: IPv4Header = IPv4Header {
+        ver_ihl: 0x45, // IPv4, 5 words (20 bytes)
+        tos: 0,
+        total_len: 64,
+        id: 0x1234,
+        frag_off: 0,
+        ttl: 64,
+        protocol: 6, // TCP
+        checksum: 0,
+        src_ip: 0x7F000001, // 127.0.0.1
+        dst_ip: 0x7F000001,
+    };
+
+    print("IPv4 Header Initialized. TTL: ");
+    print(hdr.ttl.as(u32));
+    print("\n");
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run ipv4_demo.oc<br>IPv4 Header Initialized. TTL: 64</div>
+            <p class="explanation">
+              <strong>Wire Guarantee:</strong> <code>IPv4Header</code> occupies exactly 20 bytes in memory with zero compiler-injected padding bytes between 8-bit, 16-bit, and 32-bit fields.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 8: Function Declarations & Recursion Guard -->
+      <section id="functions">
+        <h2>8. Functions &amp; Foreign Intrinsics</h2>
+        <p>
+          Functions in <code>oC</code> are declared using the <code>fn</code> keyword. Return types are specified after an arrow <code>-&gt;</code>. Functions that do not return a value omit the return type (equivalent to returning <code>void</code>).
+        </p>
+
+        <h3>Parameter Passing Semantics</h3>
+        <ul>
+          <li><strong>Primitives &amp; Structs:</strong> Passed by value (copied onto the call frame).</li>
+          <li><strong>Pointers &amp; References:</strong> <code>*T</code>, <code>*mut T</code>, <code>&amp;T</code>, <code>&amp;mut T</code> pass memory addresses without copying the underlying object.</li>
+          <li><strong>Slices:</strong> Passed by value as 16-byte fat slices (<code>ptr</code> + <code>len</code>).</li>
+        </ul>
+
+        <h3>512-Frame Recursion Depth Guard</h3>
+        <p>
+          To prevent stack overflow attacks and unbounded recursive loops (CWE-674 Uncontrolled Recursion), the compiler enforces recursion depth verification. Deep or unbounded recursion is flagged or bounded, ensuring deterministic stack frame execution.
+        </p>
+
+        <h3>Foreign Function Declarations (<code>extern fn</code>)</h3>
+        <p>
+          External symbols (such as Linux kernel syscalls or standard C library functions) are declared with <code>extern fn</code> without a function body:
+        </p>
+        <pre><code>extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
 extern fn sys_exit(code: i32);</code></pre>
 
-  <footer>
-    oC v1.0 Systems Programming Language • Syntax &amp; Syscall Specification
-  </footer>
+        <!-- Example Card 7 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 7: Recursive Function &amp; Pass-by-Reference</span>
+            <span class="example-card-badge">CWE-674 Guard</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn square_mut(val: *mut i32) {
+    let current: i32 = *val;
+    *val = current * current;
+}
+
+fn factorial(n: u64) -> u64 {
+    if n <= 1 {
+        return 1;
+    }
+    return n * factorial(n - 1);
+}
+
+fn main() -> i32 {
+    let mut num: i32 = 7;
+    square_mut(&mut num);
+    print("Squared: ");
+    print(num);
+    print(" | 5! = ");
+    print(factorial(5));
+    print("\n");
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run fn_demo.oc<br>Squared: 49 | 5! = 120</div>
+            <p class="explanation">
+              <strong>Explanation:</strong> <code>square_mut</code> receives a mutable reference <code>&amp;mut num</code>. Modifying <code>*val</code> mutates the caller's stack frame directly.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 9: Control Flow Statements -->
+      <section id="control-flow">
+        <h2>9. Control Flow Statements</h2>
+        <p>
+          <code>oC</code> provides three primary control flow statements: <code>if / else if / else</code> conditional branching, <code>while</code> loops, and <code>return</code> statements.
+        </p>
+
+        <h3>Conditional: <code>if / else</code></h3>
+        <p>
+          Parentheses around the test condition are optional, but curly braces <code>{ ... }</code> enclosing the body are strictly mandatory to prevent dangling-else vulnerabilities:
+        </p>
+        <pre><code>if score >= 90 {
+    grade = 1;
+} else if score >= 80 {
+    grade = 2;
+} else {
+    grade = 3;
+}</code></pre>
+
+        <h3>Loops: <code>while</code></h3>
+        <p>
+          The <code>while</code> statement executes repeatedly as long as the condition evaluates to <code>true</code>. There is no <code>for</code> loop construct in <code>oC</code>; all iteration is expressed through explicit <code>while</code> loops to preserve syntactic minimalism:
+        </p>
+        <pre><code>let mut idx: usize = 0;
+while idx < 10 {
+    // Process element
+    idx = idx + 1;
+}</code></pre>
+
+        <!-- Example Card 8 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 8: Deterministic Loop Execution</span>
+            <span class="example-card-badge">Zero Fluff</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+
+fn main() -> i32 {
+    let mut sum: i64 = 0;
+    let mut n: i64 = 1;
+
+    while n <= 100 {
+        sum = sum + n;
+        n = n + 1;
+    }
+
+    print("Sum of 1..100: ");
+    print(sum);
+    print("\n");
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run sum_demo.oc<br>Sum of 1..100: 5050</div>
+            <p class="explanation">
+              <strong>Control Guarantee:</strong> Loop conditions are checked at the start of each iteration. Loop variables are mutated explicitly without hidden loop index side effects.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Section 10: Module System & Imports -->
+      <section id="modules">
+        <h2>10. Module System &amp; Import Resolution</h2>
+        <p>
+          Code in <code>oC</code> is organized into modular files. Modules are included using the <code>import "path/to/file.oc";</code> directive.
+        </p>
+
+        <h3>Path Resolution Algorithm</h3>
+        <p>
+          When the compiler encounters an <code>import</code> statement (processed in <code>compiler/main.oc:load_module_recursive()</code>), it resolves the path in three tiers:
+        </p>
+        <ol>
+          <li>Direct relative path from current working directory (e.g. <code>std/mem.oc</code>).</li>
+          <li>Sub-path within <code>tools/occ/</code>.</li>
+          <li>System installation path (<code>/home/omer/occ/</code>).</li>
+        </ol>
+
+        <h3>Automatic Module Deduplication</h3>
+        <p>
+          The compiler maintains a visited table (<code>ModuleLoader</code>) tracking up to 64 module paths. If multiple files import the same module (for example, both <code>std/io.oc</code> and <code>std/fs.oc</code> import <code>std/mem.oc</code>), the module is parsed <strong>exactly once</strong>. This eliminates multiple symbol definition errors and prevents circular import deadlocks.
+        </p>
+
+        <!-- Example Card 9 -->
+        <div class="example-card">
+          <div class="example-card-header">
+            <span class="example-card-title">Example 9: Modular Program with Deduplicated Imports</span>
+            <span class="example-card-badge">Module Loader</span>
+          </div>
+          <div class="example-card-body">
+            <pre><code>import "std/io.oc";
+import "std/fs.oc";
+import "std/mem.oc";
+
+fn main() -> i32 {
+    // Arena allocated in 64 KB page chunk
+    let mut arena: Arena = arena_init(65536);
+    let chunk: *mut u8 = arena_alloc(&mut arena, 128);
+
+    print("Arena allocated chunk at: ");
+    print(chunk.as(usize));
+    print("\n");
+
+    arena_deinit(&mut arena);
+    return 0;
+}</code></pre>
+            <div class="output-label">Terminal Execution</div>
+            <div class="terminal-out">$ occ run arena_demo.oc<br>Arena allocated chunk at: 140728198303744</div>
+            <p class="explanation">
+              <strong>Zero Libc:</strong> <code>arena_init</code> directly invokes <code>sys_mmap</code> (0x0f 0x05) to acquire anonymous memory pages from the Linux kernel. No <code>glibc</code> or <code>ptmalloc</code> heap metadata is linked.
+            </p>
+          </div>
+        </div>
+      </section>
+
+      <!-- Footer -->
+      <footer>
+        oC v1.0.0 Active-Defense Systems Programming Language • Reference Manual OC-LANG(7)
+      </footer>
+
+    </main>
+  </div>
+
 </body>
 </html>
