@@ -5,62 +5,26 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>OC-STD(3) &amp; OC-SYSCALLS(2) — oC Standard Library &amp; Syscall Manual</title>
   <link rel="stylesheet" href="style.css">
-  <style>
-    /* Section-specific styling enhancements */
-    .fn-box {
-      background: var(--panel);
-      border: 1px solid var(--border);
-      border-radius: 8px;
-      padding: 1.25rem 1.5rem;
-      margin-bottom: 1.5rem;
-    }
-    .fn-sig {
-      background: var(--code-bg);
-      border-left: 3px solid var(--cyan);
-      padding: 0.65rem 1rem;
-      margin: 0.75rem 0 1rem;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      font-size: 0.92rem;
-      color: #79c0ff;
-      border-radius: 0 4px 4px 0;
-      overflow-x: auto;
-    }
-    .sys-num {
-      display: inline-block;
-      font-family: ui-monospace, SFMono-Regular, monospace;
-      background: rgba(88, 166, 255, 0.15);
-      color: var(--cyan);
-      padding: 0.1rem 0.45rem;
-      border-radius: 3px;
-      font-weight: 700;
-    }
-    .man-meta span {
-      display: inline-flex;
-      align-items: center;
-      gap: 0.35rem;
-    }
-  </style>
 </head>
 <body>
 
   <!-- Top Navigation Bar (Shared Site Contract) -->
-  <header class="topbar">
+    <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <a href="index.html" style="display:flex; align-items:baseline; gap:0.6rem; text-decoration:none;">
+        <a href="index.html">
           <span class="brand-title">oC</span>
-          <span class="brand-sub">v1.0 // MAN &amp; TUTORIAL PORTAL</span>
+          <span class="brand-sub">v1.0 manual &amp; reference</span>
         </a>
-        <span class="badge">Zero Libc</span>
       </div>
       <nav>
-        <a href="index.html">OC(7) Overview</a>
-        <a href="tutorial.html">W3 Tutorial</a>
-        <a href="syntax.html">OC-LANG(7) Syntax</a>
-        <a href="stdlib.html" class="active">OC-STD(3) &amp; SYSCALLS(2)</a>
-        <a href="man-occ.html">OCC(1) Compiler</a>
-        <a href="security.html">OC-SECURITY(7) CWEs</a>
-        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">GitHub ↗</a>
+        <a href="index.html">OC(7)</a>
+        <a href="tutorial.html">TUTORIAL(7)</a>
+        <a href="syntax.html">OC-LANG(7)</a>
+        <a href="stdlib.html" class="active">OC-STD(3)</a>
+        <a href="man-occ.html">OCC(1)</a>
+        <a href="security.html">OC-SECURITY(7)</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">git</a>
       </nav>
     </div>
   </header>
@@ -69,7 +33,7 @@
   <div class="layout">
     
     <!-- Left Persistent Navigation Sidebar -->
-    <aside class="sidebar">
+        <aside class="sidebar">
       <div class="sidebar-group">
         <div class="sidebar-title">OC-STD(3) Sections</div>
         <a href="#name" class="sidebar-link active">NAME</a>
@@ -83,24 +47,14 @@
         <a href="#std-math" class="sidebar-link">OC-MATH(3) Checked Math</a>
         <a href="#see-also" class="sidebar-link">SEE ALSO</a>
       </div>
-
-      <div class="sidebar-group">
-        <div class="sidebar-title">Standard Modules</div>
-        <a href="#std-mem" class="sidebar-link"><code>std/mem.oc</code></a>
-        <a href="#std-fs" class="sidebar-link"><code>std/fs.oc</code></a>
-        <a href="#std-io" class="sidebar-link"><code>std/io.oc</code></a>
-        <a href="#std-net" class="sidebar-link"><code>std/net.oc</code></a>
-        <a href="#std-math" class="sidebar-link"><code>std/math.oc</code></a>
-      </div>
-
       <div class="sidebar-group">
         <div class="sidebar-title">Manual Pages</div>
         <a href="index.html" class="sidebar-link">OC(7) Overview</a>
-        <a href="tutorial.html" class="sidebar-link">W3 Tutorial</a>
+        <a href="tutorial.html" class="sidebar-link">TUTORIAL(7) W3 Guide</a>
         <a href="syntax.html" class="sidebar-link">OC-LANG(7) Syntax</a>
-        <a href="stdlib.html" class="sidebar-link active">OC-STD(3) Lib &amp; Syscalls</a>
+        <a href="stdlib.html" class="sidebar-link active">OC-STD(3) & SYSCALLS(2)</a>
         <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
-        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWE Matrix</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWEs</a>
       </div>
     </aside>
 
@@ -108,14 +62,9 @@
     <main class="content">
 
       <div class="man-header">
-        <div class="man-title">OC-STD(3) &amp; OC-SYSCALLS(2)</div>
-        <div class="man-subtitle">Linux Section 2 &amp; Section 3 Manual Pages: Core Runtime Primitives &amp; Zero-Libc Linux x86_64 Syscalls</div>
-        <div class="man-meta">
-          <span><strong>Standard:</strong> Pure oC v1.0.0</span>
-          <span><strong>Target ABI:</strong> Linux x86_64 ELF64</span>
-          <span><strong>Libc Dependency:</strong> 0.00%</span>
-          <span><strong>Allocator Attack Surface:</strong> 0 bytes</span>
-        </div>
+        <span>OC-STD(3)</span>
+        <span>oC Programmer's Manual</span>
+        <span>OC-STD(3)</span>
       </div>
 
       <!-- SECTION: NAME -->
@@ -135,17 +84,17 @@ import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  abs_i32, min_u32, max_u32, align_forward
 
 // Direct x86_64 Linux kernel intrinsics (extern declarations bound to direct syscall instructions)
-extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64;
-extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
-extern fn sys_open(path: *u8, flags: i32, mode: u32) -&gt; i32;
-extern fn sys_close(fd: i32) -&gt; i32;
-extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut u8;
-extern fn sys_munmap(addr: *mut u8, len: usize) -&gt; i32;
-extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -&gt; i32;
-extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -&gt; i32;
-extern fn sys_exit(code: i32) -&gt; void;
-extern fn sys_unlink(path: *u8) -&gt; i32;
-extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;</code></pre>
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) i64;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
+extern fn sys_open(path: *u8, flags: i32, mode: u32) i32;
+extern fn sys_close(fd: i32) i32;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) *mut u8;
+extern fn sys_munmap(addr: *mut u8, len: usize) i32;
+extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) i32;
+extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) i32;
+extern fn sys_exit(code: i32) void;
+extern fn sys_unlink(path: *u8) i32;
+extern fn sys_chmod(path: *u8, mode: u32) i32;</code></pre>
       </section>
 
       <!-- SECTION: SYSCALLS -->
@@ -222,57 +171,57 @@ extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;</code></pre>
           <tbody>
             <tr>
               <td><span class="sys-num">0</span></td>
-              <td><code>sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64</code></td>
+              <td><code>sys_read(fd: i32, buf: *mut u8, count: usize) i64</code></td>
               <td>Reads up to <code>count</code> bytes from open file descriptor <code>fd</code> into buffer <code>buf</code>. Returns number of bytes read or <code>-1</code> on error.</td>
             </tr>
             <tr>
               <td><span class="sys-num">1</span></td>
-              <td><code>sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64</code></td>
+              <td><code>sys_write(fd: i32, buf: *u8, count: usize) i64</code></td>
               <td>Writes up to <code>count</code> bytes to file descriptor <code>fd</code> from buffer <code>buf</code>. Returns bytes written or <code>-1</code>.</td>
             </tr>
             <tr>
               <td><span class="sys-num">2</span></td>
-              <td><code>sys_open(path: *u8, flags: i32, mode: u32) -&gt; i32</code></td>
+              <td><code>sys_open(path: *u8, flags: i32, mode: u32) i32</code></td>
               <td>Opens or creates file at NUL-terminated <code>path</code> with specified POSIX flags and file permission bits. Returns non-negative fd or <code>-1</code>.</td>
             </tr>
             <tr>
               <td><span class="sys-num">3</span></td>
-              <td><code>sys_close(fd: i32) -&gt; i32</code></td>
+              <td><code>sys_close(fd: i32) i32</code></td>
               <td>Closes open file descriptor <code>fd</code>. Returns <code>0</code> on success, negative error code on failure.</td>
             </tr>
             <tr>
               <td><span class="sys-num">9</span></td>
-              <td><code>sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut u8</code></td>
+              <td><code>sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) *mut u8</code></td>
               <td>Requests kernel virtual memory mapping of size <code>len</code>. Used with <code>PROT_READ|PROT_WRITE (3)</code> and <code>MAP_PRIVATE|MAP_ANONYMOUS (34)</code> to instantiate arenas. Returns base address or <code>-1</code> (<code>MAP_FAILED</code>).</td>
             </tr>
             <tr>
               <td><span class="sys-num">11</span></td>
-              <td><code>sys_munmap(addr: *mut u8, len: usize) -&gt; i32</code></td>
+              <td><code>sys_munmap(addr: *mut u8, len: usize) i32</code></td>
               <td>Unmaps <code>len</code> bytes of memory starting at <code>addr</code>, releasing physical frames immediately back to the kernel. Returns <code>0</code> on success.</td>
             </tr>
             <tr>
               <td><span class="sys-num">41</span></td>
-              <td><code>sys_socket(domain: i32, sock_type: i32, proto: i32) -&gt; i32</code></td>
+              <td><code>sys_socket(domain: i32, sock_type: i32, proto: i32) i32</code></td>
               <td>Creates an endpoint for network communication. E.g. <code>sys_socket(2, 1, 0)</code> creates an <code>AF_INET</code> <code>SOCK_STREAM</code> socket. Returns fd or <code>-1</code>.</td>
             </tr>
             <tr>
               <td><span class="sys-num">42</span></td>
-              <td><code>sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -&gt; i32</code></td>
+              <td><code>sys_connect(fd: i32, addr: *sockaddr_in, len: u32) i32</code></td>
               <td>Initiates a TCP connection on socket descriptor <code>fd</code> to target network address. Returns <code>0</code> on success or negative on failure.</td>
             </tr>
             <tr>
               <td><span class="sys-num">60</span></td>
-              <td><code>sys_exit(code: i32) -&gt; void</code></td>
+              <td><code>sys_exit(code: i32) void</code></td>
               <td>Immediately terminates calling process with status code <code>code</code>. Performs zero userspace teardown hooks.</td>
             </tr>
             <tr>
               <td><span class="sys-num">87</span></td>
-              <td><code>sys_unlink(path: *u8) -&gt; i32</code></td>
+              <td><code>sys_unlink(path: *u8) i32</code></td>
               <td>Deletes a name from the filesystem. If that name was the last link to a file and no processes have it open, the space is freed.</td>
             </tr>
             <tr>
               <td><span class="sys-num">90</span></td>
-              <td><code>sys_chmod(path: *u8, mode: u32) -&gt; i32</code></td>
+              <td><code>sys_chmod(path: *u8, mode: u32) i32</code></td>
               <td>Changes file permissions at <code>path</code> according to bitmask <code>mode</code> (e.g. <code>493</code> decimal = <code>0755</code> octal).</td>
             </tr>
           </tbody>
@@ -281,21 +230,21 @@ extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;</code></pre>
         <!-- Example Card 1: Syscalls -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Standalone x86_64 Direct Syscalls (Zero Libc)</span>
-            <span class="badge">ELF &lt;5KB Verified</span>
+            <span class="example-title">Example: Standalone x86_64 Direct Syscalls (Zero Libc)</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: sys_direct.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>// Direct kernel invocation without libc runtime
-extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
-extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut u8;
-extern fn sys_munmap(addr: *mut u8, len: usize) -&gt; i32;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) *mut u8;
+extern fn sys_munmap(addr: *mut u8, len: usize) i32;
 
-fn main() -&gt; i32 {
+fn main() i32 {
     let msg: string = "[KERNEL] Direct x86_64 syscall execution verified!\n";
     sys_write(1, msg.ptr, msg.len);
 
@@ -309,7 +258,7 @@ fn main() -&gt; i32 {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Direct Execution</span>
-                <span class="badge">Standalone ELF</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ build sys_direct.oc -o /tmp/sys_direct --backend native</span>
 <span class="term-cmd">$ /tmp/sys_direct</span>
@@ -341,7 +290,7 @@ fn main() -&gt; i32 {
 
         <div class="fn-box">
           <h3>arena_init</h3>
-          <div class="fn-sig">fn arena_init(capacity: usize) -&gt; Arena</div>
+          <div class="fn-sig">fn arena_init(capacity: usize) Arena</div>
           <p>
             Allocates a new virtual memory region of <code>capacity</code> bytes directly from the Linux kernel using anonymous private paging (<code>sys_mmap(0, capacity, 3, 34, -1, 0)</code>). Returns an initialized <code>Arena</code> with <code>offset = 0</code>.
           </p>
@@ -349,7 +298,7 @@ fn main() -&gt; i32 {
 
         <div class="fn-box">
           <h3>arena_alloc</h3>
-          <div class="fn-sig">fn arena_alloc(arena: *mut Arena, size: usize) -&gt; *mut u8</div>
+          <div class="fn-sig">fn arena_alloc(arena: *mut Arena, size: usize) *mut u8</div>
           <p>
             Carves out a contiguous slice of <code>size</code> bytes from the arena. Guarantees 8-byte alignment and executes an explicit capacity guard: if <code>arena.offset + size &gt; arena.capacity</code>, it safely aborts or returns <code>(0).as(*mut u8)</code> to prevent out-of-bounds pointer fabrication.
           </p>
@@ -357,7 +306,7 @@ fn main() -&gt; i32 {
 
         <div class="fn-box">
           <h3>arena_reset</h3>
-          <div class="fn-sig">fn arena_reset(arena: *mut Arena) -&gt; void</div>
+          <div class="fn-sig">fn arena_reset(arena: *mut Arena) void</div>
           <p>
             Active Defense CWE-14 Scrubbing: Iterates across the allocated buffer from index <code>0</code> up to <code>arena.offset</code>, setting every byte to <code>0</code> to destroy transient cryptographic keys or passwords in RAM. Resets <code>arena.offset = 0</code>. Backing kernel pages remain mapped for high-throughput reuse. The compiler's <code>EscapeValidator</code> statically invalidates all previously borrowed pointers to this arena.
           </p>
@@ -365,7 +314,7 @@ fn main() -&gt; i32 {
 
         <div class="fn-box">
           <h3>arena_deinit</h3>
-          <div class="fn-sig">fn arena_deinit(arena: *mut Arena) -&gt; void</div>
+          <div class="fn-sig">fn arena_deinit(arena: *mut Arena) void</div>
           <p>
             Performs CWE-14 zero-scrubbing across <code>[0..arena.offset]</code>, unmaps the backing virtual memory pages via <code>sys_munmap(arena.buffer, arena.capacity)</code>, and resets all struct fields to <code>0</code>. Compile-time <code>EscapeValidator</code> treats attempts to read pointers allocated from this arena after deinit as fatal (CWE-416 Use-After-Free).
           </p>
@@ -374,14 +323,14 @@ fn main() -&gt; i32 {
         <!-- Example Card 2: Arena -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Regional Memory Allocation &amp; CWE-14 Scrubbing</span>
-            <span class="badge">CWE-14 &amp; CWE-416 Clean</span>
+            <span class="example-title">Example: Regional Memory Allocation &amp; CWE-14 Scrubbing</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: arena_usage.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>import "std/mem.oc";
 
@@ -407,7 +356,7 @@ fn main() {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Output</span>
-                <span class="badge">Linux x86_64</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ run arena_usage.oc</span>
 <span class="term-out">79</span>
@@ -430,7 +379,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>cstr_path</h3>
-          <div class="fn-sig">fn cstr_path(path: string, out_buf: *mut u8) -&gt; *u8</div>
+          <div class="fn-sig">fn cstr_path(path: string, out_buf: *mut u8) *u8</div>
           <p>
             Mitigates CWE-170 (Improper Null Termination). Takes an immutable slice <code>path: string</code>, copies up to 4095 bytes into stack buffer <code>out_buf: [4096]u8</code>, and explicitly writes a terminating <code>\0</code> at <code>out_buf[len]</code>. Guarantees kernel path arguments never read uninitialized stack bytes.
           </p>
@@ -438,7 +387,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>read_file</h3>
-          <div class="fn-sig">fn read_file(path: string, out_buf: *mut u8, max_len: usize) -&gt; i64</div>
+          <div class="fn-sig">fn read_file(path: string, out_buf: *mut u8, max_len: usize) i64</div>
           <p>
             Opens file at <code>path</code> with flags <code>0 | 655360</code> (<code>O_RDONLY | O_NOFOLLOW | O_CLOEXEC</code>). <code>O_NOFOLLOW</code> guarantees symlinks are rejected to prevent redirection attacks. <code>O_CLOEXEC</code> guarantees the descriptor is closed if <code>execve</code> is called. Reads up to <code>max_len</code> bytes into <code>out_buf</code>, closes the descriptor, and returns bytes read.
           </p>
@@ -446,7 +395,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>write_file</h3>
-          <div class="fn-sig">fn write_file(path: string, content: string) -&gt; bool</div>
+          <div class="fn-sig">fn write_file(path: string, content: string) bool</div>
           <p>
             Opens or creates file at <code>path</code> with flags <code>577 | 655360 = 655937</code> (<code>O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC</code>) and mode <code>420</code> (octal <code>0644</code>). Writes <code>content.len</code> bytes directly via <code>sys_write</code>, safely closes the descriptor, and returns <code>true</code> if all bytes were written.
           </p>
@@ -454,7 +403,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>chmod_exec</h3>
-          <div class="fn-sig">fn chmod_exec(path: string) -&gt; bool</div>
+          <div class="fn-sig">fn chmod_exec(path: string) bool</div>
           <p>
             Changes permissions of the target file to executable (mode <code>493</code> decimal = <code>0755</code> octal) via <code>sys_chmod</code>. Returns <code>true</code> on success.
           </p>
@@ -462,7 +411,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>unlink_file</h3>
-          <div class="fn-sig">fn unlink_file(path: string) -&gt; bool</div>
+          <div class="fn-sig">fn unlink_file(path: string) bool</div>
           <p>
             Removes the target file from the filesystem using <code>sys_unlink</code>. Returns <code>true</code> if unlinking succeeded.
           </p>
@@ -471,14 +420,14 @@ fn main() {
         <!-- Example Card 3: Hardened FS -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Atomic File Write, Hardened Read &amp; Unlink</span>
-            <span class="badge">O_NOFOLLOW | O_CLOEXEC Enforced</span>
+            <span class="example-title">Example: Atomic File Write, Hardened Read &amp; Unlink</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: secure_fs.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>import "std/fs.oc";
 
@@ -508,7 +457,7 @@ fn main() {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Output</span>
-                <span class="badge">Linux x86_64</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ run secure_fs.oc</span>
 <span class="term-out">File write status:</span>
@@ -534,7 +483,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>print / println</h3>
-          <div class="fn-sig">fn print(val: T) -&gt; void<br>fn println(s: []u8) -&gt; void</div>
+          <div class="fn-sig">fn print(val: T) void<br>fn println(s: []u8) void</div>
           <p>
             Safe stdout emitter. Emits slices, strings, integers, and booleans directly via <code>sys_write(1, ...)</code>. Because <code>print</code> does not accept runtime C-style format strings (<code>%s</code>, <code>%n</code>), format string injection (CWE-134) is impossible by construction.
           </p>
@@ -542,7 +491,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>read_int</h3>
-          <div class="fn-sig">fn read_int() -&gt; i32</div>
+          <div class="fn-sig">fn read_int() i32</div>
           <p>
             Reads characters directly from standard input (<code>fd = 0</code>) using <code>sys_read</code>, filters ASCII characters between <code>'0'</code> (48) and <code>'9'</code> (57), and builds an integer. Ignores trailing newlines and non-numeric characters. The returned integer is marked tainted in the compiler's dataflow engine until checked against boundary constraints.
           </p>
@@ -551,14 +500,14 @@ fn main() {
         <!-- Example Card 4: IO -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Formatted Stream I/O &amp; Numeric Extraction</span>
-            <span class="badge">Zero Format-String Attacks</span>
+            <span class="example-title">Example: Formatted Stream I/O &amp; Numeric Extraction</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: io_demo.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>import "std/io.oc";
 
@@ -572,7 +521,7 @@ fn main() {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Interactive Run</span>
-                <span class="badge">Linux x86_64</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ run io_demo.oc</span>
 <span class="term-out">Enter numeric configuration port: 8080</span>
@@ -603,7 +552,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>htons</h3>
-          <div class="fn-sig">fn htons(hostshort: u16) -&gt; u16</div>
+          <div class="fn-sig">fn htons(hostshort: u16) u16</div>
           <p>
             Converts 16-bit integer values from host byte order (little-endian on x86_64) to network byte order (big-endian) by transposing the high and low bytes.
           </p>
@@ -611,7 +560,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>probe_port</h3>
-          <div class="fn-sig">fn probe_port(port: u16) -&gt; bool</div>
+          <div class="fn-sig">fn probe_port(port: u16) bool</div>
           <p>
             Creates an <code>AF_INET</code> (2) TCP socket via <code>sys_socket(2, 1, 0)</code>, configures <code>sockaddr_in</code> to target localhost (<code>127.0.0.1 = 0x0100007f</code>) on <code>htons(port)</code>, attempts <code>sys_connect</code>, and immediately closes the socket with <code>sys_close</code>. Returns <code>true</code> if the port is open and listening.
           </p>
@@ -620,14 +569,14 @@ fn main() {
         <!-- Example Card 5: Net -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Network Socket Prober &amp; Big-Endian Wire Conversion</span>
-            <span class="badge">Zero-Libc Wire Framing</span>
+            <span class="example-title">Example: Network Socket Prober &amp; Big-Endian Wire Conversion</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: net_probe.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>import "std/net.oc";
 
@@ -646,7 +595,7 @@ fn main() {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Output</span>
-                <span class="badge">Linux x86_64</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ run net_probe.oc</span>
 <span class="term-out">Host order 8080 to network order:</span>
@@ -670,7 +619,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>abs_i32</h3>
-          <div class="fn-sig">fn abs_i32(x: i32) -&gt; i32</div>
+          <div class="fn-sig">fn abs_i32(x: i32) i32</div>
           <p>
             Returns the absolute value of signed 32-bit integer <code>x</code>.<br>
             <strong>Hardware Overflow Trap Note (CWE-190):</strong> In traditional C, evaluating <code>abs(-2147483648)</code> triggers undefined behavior and silently returns <code>-2147483648</code> because <code>2147483648</code> cannot be represented in a 32-bit signed integer. In oC, negating <code>-2147483648</code> activates the CPU's Overflow Flag (<code>OF=1</code>), instantly executing <code>jo __trap_overflow</code> (hardware <code>ud2</code> exception) rather than silently returning corrupted numbers.
@@ -679,7 +628,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>min_u32 &amp; max_u32</h3>
-          <div class="fn-sig">fn min_u32(a: u32, b: u32) -&gt; u32<br>fn max_u32(a: u32, b: u32) -&gt; u32</div>
+          <div class="fn-sig">fn min_u32(a: u32, b: u32) u32<br>fn max_u32(a: u32, b: u32) u32</div>
           <p>
             Branchless and checked boundary selection routines. Evaluates minimum and maximum without type coercion or sign extension errors.
           </p>
@@ -687,7 +636,7 @@ fn main() {
 
         <div class="fn-box">
           <h3>align_forward</h3>
-          <div class="fn-sig">fn align_forward(addr: usize, alignment: usize) -&gt; usize</div>
+          <div class="fn-sig">fn align_forward(addr: usize, alignment: usize) usize</div>
           <p>
             Computes the next multiple of <code>alignment</code> greater than or equal to <code>addr</code>. Essential for hardware-aligned memory allocation in custom arena buffers.
           </p>
@@ -696,14 +645,14 @@ fn main() {
         <!-- Example Card 6: Math -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title"><span class="dot"></span> Example: Memory Alignment &amp; Checked Absolute Values</span>
-            <span class="badge">Hardware Overflow Guarded</span>
+            <span class="example-title">Example: Memory Alignment &amp; Checked Absolute Values</span>
+            
           </div>
           <div class="example-grid">
             <div class="code-pane">
               <div class="pane-label">
                 <span>SRC: math_demo.oc</span>
-                <span class="badge">oC Source</span>
+                
               </div>
               <pre><code>import "std/math.oc";
 
@@ -724,7 +673,7 @@ fn main() {
             <div class="output-pane">
               <div class="pane-label">
                 <span>TERMINAL: Output</span>
-                <span class="badge">Linux x86_64</span>
+                
               </div>
               <pre><code><span class="term-cmd">$ occ run math_demo.oc</span>
 <span class="term-out">Align 17 forward to 8-byte boundary:</span>
@@ -763,5 +712,17 @@ fn main() {
       </footer>
     </main>
   </div>
+<script>
+function copyCode(btn) {
+  const card = btn.closest('.example-card');
+  const code = card.querySelector('.code-pane pre code, pre code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.innerText).then(() => {
+    const orig = btn.innerText;
+    btn.innerText = 'Copied';
+    setTimeout(() => { btn.innerText = orig; }, 1200);
+  });
+}
+</script>
 </body>
 </html>

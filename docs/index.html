@@ -9,23 +9,22 @@
 <body>
 
   <!-- Top Navigation Bar (Shared Site Contract) -->
-  <header class="topbar">
+    <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <a href="index.html" style="display:flex; align-items:baseline; gap:0.6rem; text-decoration:none;">
+        <a href="index.html">
           <span class="brand-title">oC</span>
-          <span class="brand-sub">v1.0 // MAN &amp; TUTORIAL PORTAL</span>
+          <span class="brand-sub">v1.0 manual &amp; reference</span>
         </a>
-        <span class="badge">Self-Hosted</span>
       </div>
       <nav>
-        <a href="index.html" class="active">OC(7) Overview</a>
-        <a href="tutorial.html">W3 Tutorial</a>
-        <a href="syntax.html">OC-LANG(7) Syntax</a>
-        <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
-        <a href="man-occ.html">OCC(1) Compiler</a>
-        <a href="security.html">OC-SECURITY(7) CWEs</a>
-        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">GitHub ↗</a>
+        <a href="index.html" class="active">OC(7)</a>
+        <a href="tutorial.html">TUTORIAL(7)</a>
+        <a href="syntax.html">OC-LANG(7)</a>
+        <a href="stdlib.html">OC-STD(3)</a>
+        <a href="man-occ.html">OCC(1)</a>
+        <a href="security.html">OC-SECURITY(7)</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">git</a>
       </nav>
     </div>
   </header>
@@ -34,40 +33,26 @@
   <div class="layout">
     
     <!-- Left Persistent Navigation Sidebar -->
-    <aside class="sidebar">
+        <aside class="sidebar">
       <div class="sidebar-group">
         <div class="sidebar-title">OC(7) Sections</div>
         <a href="#name" class="sidebar-link active">NAME</a>
         <a href="#synopsis" class="sidebar-link">SYNOPSIS</a>
         <a href="#portal-modules" class="sidebar-link">PORTAL MODULES</a>
         <a href="#description" class="sidebar-link">DESCRIPTION</a>
-        <a href="#interactive-example" class="sidebar-link">INTERACTIVE EXAMPLE</a>
+        <a href="#interactive-example" class="sidebar-link">EXAMPLE</a>
         <a href="#benchmarks" class="sidebar-link">BENCHMARKS</a>
         <a href="#quickstart" class="sidebar-link">QUICKSTART</a>
         <a href="#see-also" class="sidebar-link">SEE ALSO</a>
       </div>
-
       <div class="sidebar-group">
         <div class="sidebar-title">Manual Pages</div>
         <a href="index.html" class="sidebar-link active">OC(7) Overview</a>
-        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Language Spec</a>
-        <a href="stdlib.html" class="sidebar-link">OC-STD(3) Lib &amp; Syscalls</a>
+        <a href="tutorial.html" class="sidebar-link">TUTORIAL(7) W3 Guide</a>
+        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) & SYSCALLS(2)</a>
         <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
-        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWE Matrix</a>
-      </div>
-
-      <div class="sidebar-group">
-        <div class="sidebar-title">W3Schools Tutorial</div>
-        <a href="tutorial.html#lesson-1" class="sidebar-link">1. Hello World</a>
-        <a href="tutorial.html#lesson-2" class="sidebar-link">2. Variables &amp; Mutability</a>
-        <a href="tutorial.html#lesson-3" class="sidebar-link">3. Types &amp; Hardware Traps</a>
-        <a href="tutorial.html#lesson-4" class="sidebar-link">4. Checked Casts (.as)</a>
-        <a href="tutorial.html#lesson-5" class="sidebar-link">5. Strings &amp; Fat Slices</a>
-        <a href="tutorial.html#lesson-6" class="sidebar-link">6. Control Flow &amp; Logic</a>
-        <a href="tutorial.html#lesson-7" class="sidebar-link">7. Functions &amp; Recursion</a>
-        <a href="tutorial.html#lesson-8" class="sidebar-link">8. Structs &amp; Packed Wire</a>
-        <a href="tutorial.html#lesson-9" class="sidebar-link">9. Pointers &amp; Escape Check</a>
-        <a href="tutorial.html#lesson-10" class="sidebar-link">10. Arenas &amp; Native ELF</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWEs</a>
       </div>
     </aside>
 
@@ -76,36 +61,8 @@
 
       <div class="man-header">
         <span>OC(7)</span>
-        <span>Linux Programmer's Manual / Portal</span>
+        <span>oC Programmer's Manual</span>
         <span>OC(7)</span>
-      </div>
-
-      <!-- Hero Summary -->
-      <section class="hero">
-        <h2>100% C Speed. Zero Allocator Exploit Surface. &lt;5 KB Static ELF.</h2>
-        <p>
-          <strong>oC</strong> is a self-hosted, active-defense systems programming language engineered for deterministic regional memory arenas, compile-time escape &amp; lifetime verification, and direct Linux <code>x86_64</code> machine code emission without <code>libc</code> or heap metadata attack surface.
-        </p>
-      </section>
-
-      <!-- Key Stat Counters -->
-      <div class="grid">
-        <div class="stat-card">
-          <div class="value">4.7 KB</div>
-          <div class="label">Standalone Static ELF64 Binary (<code>--backend native</code>)</div>
-        </div>
-        <div class="stat-card">
-          <div class="value">0.00 ns</div>
-          <div class="label">Runtime Memory Overhead (Compile-Time <code>EscapeValidator</code>)</div>
-        </div>
-        <div class="stat-card">
-          <div class="value">17 CWEs</div>
-          <div class="label">Vulnerability Classes Neutralized by Construction</div>
-        </div>
-        <div class="stat-card">
-          <div class="value">103 KB</div>
-          <div class="label">100% Self-Hosted Compiler Binary (Stage 2 == Stage 3 Bit-for-Bit)</div>
-        </div>
       </div>
 
       <!-- SECTION: NAME -->
@@ -228,14 +185,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example: Arena Memory &amp; Safe Fat Slices</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example: Arena Memory &amp; Safe Fat Slices</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: arena_demo.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
 <span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
@@ -265,7 +222,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Execution Output</span>
-                  <span class="badge">Linux x86_64</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run arena_demo.oc</span>
 <span class="term-pass">✔ Allocated 256 bytes. Current arena offset:</span>
@@ -423,7 +380,7 @@
     oC v1.0 Systems Programming Language • Zero-Libc Active Defense • Linux x86_64
   </footer>
 
-  <!-- Interactive Copy Code Script -->
+  <!-- Interactive Copy Script -->
   <script>
     function copyCode(btn) {
       const card = btn.closest('.example-card');

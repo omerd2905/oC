@@ -9,23 +9,22 @@
 <body>
 
   <!-- Top Navigation Bar (Shared Site Contract) -->
-  <header class="topbar">
+    <header class="topbar">
     <div class="topbar-inner">
       <div class="brand">
-        <a href="index.html" style="display:flex; align-items:baseline; gap:0.6rem; text-decoration:none;">
+        <a href="index.html">
           <span class="brand-title">oC</span>
-          <span class="brand-sub">v1.0 // MAN &amp; TUTORIAL PORTAL</span>
+          <span class="brand-sub">v1.0 manual &amp; reference</span>
         </a>
-        <span class="badge">Self-Hosted</span>
       </div>
       <nav>
-        <a href="index.html">OC(7) Overview</a>
-        <a href="tutorial.html" class="active">W3 Tutorial</a>
-        <a href="syntax.html">OC-LANG(7) Syntax</a>
-        <a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a>
-        <a href="man-occ.html">OCC(1) Compiler</a>
-        <a href="security.html">OC-SECURITY(7) CWEs</a>
-        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">GitHub ↗</a>
+        <a href="index.html">OC(7)</a>
+        <a href="tutorial.html" class="active">TUTORIAL(7)</a>
+        <a href="syntax.html">OC-LANG(7)</a>
+        <a href="stdlib.html">OC-STD(3)</a>
+        <a href="man-occ.html">OCC(1)</a>
+        <a href="security.html">OC-SECURITY(7)</a>
+        <a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener" class="repo-link">git</a>
       </nav>
     </div>
   </header>
@@ -34,28 +33,28 @@
   <div class="layout">
     
     <!-- Left Persistent Navigation Sidebar -->
-    <aside class="sidebar">
+        <aside class="sidebar">
       <div class="sidebar-group">
-        <div class="sidebar-title">Tutorial Chapters</div>
+        <div class="sidebar-title">TUTORIAL(7) Chapters</div>
         <a href="#lesson-1" class="sidebar-link active">1. Hello World</a>
-        <a href="#lesson-2" class="sidebar-link">2. Variables &amp; Mutability</a>
-        <a href="#lesson-3" class="sidebar-link">3. Types &amp; Hardware Traps</a>
+        <a href="#lesson-2" class="sidebar-link">2. Variables & Mutability</a>
+        <a href="#lesson-3" class="sidebar-link">3. Types & Hardware Traps</a>
         <a href="#lesson-4" class="sidebar-link">4. Checked Casts (.as)</a>
-        <a href="#lesson-5" class="sidebar-link">5. Strings &amp; Fat Slices</a>
-        <a href="#lesson-6" class="sidebar-link">6. Control Flow &amp; Logic</a>
-        <a href="#lesson-7" class="sidebar-link">7. Functions &amp; Recursion</a>
-        <a href="#lesson-8" class="sidebar-link">8. Structs &amp; Packed Wire</a>
-        <a href="#lesson-9" class="sidebar-link">9. Pointers &amp; Escape Check</a>
-        <a href="#lesson-10" class="sidebar-link">10. Arenas &amp; Native ELF</a>
+        <a href="#lesson-5" class="sidebar-link">5. Strings & Fat Slices</a>
+        <a href="#lesson-6" class="sidebar-link">6. Control Flow & Logic</a>
+        <a href="#lesson-7" class="sidebar-link">7. Functions & Recursion</a>
+        <a href="#lesson-8" class="sidebar-link">8. Structs & Packed Wire</a>
+        <a href="#lesson-9" class="sidebar-link">9. Pointers & Escape Check</a>
+        <a href="#lesson-10" class="sidebar-link">10. Arenas & Native ELF</a>
       </div>
-
       <div class="sidebar-group">
         <div class="sidebar-title">Manual Pages</div>
         <a href="index.html" class="sidebar-link">OC(7) Overview</a>
-        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Language Spec</a>
-        <a href="stdlib.html" class="sidebar-link">OC-STD(3) Lib &amp; Syscalls</a>
+        <a href="tutorial.html" class="sidebar-link active">TUTORIAL(7) W3 Guide</a>
+        <a href="syntax.html" class="sidebar-link">OC-LANG(7) Syntax</a>
+        <a href="stdlib.html" class="sidebar-link">OC-STD(3) & SYSCALLS(2)</a>
         <a href="man-occ.html" class="sidebar-link">OCC(1) Compiler CLI</a>
-        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWE Matrix</a>
+        <a href="security.html" class="sidebar-link">OC-SECURITY(7) CWEs</a>
       </div>
     </aside>
 
@@ -64,16 +63,9 @@
 
       <div class="man-header">
         <span>TUTORIAL(7)</span>
-        <span>W3Schools-Style oC Curriculum</span>
+        <span>oC Programmer's Manual</span>
         <span>TUTORIAL(7)</span>
       </div>
-
-      <section class="hero">
-        <h2>Learn oC Programming: Fast, Safe, Zero-Libc Systems Engineering</h2>
-        <p>
-          Welcome to the hands-on <strong>oC Tutorial</strong>. Designed in the classic W3Schools step-by-step format, each lesson features complete code examples, interactive copy buttons, side-by-side terminal output, and clear architectural explanations showing <em>why</em> oC enforces compile-time safety and hardware traps.
-        </p>
-      </section>
 
       <!-- ========================================================= -->
       <!-- LESSON 1 -->
@@ -90,14 +82,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 1: Hello World Program</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 1: Hello World Program</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: hello.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
     <span class="fn">print</span>(<span class="str">"Hello, World from oC Active Defense!"</span>);
@@ -108,7 +100,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Build &amp; Run</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run hello.oc</span>
 <span class="term-pass">Hello, World from oC Active Defense!</span>
@@ -142,14 +134,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 2: Immutable vs Mutable Bindings</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 2: Immutable vs Mutable Bindings</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: variables.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
     <span class="cm">// Immutable binding: cannot be altered</span>
@@ -171,7 +163,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Normal Run vs Violation</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run variables.oc</span>
 <span class="term-pass">Listening Port (immutable):</span>
@@ -211,14 +203,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 3: Arithmetic &amp; Hardware Overflow Trap</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 3: Arithmetic &amp; Hardware Overflow Trap</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: overflow_check.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">max_signed</span>: <span class="ty">i32</span> = <span class="num">2147483640</span>;
@@ -236,7 +228,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Hardware Trap Halting</span>
-                  <span class="badge">Hardware Trap</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run overflow_check.oc</span>
 <span class="term-pass">Safe value:</span>
@@ -273,14 +265,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 4: Checked Casts vs CWE-195 Truncation</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 4: Checked Casts vs CWE-195 Truncation</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: checked_casts.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">wide</span>: <span class="ty">i64</span> = <span class="num">1000</span>;
@@ -300,7 +292,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Negative-to-Unsigned Panic</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run checked_casts.oc</span>
 <span class="term-pass">Valid conversion to i32:</span>
@@ -336,14 +328,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 5: String Slicing &amp; Bounds Trapping</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 5: String Slicing &amp; Bounds Trapping</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: slices.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">full_text</span>: <span class="ty">string</span> = <span class="str">"Secured systems with oC slices"</span>;
@@ -369,7 +361,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Slice Bounds Protection</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run slices.oc</span>
 <span class="term-pass">Full text length:</span>
@@ -404,14 +396,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 6: Control Flow &amp; Loops</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 6: Control Flow &amp; Loops</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: control_flow.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">check_permission</span>(<span class="ty">level</span>: <span class="ty">i32</span>, <span class="ty">is_admin</span>: <span class="ty">bool</span>) <span class="ty">bool</span> {
     <span class="kw">if</span> <span class="ty">is_admin</span> {
@@ -441,7 +433,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Structured Execution</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run control_flow.oc</span>
 <span class="term-pass">Loop Step:</span>
@@ -468,7 +460,7 @@
         <div class="man-body">
           <p>
             Functions in oC are declared with parameters and explicit return types:
-            <code>fn name(param1: Type, param2: Type) -&gt; ReturnType { ... }</code>.
+            <code>fn name(param1: Type, param2: Type) ReturnType { ... }</code>.
           </p>
           <p>
             <strong>CWE-674 Defense (Uncontrolled Recursion Prevention):</strong> Recursive algorithms that traverse untrusted user input can blow the call stack, crashing server daemons or kernel drivers. oC provides tight frame layout and predictable call conventions, allowing deep recursion to be optimized cleanly under <code>-O2</code> or bounded explicitly.
@@ -476,14 +468,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 7: Recursive Fibonacci &amp; Stack Frame</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 7: Recursive Fibonacci &amp; Stack Frame</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: recursion.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">fn</span> <span class="fn">fibonacci</span>(<span class="ty">n</span>: <span class="ty">i64</span>) <span class="ty">i64</span> {
     <span class="kw">if</span> <span class="ty">n</span> &lt;= <span class="num">1</span> {
@@ -504,7 +496,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Recursive Execution</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run recursion.oc</span>
 <span class="term-pass">Fibonacci(10) result:</span>
@@ -543,14 +535,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 8: Wire-Safe Network Protocol Header</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 8: Wire-Safe Network Protocol Header</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: wire_struct.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="cm">// Exactly 4 bytes: 1B version, 1B type, 2B port</span>
 <span class="kw">packed struct</span> <span class="ty">PacketHeader</span> {
@@ -584,7 +576,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Struct Field Access</span>
-                  <span class="badge">Terminal</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run wire_struct.oc</span>
 <span class="term-pass">Packet Header Port:</span>
@@ -619,14 +611,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 9: Safe Borrows vs Compile-Time CWE-562 Rejection</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 9: Safe Borrows vs Compile-Time CWE-562 Rejection</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: escape_demo.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="cm">// Safe: reference passed down the call tree</span>
 <span class="kw">fn</span> <span class="fn">compute_hash</span>(<span class="ty">val</span>: <span class="ty">&amp;u32</span>) <span class="ty">u32</span> {
@@ -634,7 +626,7 @@
 }
 
 <span class="cm">// REJECTED: returning address of stack local</span>
-<span class="cm">// fn bad_escape() -> *u8 {</span>
+<span class="cm">// fn bad_escape() *u8 {</span>
 <span class="cm">//     let local: u8 = 42;</span>
 <span class="cm">//     return &amp;local; // Compile Error: CWE-562</span>
 <span class="cm">// }</span>
@@ -651,7 +643,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Compile-Time Rejection</span>
-                  <span class="badge">Compile Trap</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run escape_demo.oc</span>
 <span class="term-pass">Computed hash:</span>
@@ -692,14 +684,14 @@
 
           <div class="example-card">
             <div class="example-header">
-              <span class="example-title"><span class="dot"></span> Example 10: Arena Allocation &amp; Standalone Native ELF</span>
-              <button class="copy-btn" onclick="copyCode(this)"><span>⎘</span> Copy Code</button>
+              <span class="example-title">Example 10: Arena Allocation &amp; Standalone Native ELF</span>
+              <button class="copy-btn" onclick="copyCode(this)">Copy</button>
             </div>
             <div class="example-grid">
               <div class="code-pane">
                 <div class="pane-label">
                   <span>SRC: arena_app.oc</span>
-                  <span class="badge">oC Source</span>
+                  
                 </div>
                 <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
 <span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
@@ -729,7 +721,7 @@
               <div class="output-pane">
                 <div class="pane-label">
                   <span>TERMINAL: Native x86_64 ELF Build</span>
-                  <span class="badge">Standalone ELF</span>
+                  
                 </div>
                 <pre><code><span class="term-cmd">$ occ run arena_app.oc</span>
 <span class="term-pass">Arena allocation offset:</span>
@@ -768,7 +760,7 @@
     oC v1.0 Systems Programming Language • W3Schools Step-by-Step Curriculum • Active Defense Systems
   </footer>
 
-  <!-- Interactive Copy Code Script -->
+  <!-- Interactive Copy Script -->
   <script>
     function copyCode(btn) {
       const card = btn.closest('.example-card');
