@@ -103,23 +103,23 @@ fn emit_c_type(type_name: string, out: *mut CodeBuffer) {
     if type_name[0] == 38 { is_ptr_type = true; } // '&'
     if is_ptr_type {
         if str_eq(type_name, "**u8") {
-            buf_append(out, "char**");
+            buf_append(out, "uint8_t**");
             return;
         }
         if str_eq(type_name, "*u8") {
-            buf_append(out, "char*");
+            buf_append(out, "uint8_t*");
             return;
         }
         if str_eq(type_name, "*mut u8") {
-            buf_append(out, "char*");
+            buf_append(out, "uint8_t*");
             return;
         }
         if str_eq(type_name, "&u8") {
-            buf_append(out, "char*");
+            buf_append(out, "uint8_t*");
             return;
         }
         if str_eq(type_name, "&mut u8") {
-            buf_append(out, "char*");
+            buf_append(out, "uint8_t*");
             return;
         }
         if str_eq(type_name, "*mut void") {
@@ -624,6 +624,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     // 1. Emit C preamble
     buf_append(out, "#pragma GCC diagnostic ignored \"-Wmain\"\n");
     buf_append(out, "#pragma GCC diagnostic ignored \"-Wdiscarded-qualifiers\"\n");
+    buf_append(out, "#pragma GCC diagnostic ignored \"-Wpointer-sign\"\n");
+    buf_append(out, "#pragma GCC diagnostic ignored \"-Wincompatible-pointer-types\"\n");
     buf_append(out, "#include <stdio.h>\n");
     buf_append(out, "#include <stdint.h>\n");
     buf_append(out, "#include <stdbool.h>\n");

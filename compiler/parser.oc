@@ -887,18 +887,28 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                         let mut borrow_arg: *mut AstNode = expr.left;
                         while borrow_arg != (0).as(*mut AstNode) {
                             let mut src_name: string = "";
+                            let mut is_ptr_arg: bool = false;
                             if borrow_arg.tag == NODE_ADDRESS_OF {
                                 src_name = get_ident_name(borrow_arg.left);
+                                is_ptr_arg = true;
                             } else {
                                 src_name = get_ident_name(borrow_arg);
                             }
                             if src_name.len > 0 {
                                 let src_idx: i32 = validator_find_var(v, src_name);
                                 if src_idx >= 0 {
-                                    if v.vars[src_idx.as(usize)].scope_depth > v.vars[tgt_idx.as(usize)].scope_depth {
-                                        print_err_borrow_escape(src_name, tgt_name);
-                                        v.has_error = true;
-                                        return false;
+                                    if v.vars[src_idx.as(usize)].points_to_stack_local {
+                                        is_ptr_arg = true;
+                                    }
+                                    if v.vars[src_idx.as(usize)].borrowed_from_arena.len > 0 {
+                                        is_ptr_arg = true;
+                                    }
+                                    if is_ptr_arg {
+                                        if v.vars[src_idx.as(usize)].scope_depth > v.vars[tgt_idx.as(usize)].scope_depth {
+                                            print_err_borrow_escape(src_name, tgt_name);
+                                            v.has_error = true;
+                                            return false;
+                                        }
                                     }
                                 }
                             }

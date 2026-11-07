@@ -1,0 +1,45 @@
+fn parse_wire_frame(frame: string, seed: u32) -> u64 {
+    let eth: string = frame[0..14];
+    let ip: string = frame[14..34];
+    let tcp: string = frame[34..54];
+
+    let proto: u32 = ip[9].as(u32);
+    let flags: u32 = tcp[13].as(u32);
+    let mac_tail: u32 = eth[5].as(u32);
+
+    let mut hash: u64 = 2166136261;
+    hash = (hash ^ proto.as(u64)) * 16777619;
+    hash = (hash ^ flags.as(u64)) * 16777619;
+    hash = (hash ^ mac_tail.as(u64)) * 16777619;
+    hash = (hash ^ seed.as(u64)) * 16777619;
+    return hash & 0xffffffff;
+}
+
+fn main() -> i32 {
+    let mut raw_buf: [64]u8 = [0];
+    let mut k: usize = 0;
+    while k < 64 {
+        raw_buf[k] = (((k * 17) + 3) & 255).as(u8);
+        k = k + 1;
+    }
+
+    let mut acc: u64 = 0;
+    let mut i: u32 = 0;
+    // 25,000,000 stateful wire frames parsed with fat-slice bounds checks
+    while i < 25000000 {
+        let low_acc: u32 = (acc & 255).as(u32);
+        raw_buf[5] = ((i + low_acc) & 255).as(u8);
+        raw_buf[23] = ((i >> 3) & 255).as(u8);
+        raw_buf[47] = ((i ^ low_acc) & 255).as(u8);
+
+        let frame: string = string {
+            ptr: (&mut raw_buf).as(*u8),
+            len: 64,
+        };
+        acc = acc + parse_wire_frame(frame, i);
+        i = i + 1;
+    }
+
+    print(acc);
+    return 0;
+}
