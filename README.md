@@ -104,6 +104,16 @@ gcc -O2 bootstrap\occ_bootstrap.c -o bin\occ.exe
 bin\occ.exe run examples\hello.oc
 ```
 
+### Updating oC
+To update an existing installation to the latest commit:
+```bash
+./bin/occ update
+
+# On Windows:
+bin\occ.exe update
+```
+*(Automatically pulls upstream changes via `git pull` and rebuilds the compiler binary).*
+
 ---
 
 ## Building and Verification
