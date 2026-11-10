@@ -1,5 +1,10 @@
 import "compiler/token.oc";
 
+let TOK_BREAK: u32 = 25;
+let TOK_CONTINUE: u32 = 26;
+let TOK_TILDE: u32 = 85;
+let TOK_ERROR: u32 = 99;
+
 struct Lexer {
     source: string,
     index: usize,
@@ -103,6 +108,8 @@ fn check_keyword(s: string) -> u32 {
     if str_eq(s, "true") { return TOK_TRUE; }
     if str_eq(s, "false") { return TOK_FALSE; }
     if str_eq(s, "as") { return TOK_AS; }
+    if str_eq(s, "break") { return TOK_BREAK; }
+    if str_eq(s, "continue") { return TOK_CONTINUE; }
     return TOK_IDENT;
 }
 
@@ -425,6 +432,12 @@ fn lexer_next(lex: *mut Lexer) -> Token {
     else if c == 62 { tag = TOK_GT; }
     else if c == 124 { tag = TOK_PIPE; }
     else if c == 94 { tag = TOK_CARET; }
+    else if c == 126 { tag = TOK_TILDE; }
+    else {
+        print("lexical error: unexpected character at line");
+        print(tok_line);
+        tag = TOK_ERROR;
+    }
 
     return Token {
         tag: tag,

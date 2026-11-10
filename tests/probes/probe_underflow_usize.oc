@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let x: usize = 0;
+    let y: usize = x - 1;
+    print(y);
+    return 0;
+}

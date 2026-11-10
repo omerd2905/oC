@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let neg: i64 = -5;
+    let u: u64 = neg.as(u64);
+    print(u);
+    return 0;
+}

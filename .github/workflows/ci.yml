@@ -1,0 +1,34 @@
+name: oC CI (Self-Host + Dual-Backend Probe Suite)
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Bootstrap occ from portable C source & verify Stage 2 == Stage 3
+        run: |
+          cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
+          ./showcase.sh
+
+      - name: Verify W^X ELF64 segments on --backend native
+        run: |
+          ./bin/occ build examples/oc_tripwire.oc -o /tmp/oc_tripwire --backend native
+          python3 -c '
+          import struct
+          data = open("/tmp/oc_tripwire", "rb").read()
+          e_phoff = struct.unpack_from("<Q", data, 32)[0]
+          e_phentsize, e_phnum = struct.unpack_from("<HH", data, 54)
+          assert e_phnum == 3
+          for i in range(e_phnum):
+              p_type, p_flags = struct.unpack_from("<II", data, e_phoff + i * e_phentsize)
+              assert not ((p_flags & 2) and (p_flags & 1)), "RWX segment detected!"
+          print("W^X ELF64 segments verified!")
+          '
