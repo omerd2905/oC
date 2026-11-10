@@ -7914,7 +7914,7 @@ oc_string host_tmp_prefix(void) {
 }
 
 void print_usage(void) {
-    printf("%s\n", "Usage: occ [run|build|update] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    printf("%s\n", "Usage: occ [run|build|update|version] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
     printf("%s\n", "Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
 }
 
@@ -7966,6 +7966,21 @@ int main(int argc, char** argv) {
     int32_t i = 1;
     if ((i < argc)) {
     oc_string first = cstr_to_string(((argv)[i]));
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("version"), .len = sizeof("version") - 1 })) {
+    printf("%s\n", "oC 1.0.1");
+    return 0;
+    }
+    else {
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("--version"), .len = sizeof("--version") - 1 })) {
+    printf("%s\n", "oC 1.0.1");
+    return 0;
+    }
+    else {
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("-v"), .len = sizeof("-v") - 1 })) {
+    printf("%s\n", "oC 1.0.1");
+    return 0;
+    }
+    else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("update"), .len = sizeof("update") - 1 })) {
     int32_t host = sys_host_target();
     return handle_update(host);
@@ -7978,6 +7993,9 @@ int main(int argc, char** argv) {
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("build"), .len = sizeof("build") - 1 })) {
     i = __OC_ADD(i, 1);
+    }
+    }
+    }
     }
     }
     }
