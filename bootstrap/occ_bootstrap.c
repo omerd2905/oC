@@ -536,6 +536,8 @@ void append_hash_digits(CodeBuffer* buf, oc_string a, oc_string b);
 bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir, CodeBuffer* out, ModuleLoader* loader, Arena* arena);
 oc_string host_tmp_prefix(void);
 void print_usage(void);
+int32_t run_sys_cmd(oc_string cmd);
+int32_t handle_update(int32_t host);
 int main(int argc, char** argv);
 
 int32_t read_int(void) {
@@ -7912,8 +7914,40 @@ oc_string host_tmp_prefix(void) {
 }
 
 void print_usage(void) {
-    printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    printf("%s\n", "Usage: occ [run|build|update] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
     printf("%s\n", "Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
+}
+
+int32_t run_sys_cmd(oc_string cmd) {
+    CodeBuffer b = buf_init(512);
+    buf_append((&(b)), cmd);
+    buf_append_u8((&(b)), 0);
+    int32_t ret = system(((uint8_t*)(((b).buffer))));
+    buf_deinit((&(b)));
+    return ret;
+}
+
+int32_t handle_update(int32_t host) {
+    printf("%s\n", "Updating oC from git...");
+    int32_t pull_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("git pull"), .len = sizeof("git pull") - 1 });
+    if ((pull_ret != 0)) {
+    printf("%s\n", "error: 'git pull' failed. Make sure git is installed and you are in the oC repository.");
+    return 1;
+    }
+    printf("%s\n", "Rebuilding oC compiler...");
+    int32_t build_ret = 0;
+    if ((host == OC_TARGET_WINDOWS_X86_64)) {
+    build_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("if exist bin\\occ.exe move /y bin\\occ.exe bin\\occ.exe.old >nul 2>&1 & gcc -O2 bootstrap\\occ_bootstrap.c -o bin\\occ.exe"), .len = sizeof("if exist bin\\occ.exe move /y bin\\occ.exe bin\\occ.exe.old >nul 2>&1 & gcc -O2 bootstrap\\occ_bootstrap.c -o bin\\occ.exe") - 1 });
+    }
+    else {
+    build_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("cc -O2 bootstrap/occ_bootstrap.c -o bin/occ"), .len = sizeof("cc -O2 bootstrap/occ_bootstrap.c -o bin/occ") - 1 });
+    }
+    if ((build_ret != 0)) {
+    printf("%s\n", "error: failed to rebuild compiler from bootstrap/occ_bootstrap.c");
+    return 1;
+    }
+    printf("%s\n", "Successfully updated oC!");
+    return 0;
 }
 
 int main(int argc, char** argv) {
@@ -7932,6 +7966,11 @@ int main(int argc, char** argv) {
     int32_t i = 1;
     if ((i < argc)) {
     oc_string first = cstr_to_string(((argv)[i]));
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("update"), .len = sizeof("update") - 1 })) {
+    int32_t host = sys_host_target();
+    return handle_update(host);
+    }
+    else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("run"), .len = sizeof("run") - 1 })) {
     is_run = true;
     i = __OC_ADD(i, 1);
@@ -7939,6 +7978,7 @@ int main(int argc, char** argv) {
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("build"), .len = sizeof("build") - 1 })) {
     i = __OC_ADD(i, 1);
+    }
     }
     }
     }
