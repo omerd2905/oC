@@ -14,3 +14,13 @@ let OC_MODE_EXEC: u32 = 493;
 
 let OC_AF_INET: i32 = 2;
 let OC_SOCK_STREAM: i32 = 1;
+
+// Target identifiers (occ --target) and the value of sys_host_target(): the platform the running
+// binary was built for. OC_TARGET_OTHER is a POSIX host with no named target (BSD, linux-aarch64).
+let OC_TARGET_OTHER: i32 = 0;
+let OC_TARGET_LINUX_X86_64: i32 = 1;
+let OC_TARGET_WINDOWS_X86_64: i32 = 2;
+let OC_TARGET_MACOS_X86_64: i32 = 3;
+let OC_TARGET_MACOS_AARCH64: i32 = 4;
+
+extern fn sys_host_target() -> i32;

@@ -25,7 +25,7 @@ RUNTIME_TRAP=(
 PASS=0
 TOTAL=0
 
-echo "=== [1/3] Compile-Time Rejection Probes (C & Native Backends) ==="
+echo "=== [1/4] Compile-Time Rejection Probes (C & Native Backends) ==="
 for p in "${COMPILE_REJECT[@]}"; do
   for backend in c native; do
     TOTAL=$((TOTAL + 1))
@@ -39,7 +39,7 @@ for p in "${COMPILE_REJECT[@]}"; do
   done
 done
 
-echo "=== [2/3] Runtime Hardware Trap Probes (C & Native Backends) ==="
+echo "=== [2/4] Runtime Hardware Trap Probes (C & Native Backends) ==="
 for p in "${RUNTIME_TRAP[@]}"; do
   for backend in c native; do
     TOTAL=$((TOTAL + 1))
@@ -59,7 +59,7 @@ for p in "${RUNTIME_TRAP[@]}"; do
   done
 done
 
-echo "=== [3/3] Positive Examples Verification (C & Native Backends) ==="
+echo "=== [3/4] Positive Examples Verification (C & Native Backends) ==="
 for ex in "$ROOT"/examples/*.oc; do
   base="$(basename "$ex")"
   if [ "$base" = "math_utils.oc" ] || [ "$base" = "bad_stack_escape.oc" ]; then
@@ -72,5 +72,49 @@ for ex in "$ROOT"/examples/*.oc; do
     PASS=$((PASS + 1))
   done
 done
+
+echo "=== [4/4] Cross-Target PE32+ Verification (--backend native --target windows-x86_64) ==="
+PE_OUT=/tmp/oc_pe_bin
+pe_check() {
+  python3 "$ROOT/tests/check_pe.py" "$PE_OUT.exe" >/dev/null
+}
+# Trap probes use no OS intrinsics, so each must emit a valid W^X PE32+ image.
+for p in "${RUNTIME_TRAP[@]}"; do
+  TOTAL=$((TOTAL + 1))
+  rm -f "$PE_OUT.exe"
+  if "$OCC" build "$ROOT/tests/probes/$p" -o "$PE_OUT" --backend native --target windows-x86_64 >/dev/null 2>&1 && pe_check; then
+    echo "  [PASS] $p -> valid PE32+ (AMD64, W^X .text/.rdata, KERNEL32 imports)"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $p did not produce a valid PE32+ image"
+    exit 1
+  fi
+done
+# Examples either emit a valid PE32+ or are rejected for Linux-only syscall intrinsics (fail closed).
+for ex in "$ROOT"/examples/*.oc; do
+  base="$(basename "$ex")"
+  if [ "$base" = "math_utils.oc" ] || [ "$base" = "bad_stack_escape.oc" ]; then
+    continue
+  fi
+  TOTAL=$((TOTAL + 1))
+  rm -f "$PE_OUT.exe"
+  if out="$("$OCC" build "$ex" -o "$PE_OUT" --backend native --target windows-x86_64 2>&1)"; then
+    if pe_check; then
+      echo "  [PASS] $base -> valid PE32+"
+      PASS=$((PASS + 1))
+    else
+      echo "  [FAIL] $base produced an invalid PE32+ image"
+      exit 1
+    fi
+  elif grep -q "unavailable on target windows-x86_64" <<<"$out"; then
+    echo "  [PASS] $base rejected at compile time (Linux syscall intrinsic: $(grep -A1 "unavailable on target" <<<"$out" | tail -n 1))"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $base: unexpected windows-x86_64 build failure:"
+    echo "$out"
+    exit 1
+  fi
+done
+rm -f "$PE_OUT.exe"
 
 echo "=== ALL $PASS / $TOTAL PROBE & EXAMPLE CHECKS PASSED ==="
