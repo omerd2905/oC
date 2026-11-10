@@ -104,6 +104,25 @@ struct NativeGen {
     break_patches: [128]usize,
     break_depths: [128]i32,
     break_count: usize,
+
+    target: i32,
+    has_error: bool,
+    iat_fix_code: [16]usize,
+    iat_fix_slot: [16]usize,
+    iat_fix_count: usize,
+}
+
+// KERNEL32.dll imports used by the windows-x86_64 runtime helpers (IAT slot indices).
+let NG_IMP_EXIT_PROCESS: usize = 0;
+let NG_IMP_GET_STD_HANDLE: usize = 1;
+let NG_IMP_WRITE_FILE: usize = 2;
+let NG_IMP_COUNT: usize = 3;
+
+fn ng_fail(ng: *mut NativeGen, msg: string) {
+    if !ng.has_error {
+        print(msg);
+    }
+    ng.has_error = true;
 }
 
 fn ng_add_fixup(ng: *mut NativeGen, code_off: usize, fn_name: string, is_6byte: bool) {
@@ -112,6 +131,8 @@ fn ng_add_fixup(ng: *mut NativeGen, code_off: usize, fn_name: string, is_6byte: 
         ng.fixup_names[ng.fixup_count] = fn_name;
         ng.fixup_is_6byte[ng.fixup_count] = is_6byte;
         ng.fixup_count = ng.fixup_count + 1;
+    } else {
+        ng_fail(ng, "native codegen error: call fixup table full (1024)");
     }
 }
 
@@ -120,7 +141,32 @@ fn ng_add_data_reloc(ng: *mut NativeGen, code_off: usize, data_off: usize) {
         ng.data_reloc_code[ng.data_reloc_count] = code_off;
         ng.data_reloc_data[ng.data_reloc_count] = data_off;
         ng.data_reloc_count = ng.data_reloc_count + 1;
+    } else {
+        ng_fail(ng, "native codegen error: data relocation table full (512)");
     }
+}
+
+fn ng_add_iat_fixup(ng: *mut NativeGen, code_off: usize, slot: usize) {
+    if ng.iat_fix_count < 16 {
+        ng.iat_fix_code[ng.iat_fix_count] = code_off;
+        ng.iat_fix_slot[ng.iat_fix_count] = slot;
+        ng.iat_fix_count = ng.iat_fix_count + 1;
+    } else {
+        ng_fail(ng, "native codegen error: import fixup table full (16)");
+    }
+}
+
+fn ng_emit_call(ng: *mut NativeGen, code: *mut CodeBuffer, fn_name: string) {
+    ng_add_fixup(ng, code.len, fn_name, false);
+    buf_append_u8(code, 232); // call rel32
+    elf_append_u32(code, 0);
+}
+
+fn ng_emit_iat_call(ng: *mut NativeGen, code: *mut CodeBuffer, slot: usize) {
+    buf_append_u8(code, 255);
+    buf_append_u8(code, 21); // call *disp32(%rip)
+    ng_add_iat_fixup(ng, code.len, slot);
+    elf_append_u32(code, 0);
 }
 
 fn parse_u64(s: string) -> u64 {
@@ -1524,7 +1570,28 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         else if str_eq(fn_name, "sys_unlink") { is_sys = true; sys_nr = 87; }
         else if str_eq(fn_name, "sys_chmod") { is_sys = true; sys_nr = 90; }
 
+        if str_eq(fn_name, "sys_host_target") {
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 199);
+            buf_append_u8(code, 192); // mov $target, %rax
+            elf_append_u32(code, ng.target.as(u32));
+            return;
+        }
+
         if is_sys {
+            if ng.target == OC_TARGET_WINDOWS_X86_64 {
+                // Linux syscall numbers are meaningless on Windows: map what the kernel32 runtime covers, reject the rest.
+                if sys_nr == 60 {
+                    ng_emit_call(ng, code, "__win_exit");
+                    return;
+                }
+                if !ng.has_error {
+                    print("native codegen error: syscall intrinsic unavailable on target windows-x86_64 (use --backend c):");
+                    print(fn_name);
+                }
+                ng.has_error = true;
+                return;
+            }
             buf_append_u8(code, 73);
             buf_append_u8(code, 137);
             buf_append_u8(code, 202); // mov %rcx, %r10
@@ -1918,10 +1985,13 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 let emitted_len: usize = ng_append_unescaped_str(data, raw);
                 buf_append_u8(data, 10); // '\n'
 
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 199);
-                buf_append_u8(code, 192);
-                elf_append_u32(code, 1);
+                let is_win: bool = ng.target == OC_TARGET_WINDOWS_X86_64;
+                if !is_win {
+                    buf_append_u8(code, 72);
+                    buf_append_u8(code, 199);
+                    buf_append_u8(code, 192);
+                    elf_append_u32(code, 1);
+                }
 
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 199);
@@ -1939,8 +2009,12 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 194);
                 elf_append_u32(code, (emitted_len + 1).as(u32));
 
-                buf_append_u8(code, 15);
-                buf_append_u8(code, 5);
+                if is_win {
+                    ng_emit_call(ng, code, "__win_write");
+                } else {
+                    buf_append_u8(code, 15);
+                    buf_append_u8(code, 5);
+                }
                 return;
             } else if ng_is_expr_slice(ng, arg) {
                 ng_emit_expr(ng, code, data, arg);
@@ -2062,7 +2136,308 @@ fn ng_emit_store_param_reg(code: *mut CodeBuffer, reg_idx: usize, off: i32) {
     }
 }
 
-fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
+fn ng_define_helper(ng: *mut NativeGen, has_offset: *mut bool, name: string, off: usize) {
+    if ng.fn_count < 256 {
+        ng.fn_names[ng.fn_count] = name;
+        has_offset[ng.fn_count] = true;
+        ng.fn_offsets[ng.fn_count] = off;
+        ng.fn_count = ng.fn_count + 1;
+    } else {
+        ng_fail(ng, "native codegen error: function table full (256)");
+    }
+}
+
+// write(fd = %rdi, buf = %rsi, len = %rdx): raw syscall on Linux, kernel32 shim on Windows.
+fn ng_emit_write_fd(ng: *mut NativeGen, code: *mut CodeBuffer) {
+    if ng.target == OC_TARGET_WINDOWS_X86_64 {
+        ng_emit_call(ng, code, "__win_write");
+        return;
+    }
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // mov $1, %rax
+    buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+}
+
+// Windows runtime shims. oC code keeps its internal SysV-style convention (%rdi, %rsi, %rdx, ...);
+// only these helpers cross into kernel32 using the Win64 ABI (%rcx, %rdx, %r8, %r9, 32-byte
+// shadow space, 16-byte aligned %rsp at the call). They realign %rsp themselves because traps
+// and print sites can be reached at any stack depth.
+fn ng_emit_win_runtime(ng: *mut NativeGen, code: *mut CodeBuffer, has_offset: *mut bool) {
+    // __win_write(fd = %rdi (1 or 2), buf = %rsi, len = %rdx)
+    ng_define_helper(ng, has_offset, "__win_write", code.len);
+    buf_append_u8(code, 85);                                                        // push %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229);    // mov %rsp, %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 64);  // sub $64, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 84); buf_append_u8(code, 36); buf_append_u8(code, 56); // mov %rdx, 56(%rsp)
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 193); elf_append_i32(code, -10); // mov $-10, %rcx
+    buf_append_u8(code, 72); buf_append_u8(code, 41); buf_append_u8(code, 249);     // sub %rdi, %rcx (-11 stdout, -12 stderr)
+    ng_emit_iat_call(ng, code, NG_IMP_GET_STD_HANDLE);
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 193);    // mov %rax, %rcx (hFile)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 242);    // mov %rsi, %rdx (lpBuffer; %rsi is Win64 nonvolatile)
+    buf_append_u8(code, 76); buf_append_u8(code, 139); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 56); // mov 56(%rsp), %r8
+    buf_append_u8(code, 76); buf_append_u8(code, 141); buf_append_u8(code, 76); buf_append_u8(code, 36); buf_append_u8(code, 48); // lea 48(%rsp), %r9
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 32); elf_append_u32(code, 0); // movq $0, 32(%rsp) (lpOverlapped)
+    ng_emit_iat_call(ng, code, NG_IMP_WRITE_FILE);
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236);    // mov %rbp, %rsp
+    buf_append_u8(code, 93);                                                        // pop %rbp
+    buf_append_u8(code, 195);                                                       // ret
+
+    // __win_exit(code = %rdi): never returns
+    ng_define_helper(ng, has_offset, "__win_exit", code.len);
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 32);  // sub $32, %rsp
+    buf_append_u8(code, 137); buf_append_u8(code, 249);                             // mov %edi, %ecx
+    ng_emit_iat_call(ng, code, NG_IMP_EXIT_PROCESS);
+    buf_append_u8(code, 204);                                                       // int3
+}
+
+fn pe_align(v: usize, a: usize) -> usize {
+    return ((v + a - 1) / a) * a;
+}
+
+fn pe_append_zeros(buf: *mut CodeBuffer, n: usize) {
+    let mut i: usize = 0;
+    while i < n {
+        buf_append_u8(buf, 0);
+        i = i + 1;
+    }
+}
+
+fn pe_append_section_header(pe: *mut CodeBuffer, name: string, vsize: usize, rva: usize, raw_size: usize, raw_off: usize, flags: u32) {
+    let mut i: usize = 0;
+    while i < 8 {
+        if i < name.len {
+            buf_append_u8(pe, name[i]);
+        } else {
+            buf_append_u8(pe, 0);
+        }
+        i = i + 1;
+    }
+    elf_append_u32(pe, vsize.as(u32));
+    elf_append_u32(pe, rva.as(u32));
+    elf_append_u32(pe, raw_size.as(u32));
+    elf_append_u32(pe, raw_off.as(u32));
+    elf_append_u32(pe, 0); // PointerToRelocations
+    elf_append_u32(pe, 0); // PointerToLinenumbers
+    elf_append_u16(pe, 0); // NumberOfRelocations
+    elf_append_u16(pe, 0); // NumberOfLinenumbers
+    elf_append_u32(pe, flags);
+}
+
+// PE32+ image: headers | .text (RX, RVA 0x1000) | .rdata (R: IAT, import table, strings).
+// No section is ever writable; the loader temporarily unprotects the IAT (data directory 12)
+// while binding imports. Code is position independent, so ASLR needs no .reloc section.
+fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {
+    let mut imp_names: [3]string = [""];
+    imp_names[NG_IMP_EXIT_PROCESS] = "ExitProcess";
+    imp_names[NG_IMP_GET_STD_HANDLE] = "GetStdHandle";
+    imp_names[NG_IMP_WRITE_FILE] = "WriteFile";
+    let dll_name: string = "KERNEL32.dll";
+
+    // .rdata layout: IAT | import lookup table | import descriptors | hint/name entries | DLL name | user data
+    let thunk_bytes: usize = (NG_IMP_COUNT + 1) * 8;
+    let iat_off: usize = 0;
+    let ilt_off: usize = iat_off + thunk_bytes;
+    let idt_off: usize = ilt_off + thunk_bytes;
+    let idt_bytes: usize = 2 * 20;
+    let mut hint_offs: [3]usize = [0];
+    let mut cur: usize = idt_off + idt_bytes;
+    let mut k: usize = 0;
+    while k < NG_IMP_COUNT {
+        hint_offs[k] = cur;
+        cur = pe_align(cur + 2 + imp_names[k].len + 1, 2);
+        k = k + 1;
+    }
+    let dll_off: usize = cur;
+    let udata_off: usize = pe_align(dll_off + dll_name.len + 1, 16);
+    let rdata_len: usize = udata_off + data.len;
+
+    let file_align: usize = 512;
+    let sect_align: usize = 4096;
+    let headers_size: usize = 512;
+    let text_rva: usize = 4096;
+    let text_raw_off: usize = headers_size;
+    let text_raw_size: usize = pe_align(code.len, file_align);
+    let rdata_rva: usize = text_rva + pe_align(code.len, sect_align);
+    let rdata_raw_off: usize = text_raw_off + text_raw_size;
+    let rdata_raw_size: usize = pe_align(rdata_len, file_align);
+    let image_size: usize = rdata_rva + pe_align(rdata_len, sect_align);
+    let file_size: usize = rdata_raw_off + rdata_raw_size;
+
+    // Bind runtime IAT calls: call *disp32(%rip) -> IAT slot in .rdata
+    let mut fi: usize = 0;
+    while fi < ng.iat_fix_count {
+        let pos: usize = ng.iat_fix_code[fi];
+        let slot_rva: usize = rdata_rva + iat_off + ng.iat_fix_slot[fi] * 8;
+        let rel: i64 = slot_rva.as(i64) - (text_rva + pos + 4).as(i64);
+        elf_patch_i32(code, pos, rel.as(i32));
+        fi = fi + 1;
+    }
+
+    // Rewrite absolute data loads (movabs $imm64, %reg) as RIP-relative lea + 3-byte nop (same length).
+    let mut ri: usize = 0;
+    while ri < ng.data_reloc_count {
+        let c_pos: usize = ng.data_reloc_code[ri];
+        let mut form_ok: bool = false;
+        if c_pos >= 2 {
+            if code.buffer[c_pos - 2] == 72 {
+                if code.buffer[c_pos - 1] >= 184 {
+                    if code.buffer[c_pos - 1] <= 191 {
+                        form_ok = true;
+                    }
+                }
+            }
+        }
+        if !form_ok {
+            print("native codegen error: unexpected data relocation form for PE32+");
+            return false;
+        }
+        let reg: u8 = code.buffer[c_pos - 1] - 184;
+        let target_rva: usize = rdata_rva + udata_off + ng.data_reloc_data[ri];
+        let rel: i64 = target_rva.as(i64) - (text_rva + c_pos + 5).as(i64);
+        code.buffer[c_pos - 1] = 141;     // lea
+        code.buffer[c_pos] = 5 + reg * 8; // ModRM: disp32(%rip)
+        elf_patch_i32(code, c_pos + 1, rel.as(i32));
+        code.buffer[c_pos + 5] = 15;
+        code.buffer[c_pos + 6] = 31;
+        code.buffer[c_pos + 7] = 0;       // nopl (%rax)
+        ri = ri + 1;
+    }
+
+    let mut pe_buf: CodeBuffer = buf_init(file_size + 1);
+    let pe: *mut CodeBuffer = &mut pe_buf;
+
+    // DOS header (e_lfanew = 0x40, no stub)
+    elf_append_u16(pe, 23117);  // e_magic "MZ"
+    elf_append_u16(pe, 144);    // e_cblp
+    elf_append_u16(pe, 3);      // e_cp
+    elf_append_u16(pe, 0);      // e_crlc
+    elf_append_u16(pe, 4);      // e_cparhdr
+    elf_append_u16(pe, 0);      // e_minalloc
+    elf_append_u16(pe, 65535);  // e_maxalloc
+    elf_append_u16(pe, 0);      // e_ss
+    elf_append_u16(pe, 184);    // e_sp
+    pe_append_zeros(pe, 6);     // e_csum, e_ip, e_cs
+    elf_append_u16(pe, 64);     // e_lfarlc
+    pe_append_zeros(pe, 34);    // e_ovno .. e_res2
+    elf_append_u32(pe, 64);     // e_lfanew
+
+    // PE signature + COFF file header
+    elf_append_u32(pe, 17744);  // "PE\0\0"
+    elf_append_u16(pe, 34404);  // Machine = AMD64 (0x8664)
+    elf_append_u16(pe, 2);      // NumberOfSections
+    elf_append_u32(pe, 0);      // TimeDateStamp (0: reproducible output)
+    elf_append_u32(pe, 0);      // PointerToSymbolTable
+    elf_append_u32(pe, 0);      // NumberOfSymbols
+    elf_append_u16(pe, 240);    // SizeOfOptionalHeader
+    elf_append_u16(pe, 34);     // EXECUTABLE_IMAGE | LARGE_ADDRESS_AWARE (0x0022)
+
+    // PE32+ optional header
+    elf_append_u16(pe, 523);    // Magic = PE32+ (0x020B)
+    buf_append_u8(pe, 1);       // MajorLinkerVersion
+    buf_append_u8(pe, 0);       // MinorLinkerVersion
+    elf_append_u32(pe, text_raw_size.as(u32));  // SizeOfCode
+    elf_append_u32(pe, rdata_raw_size.as(u32)); // SizeOfInitializedData
+    elf_append_u32(pe, 0);      // SizeOfUninitializedData
+    elf_append_u32(pe, text_rva.as(u32)); // AddressOfEntryPoint (_start)
+    elf_append_u32(pe, text_rva.as(u32)); // BaseOfCode
+    elf_append_u64(pe, 5368709120);       // ImageBase = 0x140000000
+    elf_append_u32(pe, sect_align.as(u32));
+    elf_append_u32(pe, file_align.as(u32));
+    elf_append_u16(pe, 6);      // MajorOperatingSystemVersion
+    elf_append_u16(pe, 0);
+    elf_append_u16(pe, 0);      // MajorImageVersion
+    elf_append_u16(pe, 0);
+    elf_append_u16(pe, 6);      // MajorSubsystemVersion
+    elf_append_u16(pe, 0);
+    elf_append_u32(pe, 0);      // Win32VersionValue
+    elf_append_u32(pe, image_size.as(u32));
+    elf_append_u32(pe, headers_size.as(u32));
+    elf_append_u32(pe, 0);      // CheckSum
+    elf_append_u16(pe, 3);      // Subsystem = WINDOWS_CUI
+    elf_append_u16(pe, 33120);  // DllCharacteristics = HIGH_ENTROPY_VA | DYNAMIC_BASE | NX_COMPAT | TERMINAL_SERVER_AWARE (0x8160)
+    elf_append_u64(pe, 1048576); // SizeOfStackReserve
+    elf_append_u64(pe, 1048576); // SizeOfStackCommit (fully committed: frames > 4 KiB need no __chkstk probes)
+    elf_append_u64(pe, 1048576); // SizeOfHeapReserve
+    elf_append_u64(pe, 4096);    // SizeOfHeapCommit
+    elf_append_u32(pe, 0);       // LoaderFlags
+    elf_append_u32(pe, 16);      // NumberOfRvaAndSizes
+    let mut d: usize = 0;
+    while d < 16 {
+        if d == 1 {
+            elf_append_u32(pe, (rdata_rva + idt_off).as(u32)); // Import directory
+            elf_append_u32(pe, idt_bytes.as(u32));
+        } else if d == 12 {
+            elf_append_u32(pe, (rdata_rva + iat_off).as(u32)); // IAT
+            elf_append_u32(pe, thunk_bytes.as(u32));
+        } else {
+            elf_append_u64(pe, 0);
+        }
+        d = d + 1;
+    }
+
+    // Section table: strict W^X, nothing writable
+    pe_append_section_header(pe, ".text", code.len, text_rva, text_raw_size, text_raw_off, 1610612768);    // CODE | EXECUTE | READ (0x60000020)
+    pe_append_section_header(pe, ".rdata", rdata_len, rdata_rva, rdata_raw_size, rdata_raw_off, 1073741888); // INITIALIZED_DATA | READ (0x40000040)
+    pe_append_zeros(pe, headers_size - pe.len);
+
+    // .text
+    let mut p: usize = 0;
+    while p < code.len {
+        buf_append_u8(pe, code.buffer[p]);
+        p = p + 1;
+    }
+    pe_append_zeros(pe, text_raw_size - code.len);
+
+    // .rdata: IAT and lookup table hold identical hint/name RVAs until the loader binds the IAT
+    let mut t: usize = 0;
+    while t < 2 {
+        k = 0;
+        while k < NG_IMP_COUNT {
+            elf_append_u64(pe, (rdata_rva + hint_offs[k]).as(u64));
+            k = k + 1;
+        }
+        elf_append_u64(pe, 0);
+        t = t + 1;
+    }
+    elf_append_u32(pe, (rdata_rva + ilt_off).as(u32)); // OriginalFirstThunk
+    elf_append_u32(pe, 0);                             // TimeDateStamp
+    elf_append_u32(pe, 0);                             // ForwarderChain
+    elf_append_u32(pe, (rdata_rva + dll_off).as(u32)); // Name
+    elf_append_u32(pe, (rdata_rva + iat_off).as(u32)); // FirstThunk
+    pe_append_zeros(pe, 20);                           // null descriptor
+    k = 0;
+    while k < NG_IMP_COUNT {
+        pe_append_zeros(pe, rdata_raw_off + hint_offs[k] - pe.len);
+        elf_append_u16(pe, 0); // Hint
+        buf_append(pe, imp_names[k]);
+        buf_append_u8(pe, 0);
+        k = k + 1;
+    }
+    pe_append_zeros(pe, rdata_raw_off + dll_off - pe.len);
+    buf_append(pe, dll_name);
+    buf_append_u8(pe, 0);
+    pe_append_zeros(pe, rdata_raw_off + udata_off - pe.len);
+    p = 0;
+    while p < data.len {
+        buf_append_u8(pe, data.buffer[p]);
+        p = p + 1;
+    }
+    pe_append_zeros(pe, file_size - pe.len);
+
+    if pe.len != file_size {
+        print("native codegen error: PE32+ image size mismatch");
+        buf_deinit(pe);
+        return false;
+    }
+
+    let pe_str: string = buf_to_string(pe);
+    let ok: bool = write_file(out_file_str, pe_str);
+    buf_deinit(pe);
+    return ok;
+}
+
+fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> bool {
     let mut code_buf: CodeBuffer = buf_init(262144);
     let mut data_buf: CodeBuffer = buf_init(65536);
     let code: *mut CodeBuffer = &mut code_buf;
@@ -2106,8 +2481,14 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
         break_patches: [0],
         break_depths: [0],
         break_count: 0,
+        target: target,
+        has_error: false,
+        iat_fix_code: [0],
+        iat_fix_slot: [0],
+        iat_fix_count: 0,
     };
     let ng: *mut NativeGen = &mut ng_state;
+    let is_win: bool = target == OC_TARGET_WINDOWS_X86_64;
 
     // 0. Pre-scan structs, top-level constants, and function return types
     let mut scan: *mut AstNode = root.left;
@@ -2168,19 +2549,30 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
 
     let mut fn_has_offset: [256]bool = [false];
 
-    // 1. Emit _start (entry point at 0x401000)
+    // 1. Emit _start (ELF entry 0x401000, PE entry RVA 0x1000)
+    if is_win {
+        // Entered with rsp = 8 mod 16: reserve shadow space and realign for Win64 calls.
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 131);
+        buf_append_u8(code, 236);
+        buf_append_u8(code, 40); // sub $40, %rsp
+    }
     ng_add_fixup(ng, code.len, "main", false);
     buf_append_u8(code, 232); // call main
     elf_append_u32(code, 0);
     buf_append_u8(code, 72);
     buf_append_u8(code, 137);
     buf_append_u8(code, 199);
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 199);
-    buf_append_u8(code, 192);
-    elf_append_u32(code, 60);
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 5);
+    if is_win {
+        ng_emit_call(ng, code, "__win_exit");
+    } else {
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 199);
+        buf_append_u8(code, 192);
+        elf_append_u32(code, 60);
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 5);
+    }
 
     // 2. Emit all functions in AST
     let mut decl: *mut AstNode = root.left;
@@ -2252,10 +2644,14 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 137);
                 buf_append_u8(code, 229); // mov %rsp, %rbp
+                let mut frame_patch: usize = 0;
+                let mut has_frame: bool = false;
                 if stack_sz > 0 {
                     buf_append_u8(code, 72);
                     buf_append_u8(code, 129);
                     buf_append_u8(code, 236);
+                    frame_patch = code.len;
+                    has_frame = true;
                     elf_append_u32(code, stack_sz);
                 }
 
@@ -2282,6 +2678,17 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
                     }
                 }
 
+                // The pre-pass cannot infer every unannotated `let` (e.g. struct literals); grow the
+                // frame to what emission actually used so no local lives below %rsp.
+                let used_sz: u32 = ((((-ng.curr_off) + 15) / 16) * 16).as(u32);
+                if used_sz > stack_sz {
+                    if has_frame {
+                        elf_patch_u32(code, frame_patch, used_sz);
+                    } else {
+                        ng_fail(ng, "native codegen error: stack frame size underestimated");
+                    }
+                }
+
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 49);
                 buf_append_u8(code, 192);
@@ -2295,14 +2702,20 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
         decl = decl.next;
     }
 
-    // 3. Emit helper functions
-    // __print_i64
-    if ng.fn_count < 256 {
-        ng.fn_names[ng.fn_count] = "__print_i64";
-        fn_has_offset[ng.fn_count] = true;
-        ng.fn_offsets[ng.fn_count] = code.len;
-        ng.fn_count = ng.fn_count + 1;
+    if ng.has_error {
+        buf_deinit(code);
+        buf_deinit(data);
+        return false;
     }
+
+    // 3. Emit helper functions
+    let has_offset: *mut bool = (&mut fn_has_offset).as(*mut bool);
+    if is_win {
+        ng_emit_win_runtime(ng, code, has_offset);
+    }
+
+    // __print_i64
+    ng_define_helper(ng, has_offset, "__print_i64", code.len);
     buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 255);
     ng_add_fixup(ng, code.len, "__print_u64", true);
     buf_append_u8(code, 15); buf_append_u8(code, 137); elf_append_u32(code, 0);
@@ -2311,19 +2724,13 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 230);
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, 1);
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
-    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
-    buf_append_u8(code, 15); buf_append_u8(code, 5);
+    ng_emit_write_fd(ng, code);
     buf_append_u8(code, 88);
     buf_append_u8(code, 95);
     buf_append_u8(code, 72); buf_append_u8(code, 247); buf_append_u8(code, 223);
 
     // __print_u64
-    if ng.fn_count < 256 {
-        ng.fn_names[ng.fn_count] = "__print_u64";
-        fn_has_offset[ng.fn_count] = true;
-        ng.fn_offsets[ng.fn_count] = code.len;
-        ng.fn_count = ng.fn_count + 1;
-    }
+    ng_define_helper(ng, has_offset, "__print_u64", code.len);
     buf_append_u8(code, 85);
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229);
     buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 32);
@@ -2353,21 +2760,22 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
     buf_append_u8(code, 117);
     buf_append_u8(code, (u8_val % 256).as(u8));
 
-    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
+    if !is_win {
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
+    }
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 202);
-    buf_append_u8(code, 15); buf_append_u8(code, 5);
+    if is_win {
+        ng_emit_call(ng, code, "__win_write");
+    } else {
+        buf_append_u8(code, 15); buf_append_u8(code, 5);
+    }
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236);
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
 
     // __print_slice
-    if ng.fn_count < 256 {
-        ng.fn_names[ng.fn_count] = "__print_slice";
-        fn_has_offset[ng.fn_count] = true;
-        ng.fn_offsets[ng.fn_count] = code.len;
-        ng.fn_count = ng.fn_count + 1;
-    }
+    ng_define_helper(ng, has_offset, "__print_slice", code.len);
     buf_append_u8(code, 85);
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229);
     buf_append_u8(code, 87);
@@ -2375,14 +2783,12 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
     buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 85); buf_append_u8(code, 240);
     buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 117); buf_append_u8(code, 248);
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
-    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
-    buf_append_u8(code, 15); buf_append_u8(code, 5);
+    ng_emit_write_fd(ng, code);
     buf_append_u8(code, 106); buf_append_u8(code, 10);
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 230);
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, 1);
     buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
-    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
-    buf_append_u8(code, 15); buf_append_u8(code, 5);
+    ng_emit_write_fd(ng, code);
     buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236);
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
@@ -2400,12 +2806,7 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
     trap_msgs[3] = "panic: division by zero\n";
     let mut ti: usize = 0;
     while ti < 4 {
-        if ng.fn_count < 256 {
-            ng.fn_names[ng.fn_count] = traps[ti];
-            fn_has_offset[ng.fn_count] = true;
-            ng.fn_offsets[ng.fn_count] = code.len;
-            ng.fn_count = ng.fn_count + 1;
-        }
+        ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;
         let mut tk: usize = 0;
@@ -2414,17 +2815,25 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
             tk = tk + 1;
         }
 
-        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
+        if !is_win {
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
+        }
         buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 2);
         buf_append_u8(code, 72); buf_append_u8(code, 190);
         let t_patch: usize = code.len;
         elf_append_u64(code, 0);
         ng_add_data_reloc(ng, t_patch, t_data_off);
         buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, tmsg.len.as(u32));
-        buf_append_u8(code, 15); buf_append_u8(code, 5);
-        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 60);
-        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
-        buf_append_u8(code, 15); buf_append_u8(code, 5);
+        if is_win {
+            ng_emit_call(ng, code, "__win_write");
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
+            ng_emit_call(ng, code, "__win_exit");
+        } else {
+            buf_append_u8(code, 15); buf_append_u8(code, 5);
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 60);
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
+            buf_append_u8(code, 15); buf_append_u8(code, 5);
+        }
         ti = ti + 1;
     }
 
@@ -2469,6 +2878,46 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
         fi = fi + 1;
     }
 
+    if ng.has_error {
+        buf_deinit(code);
+        buf_deinit(data);
+        return false;
+    }
+    if code.len >= code.capacity {
+        ng_fail(ng, "native codegen error: code buffer capacity exceeded");
+    }
+    if data.len >= data.capacity {
+        ng_fail(ng, "native codegen error: data buffer capacity exceeded");
+    }
+
+    let mut ok: bool = false;
+    if !ng.has_error {
+        if is_win {
+            ok = ng_write_pe(ng, code, data, out_file_str);
+        } else {
+            ok = ng_write_elf(ng, code, data, out_file_str);
+        }
+    }
+
+    buf_deinit(code);
+    buf_deinit(data);
+
+    if !ok { return false; }
+
+    chmod_exec(out_file_str);
+
+    return true;
+}
+
+fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64);
+}
+
+fn emit_native_pe(root: *mut AstNode, out_file_str: string) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64);
+}
+
+fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {
     // 5. Compute W^X segment layout and patch data relocations
     let rodata_end_off: usize = 256 + data.len;
     let code_file_off: usize = ((rodata_end_off + 4095) / 4096) * 4096;
@@ -2578,14 +3027,6 @@ fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
 
     let elf_str: string = buf_to_string(elf);
     let ok: bool = write_file(out_file_str, elf_str);
-
     buf_deinit(elf);
-    buf_deinit(code);
-    buf_deinit(data);
-
-    if !ok { return false; }
-
-    chmod_exec(out_file_str);
-
-    return true;
+    return ok;
 }

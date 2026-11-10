@@ -749,6 +749,7 @@ fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "sys_socket") { return true; }
     if str_eq(fn_name, "sys_connect") { return true; }
     if str_eq(fn_name, "sys_exit") { return true; }
+    if str_eq(fn_name, "sys_host_target") { return true; }
     return false;
 }
 
@@ -808,7 +809,13 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n");
     buf_append(out, "#endif\n");
     buf_append(out, "#endif\n");
-    buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n\n");
+    buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
+    // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.
+    buf_append(out, "#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n");
+    buf_append(out, "#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n");
+    buf_append(out, "#elif defined(__APPLE__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 3; }\n");
+    buf_append(out, "#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n");
+    buf_append(out, "#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n");
 
     buf_append(out, "typedef struct {\n");
     buf_append(out, "    const uint8_t* ptr;\n");

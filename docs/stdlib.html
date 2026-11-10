@@ -40,6 +40,7 @@
         <a href="#synopsis" class="sidebar-link">SYNOPSIS</a>
         <a href="#syscalls" class="sidebar-link">OC-SYSCALLS(2) ABI</a>
         <a href="#syscalls-table" class="sidebar-link">11 Linux Intrinsics</a>
+        <a href="#std-os" class="sidebar-link">OC-OS(3) Targets &amp; Portability</a>
         <a href="#std-mem" class="sidebar-link">OC-MEM(3) Arena Alloc</a>
         <a href="#std-fs" class="sidebar-link">OC-FS(3) Hardened I/O</a>
         <a href="#std-io" class="sidebar-link">OC-IO(3) Tainted I/O</a>
@@ -82,6 +83,7 @@ import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_ex
 import "std/io.oc"    // OC-IO(3):    print, read_int, sys_read
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  abs_i32, min_u32, max_u32, align_forward
+import "std/os.oc"    // OC-OS(3):    OC_PROT_*, OC_MAP_*, OC_O_*, OC_MODE_*, OC_AF_*, OC_SOCK_*, OC_TARGET_*, sys_host_target
 
 // Direct x86_64 Linux kernel intrinsics (extern declarations bound to direct syscall instructions)
 extern fn sys_read(fd: i32, buf: *mut u8, count: usize) i64;
@@ -94,7 +96,10 @@ extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) i32;
 extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) i32;
 extern fn sys_exit(code: i32) void;
 extern fn sys_unlink(path: *u8) i32;
-extern fn sys_chmod(path: *u8, mode: u32) i32;</code></pre>
+extern fn sys_chmod(path: *u8, mode: u32) i32;
+
+// Portable intrinsic (std/os.oc): the platform this binary was built for
+extern fn sys_host_target() i32;</code></pre>
       </section>
 
       <!-- SECTION: SYSCALLS -->
@@ -270,6 +275,81 @@ fn main() i32 {
           <div class="explanation-box">
             <strong>Active Defense ABI Guarantee:</strong> Standalone ELF binary contains only <code>.text</code>, <code>.rodata</code>, and an entry-point stub that sets up <code>%rdi</code> and executes <code>sys_exit</code> upon return from <code>main</code>. There is no dynamic linker (<code>/lib64/ld-linux-x86-64.so.2</code>), rendering shared library hijacking (e.g. <code>LD_PRELOAD</code>) completely impossible.
           </div>
+        </div>
+      </section>
+
+      <!-- SECTION: STD/OS -->
+      <section id="std-os">
+        <h2>OC-OS(3) &mdash; `std/os.oc` Canonical Constants, Targets &amp; Portability</h2>
+        <p>
+          <code>std/os.oc</code> defines every OS flag oC programs pass to the intrinsics above. The values are canonical Linux x86_64 numbers: <code>--backend native</code> emits them unchanged, and the C backend preamble translates them to the host's own flags (POSIX <code>mmap</code>/<code>MAP_ANON</code> on macOS and the BSDs, <code>VirtualAlloc</code>/<code>_open</code>/<code>_O_BINARY</code> on Windows, <code>sa_len</code> socket addresses on macOS/BSD). Source code therefore never contains <code>#ifdef</code>-style host checks.
+        </p>
+
+        <div class="fn-box">
+          <h3>OC_TARGET_* identifiers</h3>
+          <div class="fn-sig">let OC_TARGET_OTHER: i32 = 0;  let OC_TARGET_LINUX_X86_64: i32 = 1;  let OC_TARGET_WINDOWS_X86_64: i32 = 2;  let OC_TARGET_MACOS_X86_64: i32 = 3;  let OC_TARGET_MACOS_AARCH64: i32 = 4;</div>
+          <p>
+            Platform identifiers shared by <code>occ --target</code> (see <a href="man-occ.html#targets">OCC(1)</a>) and <code>sys_host_target()</code>. <code>OC_TARGET_OTHER</code> denotes a POSIX host without a named target (FreeBSD, OpenBSD, NetBSD, DragonFly, Linux on non-x86_64 CPUs); the C backend still builds natively there with <code>cc</code>.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>sys_host_target</h3>
+          <div class="fn-sig">extern fn sys_host_target() i32</div>
+          <p>
+            Returns the <code>OC_TARGET_*</code> value of the platform the running binary was built for. With the C backend it is fixed when the generated C is compiled (from <code>_WIN32</code>, <code>__APPLE__</code>, <code>__linux__</code>, <code>__x86_64__</code>, <code>__aarch64__</code>), so <code>bootstrap/occ_bootstrap.c</code> built on any host reports that host. With <code>--backend native</code> it compiles to a single <code>mov $target, %rax</code>. <code>occ</code> itself uses it to pick the host C compiler, the shell convention for <code>run</code>, and whether <code>\</code> is accepted in command-line paths.
+          </p>
+        </div>
+
+        <h3>Intrinsic Availability per Backend &amp; Target</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Intrinsic</th>
+              <th><code>--backend c</code> (any host)</th>
+              <th><code>--backend native</code>, <code>linux-x86_64</code></th>
+              <th><code>--backend native</code>, <code>windows-x86_64</code></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>print</code> &amp; runtime traps</td>
+              <td>libc <code>printf</code> / <code>fprintf(stderr)</code></td>
+              <td><code>syscall</code> write(1|2), exit(1)</td>
+              <td><code>KERNEL32!WriteFile</code> on <code>GetStdHandle</code>, <code>ExitProcess(1)</code></td>
+            </tr>
+            <tr>
+              <td><code>sys_exit</code></td>
+              <td><code>_exit</code></td>
+              <td><code>syscall</code> 60</td>
+              <td><code>KERNEL32!ExitProcess</code></td>
+            </tr>
+            <tr>
+              <td><code>sys_host_target</code></td>
+              <td>host value (preamble)</td>
+              <td>constant <code>1</code></td>
+              <td>constant <code>2</code></td>
+            </tr>
+            <tr>
+              <td><code>sys_mmap</code>, <code>sys_munmap</code></td>
+              <td><code>mmap</code> / <code>VirtualAlloc</code> (Windows)</td>
+              <td><code>syscall</code> 9 / 11</td>
+              <td rowspan="3">Rejected at compile time: <code>native codegen error: syscall intrinsic unavailable on target windows-x86_64</code>. Use <code>--backend c</code>.</td>
+            </tr>
+            <tr>
+              <td><code>sys_read</code>, <code>sys_write</code>, <code>sys_open</code>, <code>sys_close</code>, <code>sys_unlink</code>, <code>sys_chmod</code></td>
+              <td>POSIX / MSVCRT <code>_read</code>, <code>_open</code>, ... (Windows)</td>
+              <td><code>syscall</code> 0, 1, 2, 3, 87, 90</td>
+            </tr>
+            <tr>
+              <td><code>sys_socket</code>, <code>sys_connect</code></td>
+              <td>BSD sockets; return <code>-1</code> on Windows</td>
+              <td><code>syscall</code> 41 / 42</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="note-box">
+          <strong>Fail-closed portability:</strong> the native backend has no dead-code elimination, so a program that merely <em>imports</em> a module containing a Linux-only intrinsic (for example <code>std/mem.oc</code>) is rejected for <code>windows-x86_64</code> rather than producing a binary that would execute a Linux syscall number on Windows.
         </div>
       </section>
 
