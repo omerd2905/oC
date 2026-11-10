@@ -352,7 +352,7 @@ fn host_tmp_prefix() -> string {
 }
 
 fn print_usage() {
-    print("Usage: occ [run|build|update] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    print("Usage: occ [run|build|update|version] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
     print("Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
 }
 
@@ -405,7 +405,16 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let mut i: i32 = 1;
     if i < argc {
         let first: string = cstr_to_string(argv[i]);
-        if str_eq(first, "update") {
+        if str_eq(first, "version") {
+            print("oC 1.0.1");
+            return 0;
+        } else if str_eq(first, "--version") {
+            print("oC 1.0.1");
+            return 0;
+        } else if str_eq(first, "-v") {
+            print("oC 1.0.1");
+            return 0;
+        } else if str_eq(first, "update") {
             let host: i32 = sys_host_target();
             return handle_update(host);
         } else if str_eq(first, "run") {

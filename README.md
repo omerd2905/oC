@@ -175,4 +175,4 @@ Measurements on Linux x86_64 comparing oC against GCC 9.x/13.x at `-O2`:
 
 ## License
 
-Dual-licensed under the MIT License and the Apache License (Version 2.0).
+Dual-licensed under either the [MIT License](LICENSE-MIT) or the [Apache License (Version 2.0)](LICENSE-APACHE) at your option.
