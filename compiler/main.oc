@@ -278,6 +278,15 @@ fn load_module_recursive(
     return true;
 }
 
+fn host_tmp_prefix() -> string {
+    // POSIX hosts use /tmp/; hosts without it (native Windows) fall back to hidden files in CWD.
+    if write_file("/tmp/.occ_probe", "") {
+        unlink_file("/tmp/.occ_probe");
+        return "/tmp/";
+    }
+    return ".";
+}
+
 fn main(argc: i32, argv: **u8) -> i32 {
     if argc < 2 {
         print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend native]");
@@ -344,12 +353,14 @@ fn main(argc: i32, argv: **u8) -> i32 {
         return 1;
     }
 
+    let tmp_prefix: string = host_tmp_prefix();
     let mut is_temp_out: bool = false;
     let mut run_path_buf: CodeBuffer = buf_init(256);
     if is_run {
         if out_file_str.len == 0 {
             is_temp_out = true;
-            buf_append(&mut run_path_buf, "/tmp/occ_run_");
+            buf_append(&mut run_path_buf, tmp_prefix);
+            buf_append(&mut run_path_buf, "occ_run_");
             append_hash_digits(&mut run_path_buf, in_file_str, "bin");
             out_file_str = buf_to_string(&mut run_path_buf);
         }
@@ -422,7 +433,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
         buf_deinit(&mut combined_buf);
 
         let mut stage_path_buf: CodeBuffer = buf_init(256);
-        buf_append(&mut stage_path_buf, "/tmp/occ_stage_");
+        buf_append(&mut stage_path_buf, tmp_prefix);
+        buf_append(&mut stage_path_buf, "occ_stage_");
         append_hash_digits(&mut stage_path_buf, in_file_str, "stage");
         buf_append(&mut stage_path_buf, ".c");
         let stage_c_path: string = buf_to_string(&mut stage_path_buf);
@@ -445,7 +457,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         }
 
         let mut cmd_buf: CodeBuffer = buf_init(512);
-        buf_append(&mut cmd_buf, "gcc");
+        buf_append(&mut cmd_buf, "cc");
         buf_append(&mut cmd_buf, opt_flag);
         buf_append(&mut cmd_buf, " ");
         buf_append(&mut cmd_buf, stage_c_path);

@@ -1,3 +1,5 @@
+import "os.oc";
+
 extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -> i32;
 extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -> i32;
 extern fn sys_close(fd: i32) -> i32;
@@ -16,7 +18,7 @@ packed struct sockaddr_in {
 }
 
 fn probe_port(port: u16) -> bool {
-    let fd: i32 = sys_socket(2, 1, 0)
+    let fd: i32 = sys_socket(OC_AF_INET, OC_SOCK_STREAM, 0)
     if fd < 0 {
         return false
     }

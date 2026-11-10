@@ -1,3 +1,5 @@
+import "os.oc";
+
 extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -> *mut void;
 extern fn sys_munmap(addr: *mut void, len: usize) -> i32;
 extern fn sys_exit(code: i32);
@@ -9,7 +11,7 @@ struct Arena {
 }
 
 fn arena_init(capacity: usize) -> Arena {
-    let raw: *mut void = sys_mmap(0, capacity, 3, 34, -1, 0);
+    let raw: *mut void = sys_mmap(0, capacity, OC_PROT_RW, OC_MAP_PRIVATE_ANON, -1, 0);
     let buf: *mut u8 = raw.as(*mut u8);
     if buf.as(usize) == 0 {
         sys_exit(1);

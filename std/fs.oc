@@ -1,3 +1,5 @@
+import "os.oc";
+
 extern fn sys_open(path: *u8, flags: i32, mode: u32) -> i32;
 extern fn sys_close(fd: i32) -> i32;
 extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
@@ -22,7 +24,7 @@ fn cstr_path(path: string, out_buf: *mut u8) -> *u8 {
 fn read_file(path: string, out_buf: *mut u8, max_len: usize) -> i64 {
     let mut pbuf: [4096]u8 = [0]
     let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
-    let fd: i32 = sys_open(p, 0 | 655360, 0)
+    let fd: i32 = sys_open(p, OC_O_SAFE_READ, 0)
     if fd < 0 {
         return -1
     }
@@ -34,7 +36,7 @@ fn read_file(path: string, out_buf: *mut u8, max_len: usize) -> i64 {
 fn write_file(path: string, content: string) -> bool {
     let mut pbuf: [4096]u8 = [0]
     let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
-    let fd: i32 = sys_open(p, 577 | 655360, 420)
+    let fd: i32 = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE)
     if fd < 0 {
         return false
     }
@@ -46,7 +48,7 @@ fn write_file(path: string, content: string) -> bool {
 fn chmod_exec(path: string) -> bool {
     let mut pbuf: [4096]u8 = [0]
     let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
-    return sys_chmod(p, 493) == 0
+    return sys_chmod(p, OC_MODE_EXEC) == 0
 }
 
 fn unlink_file(path: string) -> bool {
