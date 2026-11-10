@@ -780,7 +780,11 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#define O_CLOEXEC_HOST O_CLOEXEC\n");
     buf_append(out, "#endif\n");
     buf_append(out, "#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n");
-    buf_append(out, "#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n\n");
+    buf_append(out, "#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n");
+    buf_append(out, "#ifdef htons\n#undef htons\n#endif\n");
+    buf_append(out, "#ifdef ntohs\n#undef ntohs\n#endif\n");
+    buf_append(out, "#ifdef htonl\n#undef htonl\n#endif\n");
+    buf_append(out, "#ifdef ntohl\n#undef ntohl\n#endif\n\n");
     buf_append(out, "static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n");
     buf_append(out, "#ifdef _WIN32\n");
     buf_append(out, "static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n");
