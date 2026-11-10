@@ -68,19 +68,45 @@ The `--target` option controls the target platform (defaults to host):
 
 ---
 
-## Building and Verification
+## Getting Started
 
-### Bootstrapping
+### 1. Download the Repository
+Clone with `git` or download and extract the repository ZIP:
+```bash
+git clone https://github.com/omerd2905/oC.git
+cd oC
+```
+*(On Windows without git: download the ZIP from GitHub and open the extracted folder in Command Prompt or PowerShell).*
+
+### 2. Prerequisites
+- **Linux / macOS / BSD:** Standard C compiler (`cc`, `gcc`, or `clang`).
+- **Windows:** GCC on `PATH` via [MSYS2](https://www.msys2.org/), [w64devkit](https://github.com/skeeto/w64devkit), or WinLibs (`winget install MSYS2.MSYS2`).
+
+### 3. Bootstrap the Compiler
+The portable C source (`bootstrap/occ_bootstrap.c`) is committed in the repository so no existing `oC` installation is required:
 
 On Linux, macOS, or BSD:
 ```bash
 cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
 ```
 
-On Windows (MSYS2 MinGW64):
-```bash
-gcc -O2 bootstrap/occ_bootstrap.c -o bin/occ.exe
+On Windows:
+```cmd
+gcc -O2 bootstrap\occ_bootstrap.c -o bin\occ.exe
 ```
+
+### 4. Run or Build
+```bash
+# Run directly
+./bin/occ run examples/hello.oc
+
+# On Windows:
+bin\occ.exe run examples\hello.oc
+```
+
+---
+
+## Building and Verification
 
 ### Self-Hosting Verification
 
