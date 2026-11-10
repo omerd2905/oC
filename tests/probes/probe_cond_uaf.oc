@@ -1,0 +1,11 @@
+import "../../std/mem.oc";
+fn main() -> i32 {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_alloc(&mut a, 16);
+    arena_reset(&mut a);
+    if p[0] == 0 {
+        return 1;
+    }
+    arena_deinit(&mut a);
+    return 0;
+}

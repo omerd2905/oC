@@ -9,15 +9,23 @@ fn main() -> i32 {
     print(tag);
     print(banner);
 
-    // 1. Direct Linux kernel sys_mmap / sys_munmap verification (PROT_READ|PROT_WRITE=3, MAP_PRIVATE|MAP_ANONYMOUS=34)
+    // 1. Direct Linux kernel sys_mmap / scrub / sys_munmap verification
     let page: *mut u8 = sys_mmap(0, 4096, 3, 34, -1, 0);
     *page = 79;
     let first_byte: u8 = *page;
+    let mut i: usize = 0;
+    while i < 4096 {
+        page[i] = 0;
+        i = i + 1;
+    }
+    let scrubbed_byte: u8 = *page;
     let unmap_rc: i32 = sys_munmap(page, 4096);
 
     if first_byte == 79 {
-        if unmap_rc == 0 {
-            print("[oC-TRIPWIRE] Kernel Anonymous Arena Probe: OK (4096B mapped & scrubbed)");
+        if scrubbed_byte == 0 {
+            if unmap_rc == 0 {
+                print("[oC-TRIPWIRE] Kernel Anonymous Arena Probe: OK (4096B mapped & scrubbed)");
+            }
         }
     }
 

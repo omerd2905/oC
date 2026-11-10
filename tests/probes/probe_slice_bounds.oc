@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let s: string = "abc";
+    let idx: usize = 5;
+    print(s[idx]);
+    return 0;
+}
