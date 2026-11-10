@@ -7,22 +7,57 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <fcntl.h>
-#include <sys/mman.h>
 #include <sys/stat.h>
+#ifdef _WIN32
+#include <io.h>
+__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);
+__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);
+#define O_CLOEXEC_HOST _O_NOINHERIT
+#else
+#include <unistd.h>
+#include <sys/mman.h>
 #include <sys/socket.h>
+#ifndef MAP_ANONYMOUS
+#define MAP_ANONYMOUS MAP_ANON
+#endif
+#define O_CLOEXEC_HOST O_CLOEXEC
+#endif
+#ifndef O_NOFOLLOW
+#define O_NOFOLLOW 0
+#endif
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 
+static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }
+#ifdef _WIN32
+static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }
+static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }
+static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }
+static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }
+static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }
+static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }
+static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }
+static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }
+static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }
+static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }
+#else
 static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }
 static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }
-static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, flags, mode); }
+static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }
 static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }
-static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { return mmap((void*)addr, len, prot, flags, fd, (off_t)off); }
+static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }
 static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }
 static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }
 static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }
 static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }
+#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }
+#else
 static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }
+#endif
+#endif
 static inline void sys_exit(int32_t code) { _exit(code); }
 
 typedef struct {
@@ -78,6 +113,17 @@ static inline int64_t __oc_mod_check(int64_t a, int64_t b) {
 #define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
 #define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
 
+static const int32_t OC_PROT_READ = 1;
+static const int32_t OC_PROT_WRITE = 2;
+static const int32_t OC_PROT_RW = 3;
+static const int32_t OC_MAP_PRIVATE_ANON = 34;
+static const int32_t OC_O_RDONLY = 0;
+static const int32_t OC_O_SAFE_READ = 655360;
+static const int32_t OC_O_SAFE_WRITE_TRUNC = 655937;
+static const uint32_t OC_MODE_FILE = 420;
+static const uint32_t OC_MODE_EXEC = 493;
+static const int32_t OC_AF_INET = 2;
+static const int32_t OC_SOCK_STREAM = 1;
 static const uint32_t TOK_EOF = 0;
 static const uint32_t TOK_IDENT = 1;
 static const uint32_t TOK_INT = 2;
@@ -431,6 +477,7 @@ oc_string str_concat(Arena* arena, oc_string a, oc_string b);
 oc_string dir_of_path(Arena* arena, oc_string path);
 void append_hash_digits(CodeBuffer* buf, oc_string a, oc_string b);
 bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir, CodeBuffer* out, ModuleLoader* loader, Arena* arena);
+oc_string host_tmp_prefix(void);
 int main(int argc, char** argv);
 
 int32_t read_int(void) {
@@ -470,7 +517,7 @@ uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
 int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
     uint8_t pbuf[4096] = {0};
     uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, (0 | 655360), 0);
+    int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
     if ((fd < 0)) {
     return (-1);
     }
@@ -482,7 +529,7 @@ int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
 bool write_file(oc_string path, oc_string content) {
     uint8_t pbuf[4096] = {0};
     uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, (577 | 655360), 420);
+    int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
     if ((fd < 0)) {
     return false;
     }
@@ -494,7 +541,7 @@ bool write_file(oc_string path, oc_string content) {
 bool chmod_exec(oc_string path) {
     uint8_t pbuf[4096] = {0};
     uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    return (sys_chmod(p, 493) == 0);
+    return (sys_chmod(p, OC_MODE_EXEC) == 0);
 }
 
 bool unlink_file(oc_string path) {
@@ -504,7 +551,7 @@ bool unlink_file(oc_string path) {
 }
 
 Arena arena_init(size_t capacity) {
-    void* raw = sys_mmap(0, capacity, 3, 34, (-1), 0);
+    void* raw = sys_mmap(0, capacity, OC_PROT_RW, OC_MAP_PRIVATE_ANON, (-1), 0);
     uint8_t* buf = ((uint8_t*)(raw));
     if ((((size_t)(buf)) == 0)) {
     sys_exit(1);
@@ -3715,21 +3762,50 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdbool.h>\n"), .len = sizeof("#include <stdbool.h>\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdlib.h>\n"), .len = sizeof("#include <stdlib.h>\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <string.h>\n"), .len = sizeof("#include <string.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <unistd.h>\n"), .len = sizeof("#include <unistd.h>\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <fcntl.h>\n"), .len = sizeof("#include <fcntl.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/mman.h>\n"), .len = sizeof("#include <sys/mman.h>\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/stat.h>\n"), .len = sizeof("#include <sys/stat.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/socket.h>\n\n"), .len = sizeof("#include <sys/socket.h>\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <io.h>\n"), .len = sizeof("#include <io.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\n"), .len = sizeof("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\n"), .len = sizeof("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST _O_NOINHERIT\n"), .len = sizeof("#define O_CLOEXEC_HOST _O_NOINHERIT\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <unistd.h>\n"), .len = sizeof("#include <unistd.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/mman.h>\n"), .len = sizeof("#include <sys/mman.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/socket.h>\n"), .len = sizeof("#include <sys/socket.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef MAP_ANONYMOUS\n#define MAP_ANONYMOUS MAP_ANON\n#endif\n"), .len = sizeof("#ifndef MAP_ANONYMOUS\n#define MAP_ANONYMOUS MAP_ANON\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST O_CLOEXEC\n"), .len = sizeof("#define O_CLOEXEC_HOST O_CLOEXEC\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n"), .len = sizeof("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n\n"), .len = sizeof("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n"), .len = sizeof("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\n"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\n"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }\n"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\n"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\n"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\n"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, flags, mode); }\n"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, flags, mode); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\n"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { return mmap((void*)addr, len, prot, flags, fd, (off_t)off); }\n"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { return mmap((void*)addr, len, prot, flags, fd, (off_t)off); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\n"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\n"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\n"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\n"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\n"), .len = sizeof("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\n\n"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct {\n"), .len = sizeof("typedef struct {\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t* ptr;\n"), .len = sizeof("    const uint8_t* ptr;\n") - 1 });
@@ -7209,6 +7285,14 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     return true;
 }
 
+oc_string host_tmp_prefix(void) {
+    if (write_file((oc_string){ .ptr = (const uint8_t*)("/tmp/.occ_probe"), .len = sizeof("/tmp/.occ_probe") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 })) {
+    unlink_file((oc_string){ .ptr = (const uint8_t*)("/tmp/.occ_probe"), .len = sizeof("/tmp/.occ_probe") - 1 });
+    return (oc_string){ .ptr = (const uint8_t*)("/tmp/"), .len = sizeof("/tmp/") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)("."), .len = sizeof(".") - 1 };
+}
+
 int main(int argc, char** argv) {
     if ((argc < 2)) {
     printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend native]");
@@ -7288,12 +7372,14 @@ int main(int argc, char** argv) {
     printf("%s\n", "error: unsafe characters in file path");
     return 1;
     }
+    oc_string tmp_prefix = host_tmp_prefix();
     bool is_temp_out = false;
     CodeBuffer run_path_buf = buf_init(256);
     if (is_run) {
     if ((((out_file_str).len) == 0)) {
     is_temp_out = true;
-    buf_append((&(run_path_buf)), (oc_string){ .ptr = (const uint8_t*)("/tmp/occ_run_"), .len = sizeof("/tmp/occ_run_") - 1 });
+    buf_append((&(run_path_buf)), tmp_prefix);
+    buf_append((&(run_path_buf)), (oc_string){ .ptr = (const uint8_t*)("occ_run_"), .len = sizeof("occ_run_") - 1 });
     append_hash_digits((&(run_path_buf)), in_file_str, (oc_string){ .ptr = (const uint8_t*)("bin"), .len = sizeof("bin") - 1 });
     out_file_str = buf_to_string((&(run_path_buf)));
     }
@@ -7353,7 +7439,8 @@ int main(int argc, char** argv) {
     codegen_program(prog, (&(out)));
     buf_deinit((&(combined_buf)));
     CodeBuffer stage_path_buf = buf_init(256);
-    buf_append((&(stage_path_buf)), (oc_string){ .ptr = (const uint8_t*)("/tmp/occ_stage_"), .len = sizeof("/tmp/occ_stage_") - 1 });
+    buf_append((&(stage_path_buf)), tmp_prefix);
+    buf_append((&(stage_path_buf)), (oc_string){ .ptr = (const uint8_t*)("occ_stage_"), .len = sizeof("occ_stage_") - 1 });
     append_hash_digits((&(stage_path_buf)), in_file_str, (oc_string){ .ptr = (const uint8_t*)("stage"), .len = sizeof("stage") - 1 });
     buf_append((&(stage_path_buf)), (oc_string){ .ptr = (const uint8_t*)(".c"), .len = sizeof(".c") - 1 });
     oc_string stage_c_path = buf_to_string((&(stage_path_buf)));
@@ -7374,7 +7461,7 @@ int main(int argc, char** argv) {
     return 1;
     }
     CodeBuffer cmd_buf = buf_init(512);
-    buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)("gcc"), .len = sizeof("gcc") - 1 });
+    buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)("cc"), .len = sizeof("cc") - 1 });
     buf_append((&(cmd_buf)), opt_flag);
     buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
     buf_append((&(cmd_buf)), stage_c_path);

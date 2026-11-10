@@ -1,0 +1,16 @@
+// Canonical oC OS constants. Values match Linux x86_64 (used directly by --backend native);
+// the C backend preamble translates them to the host's native flags (macOS, BSD, Windows).
+let OC_PROT_READ: i32 = 1;
+let OC_PROT_WRITE: i32 = 2;
+let OC_PROT_RW: i32 = 3;
+let OC_MAP_PRIVATE_ANON: i32 = 34;
+
+let OC_O_RDONLY: i32 = 0;
+let OC_O_SAFE_READ: i32 = 655360;
+let OC_O_SAFE_WRITE_TRUNC: i32 = 655937;
+
+let OC_MODE_FILE: u32 = 420;
+let OC_MODE_EXEC: u32 = 493;
+
+let OC_AF_INET: i32 = 2;
+let OC_SOCK_STREAM: i32 = 1;
