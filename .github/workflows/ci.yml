@@ -1,4 +1,4 @@
-name: oC CI (Self-Host + Dual-Backend Probe Suite)
+name: oC CI (Self-Host + Dual-Backend Probes + Cross-Platform)
 
 on:
   push:
@@ -7,7 +7,8 @@ on:
     branches: [ main ]
 
 jobs:
-  verify:
+  linux:
+    name: Linux x86_64 (self-host fixed point + probe suite)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -32,3 +33,76 @@ jobs:
               assert not ((p_flags & 2) and (p_flags & 1)), "RWX segment detected!"
           print("W^X ELF64 segments verified!")
           '
+
+      - name: Verify PE32+ cross-compilation (--backend native --target windows-x86_64)
+        run: |
+          ./bin/occ build examples/hello.oc -o /tmp/hello_win --backend native --target windows-x86_64
+          python3 tests/check_pe.py /tmp/hello_win.exe
+
+  macos:
+    name: macOS (Apple clang)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Bootstrap occ from portable C source
+        run: cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
+
+      - name: Compile and run examples (C backend)
+        run: |
+          mkdir -p build
+          for ex in hello arena_demo core_suite; do
+            ./bin/occ build "examples/$ex.oc" -o "build/$ex"
+            "./build/$ex"
+          done
+
+      - name: Cross-compile a Windows PE32+ from macOS (--backend native)
+        run: |
+          ./bin/occ build examples/hello.oc -o build/hello_win --backend native --target windows-x86_64
+          python3 tests/check_pe.py build/hello_win.exe
+
+  windows:
+    name: Windows x86_64 (MSYS2 MinGW64)
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up MSYS2 MinGW64 GCC
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: MINGW64
+          update: false
+          install: mingw-w64-x86_64-gcc
+
+      - name: Bootstrap occ.exe from portable C source
+        run: gcc -O2 bootstrap/occ_bootstrap.c -o bin/occ.exe
+
+      - name: Compile and run examples (C backend)
+        run: |
+          mkdir -p build
+          for ex in hello arena_demo core_suite; do
+            ./bin/occ.exe build "examples/$ex.oc" -o "build/$ex"
+            "./build/$ex.exe"
+          done
+
+      - name: Native PE32+ backend (no C compiler, no linker) + runtime trap probes
+        run: |
+          ./bin/occ.exe build examples/hello.oc -o build/hello_native --backend native --target windows-x86_64
+          test "$(./build/hello_native.exe)" = "Hello World!"
+          for p in overflow_i32 overflow_u8 underflow_usize div_zero slice_bounds cast_narrow_i8 cast_neg_u64; do
+            ./bin/occ.exe build "tests/probes/probe_$p.oc" -o build/trap --backend native
+            if ./build/trap.exe; then
+              echo "probe_$p.oc exited 0 without trapping"
+              exit 1
+            fi
+            echo "probe_$p.oc trapped as expected"
+          done
+
+      - name: Validate PE32+ headers and strict W^X section flags
+        shell: pwsh
+        run: python tests/check_pe.py build/hello_native.exe

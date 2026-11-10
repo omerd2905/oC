@@ -39,6 +39,7 @@
         <a href="#description" class="sidebar-link">3. DESCRIPTION</a>
         <a href="#commands" class="sidebar-link">4. COMMANDS</a>
         <a href="#options" class="sidebar-link">5. OPTIONS</a>
+        <a href="#targets" class="sidebar-link">5.1 TARGETS</a>
         <a href="#bootstrap" class="sidebar-link">6. BOOTSTRAP</a>
         <a href="#diagnostics" class="sidebar-link">7. DIAGNOSTICS</a>
         <a href="#see-also" class="sidebar-link">8. SEE ALSO</a>
@@ -68,21 +69,21 @@
 
         <h2>NAME</h2>
         <p>
-          <strong>occ</strong> — self-hosted zero-libc oC compiler and native x86_64 ELF64 generator.
+          <strong>occ</strong> — self-hosted zero-libc oC compiler and native x86_64 ELF64 / PE32+ generator.
         </p>
       </section>
 
       <!-- Section 2: SYNOPSIS -->
       <section id="synopsis">
         <h2>SYNOPSIS</h2>
-        <pre><code><strong>occ</strong> &lt;<strong>build</strong>|<strong>run</strong>&gt; <em>input.oc</em> [<strong>-o</strong> <em>output</em>] [<strong>-O1</strong>|<strong>-O2</strong>|<strong>-O3</strong>] [<strong>--backend</strong> &lt;<strong>c</strong>|<strong>native</strong>&gt;]</code></pre>
+        <pre><code><strong>occ</strong> &lt;<strong>build</strong>|<strong>run</strong>&gt; <em>input.oc</em> [<strong>-o</strong> <em>output</em>] [<strong>-O1</strong>|<strong>-O2</strong>|<strong>-O3</strong>] [<strong>--backend</strong> &lt;<strong>c</strong>|<strong>native</strong>&gt;] [<strong>--target</strong> <em>target</em>] [<strong>--emit-c</strong> <em>file.c</em>]</code></pre>
       </section>
 
       <!-- Section 3: DESCRIPTION -->
       <section id="description">
         <h2>DESCRIPTION</h2>
         <p>
-          <strong>occ</strong> is the primary compiler driver for the <code>oC</code> systems programming language. Engineered from the ground up without libc or runtime dependencies, <code>occ</code> compiles entire programs using regional bump arenas, validates lifetime and borrow constraints at compile time via <code>EscapeValidator</code>, and generates either highly-optimized C11 code or standalone Linux <code>x86_64</code> ELF64 binaries.
+          <strong>occ</strong> is the primary compiler driver for the <code>oC</code> systems programming language. Engineered from the ground up without libc or runtime dependencies, <code>occ</code> compiles entire programs using regional bump arenas, validates lifetime and borrow constraints at compile time via <code>EscapeValidator</code>, and generates either highly-optimized C11 code or standalone <code>x86_64</code> binaries: Linux ELF64 or Windows PE32+. The C backend builds on Linux, macOS, the BSDs and Windows (MSYS2 MinGW64), and cross-compiles with <code>--target</code>.
         </p>
 
         <h3>Compiler Architecture Pipeline</h3>
@@ -109,10 +110,10 @@
 |          v                                    v                                   |
 |  [--backend c (Default)]              [--backend native]                          |
 |  - C11 Transpiler                     - 1-Pass x86_64 Machine Code Emitter        |
-|  - Runtime bounds asserts             - Direct Linux Syscalls (0x0f 0x05)         |
-|  - Host GCC pipeline (-O1/-O2/-O3)    - ELF64 Header &amp; Section Assembler          |
+|  - Runtime bounds asserts             - Linux syscalls / KERNEL32 IAT (Win64)     |
+|  - Host cc / MinGW / cross toolchain  - ELF64 or PE32+ Image Assembler            |
 |  - Vectorized SIMD binaries           - Hardware Traps (__trap_overflow, bounds)  |
-|  - Dynamic / Static C binary          - Standalone Static ELF64 (&lt; 5 KB, 0 libc)  |
+|  - Dynamic / Static C binary          - Static ELF64 / PE32+ (&lt; 5 KB, 0 libc)     |
 +-----------------------------------------------------------------------------------+</div>
 
         <p>
@@ -143,7 +144,7 @@
 
         <h3><code>build &lt;input.oc&gt;</code></h3>
         <p>
-          Compiles the specified source file and its imported dependencies into an executable binary. If <code>-o &lt;output&gt;</code> is omitted, the compiler outputs the binary to <code>a.out</code> in the current directory.
+          Compiles the specified source file and its imported dependencies into an executable binary. If <code>-o &lt;output&gt;</code> is omitted, the compiler outputs the binary to <code>a.out</code> (<code>a.exe</code> for <code>windows-x86_64</code>) in the current directory. For Windows output, <code>.exe</code> is appended to <code>-o</code> when missing.
         </p>
         <div class="example-card">
           <div class="example-header">
@@ -166,7 +167,7 @@
 
         <h3><code>run &lt;input.oc&gt;</code></h3>
         <p>
-          Compiles the source file to a temporary location (default: <code>/tmp/occ_run_bin</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller.
+          Compiles the source file to a temporary location (default: <code>/tmp/occ_run_bin</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller. On Windows hosts the binary is launched through <code>cmd.exe</code> as <code>.\name.exe</code>. <code>run</code> refuses an explicit <code>--target</code> for another platform; use <code>build</code> to cross-compile.
         </p>
         <div class="example-card">
           <div class="example-header">
@@ -213,9 +214,9 @@ All 4 suites completed successfully.</code></pre>
             <tr>
               <td><code>-o</code></td>
               <td><code>&lt;path&gt;</code></td>
-              <td><code>a.out</code> (build)<br><code>/tmp/occ_run_bin</code> (run)</td>
+              <td><code>a.out</code> / <code>a.exe</code> (build)<br><code>/tmp/occ_run_&lt;hash&gt;</code> (run)</td>
               <td>
-                Specifies the output binary path. The path is verified by <code>is_safe_path()</code> against shell metacharacters (<code>;</code>, <code>&amp;</code>, <code>|</code>, <code>`</code>, <code>$</code>, <code>&gt;</code>, <code>&lt;</code>, quotes) to prevent command injection.
+                Specifies the output binary path. The path is verified by <code>is_safe_path()</code> against POSIX shell and <code>cmd.exe</code> metacharacters (<code>;</code>, <code>&amp;</code>, <code>|</code>, <code>`</code>, <code>$</code>, <code>&gt;</code>, <code>&lt;</code>, quotes, <code>%</code>, <code>^</code>, <code>!</code>) to prevent command injection. Backslash is accepted as a path separator on Windows hosts only.
               </td>
             </tr>
             <tr>
@@ -223,7 +224,23 @@ All 4 suites completed successfully.</code></pre>
               <td><code>native</code> | <code>c</code></td>
               <td><code>c</code></td>
               <td>
-                Selects the code generation backend. <code>native</code> emits direct <code>x86_64</code> ELF64 machine code; <code>c</code> transpiles to C11 and invokes host GCC.
+                Selects the code generation backend. <code>native</code> emits direct <code>x86_64</code> machine code as an ELF64 or PE32+ image; <code>c</code> transpiles to C11 and invokes the C compiler for the target (see <a href="#targets">TARGETS</a>).
+              </td>
+            </tr>
+            <tr>
+              <td><code>--target</code></td>
+              <td><code>linux-x86_64</code> | <code>windows-x86_64</code> (<code>windows</code>) | <code>macos-x86_64</code> | <code>macos-aarch64</code></td>
+              <td>Host</td>
+              <td>
+                Selects the platform of the produced binary. Unknown names are rejected. Without <code>--target</code>, <code>--backend native</code> emits PE32+ on Windows hosts and ELF64 everywhere else.
+              </td>
+            </tr>
+            <tr>
+              <td><code>--emit-c</code></td>
+              <td><code>&lt;file.c&gt;</code></td>
+              <td><em>Disabled</em></td>
+              <td>
+                Also writes the generated C11 translation unit to <code>file.c</code> (C backend). Used to refresh <code>bootstrap/occ_bootstrap.c</code>.
               </td>
             </tr>
             <tr>
@@ -253,6 +270,55 @@ All 4 suites completed successfully.</code></pre>
           </tbody>
         </table>
 
+        <h3 id="targets">5.1 Targets &amp; Cross-Compilation</h3>
+        <p>
+          Every <code>occ</code> build is deterministic: the same source and target produce byte-identical ELF64/PE32+ images on every host, and <code>--backend native</code> cross-compiles with no external tools at all.
+        </p>
+        <table>
+          <thead>
+            <tr>
+              <th>Target</th>
+              <th><code>--backend c</code> compiler</th>
+              <th><code>--backend native</code> image</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><code>linux-x86_64</code></td>
+              <td><code>cc</code> on Linux x86_64; <code>x86_64-linux-gnu-gcc</code> elsewhere</td>
+              <td>Static ELF64: <code>PF_R</code> headers/<code>.rodata</code>, <code>PF_R|PF_X</code> <code>.text</code>, non-executable <code>PT_GNU_STACK</code>; raw <code>syscall</code></td>
+            </tr>
+            <tr>
+              <td><code>windows-x86_64</code></td>
+              <td><code>gcc</code> on Windows (MSYS2 MinGW64); <code>x86_64-w64-mingw32-gcc</code> elsewhere</td>
+              <td>PE32+ console image (see below); <code>.exe</code> suffix</td>
+            </tr>
+            <tr>
+              <td><code>macos-x86_64</code></td>
+              <td><code>cc -arch x86_64</code> (macOS hosts only)</td>
+              <td>Rejected: no Mach-O emitter</td>
+            </tr>
+            <tr>
+              <td><code>macos-aarch64</code></td>
+              <td><code>cc -arch arm64</code> (macOS hosts only)</td>
+              <td>Rejected: no Mach-O emitter</td>
+            </tr>
+          </tbody>
+        </table>
+
+        <h3>PE32+ Image Layout (<code>--backend native --target windows-x86_64</code>)</h3>
+        <ul>
+          <li><strong>Headers:</strong> <code>MZ</code> DOS header (<code>e_lfanew = 0x40</code>), <code>PE\0\0</code>, COFF <code>Machine = 0x8664</code>, 2 sections, <code>Characteristics = 0x0022</code> (executable, large-address-aware), <code>TimeDateStamp = 0</code> for reproducible output.</li>
+          <li><strong>Optional header:</strong> PE32+ (<code>0x020B</code>), entry RVA <code>0x1000</code>, <code>ImageBase = 0x140000000</code>, console subsystem (<code>3</code>), <code>DllCharacteristics = 0x8160</code> (HIGH_ENTROPY_VA, DYNAMIC_BASE/ASLR, NX_COMPAT, TERMINAL_SERVER_AWARE). The 1 MiB stack is fully committed, so frames larger than 4 KiB need no <code>__chkstk</code> probes.</li>
+          <li><strong><code>.text</code></strong> at RVA <code>0x1000</code>, <code>0x60000020</code> (code, read, execute). <strong><code>.rdata</code></strong> on the next page (<code>0x2000</code> for programs under 4 KiB of code), <code>0x40000040</code> (read-only data): IAT, import descriptors and string literals. No section is writable; the loader unprotects the IAT (data directory 12) only while binding.</li>
+          <li><strong>Imports:</strong> <code>KERNEL32.dll!ExitProcess</code>, <code>WriteFile</code> and <code>GetStdHandle</code> (needed to obtain the console handle for <code>WriteFile</code>). Runtime helpers bridge oC's internal register convention to the Win64 ABI (shadow space, 16-byte aligned <code>%rsp</code>).</li>
+          <li><strong>Position independence:</strong> string literals are addressed <code>%rip</code>-relative, so ASLR relocates the image without a <code>.reloc</code> section.</li>
+          <li><strong>Limits:</strong> Linux-only intrinsics (<code>sys_mmap</code>, <code>sys_open</code>, sockets, ...) are rejected at compile time; see <a href="stdlib.html#std-os">OC-OS(3)</a>. <code>tests/check_pe.py</code> validates the headers and W^X flags.</li>
+        </ul>
+        <pre><code>$ occ build examples/hello.oc -o hello --backend native --target windows-x86_64
+$ python3 tests/check_pe.py hello.exe
+hello.exe: PE32+ AMD64 OK, W^X sections .text/.rdata, imports KERNEL32!ExitProcess,GetStdHandle,WriteFile</code></pre>
+
         <h3>Backend Comparison &amp; Binary Size Metrics</h3>
         <table>
           <thead>
@@ -272,7 +338,7 @@ All 4 suites completed successfully.</code></pre>
             </tr>
             <tr>
               <td><strong>Libc Dependency</strong></td>
-              <td><strong>Zero Libc (Direct Syscalls)</strong></td>
+              <td><strong>Zero Libc (Linux syscalls; 3 KERNEL32 imports on Windows)</strong></td>
               <td>Requires host C library</td>
               <td>Requires glibc</td>
             </tr>
@@ -324,23 +390,24 @@ $ cmp /tmp/occ_stage2 /tmp/occ_stage3
 
         <h3>Regional Arena Memory Footprint</h3>
         <p>
-          The entire self-hosted compilation of all 10 compiler modules is completed inside a single <strong>32 MB regional bump arena</strong> initialized at startup via:
+          The entire self-hosted compilation of all 11 compiler modules is completed inside a single <strong>32 MB regional bump arena</strong> initialized at startup via:
         </p>
         <pre><code>let mut arena: Arena = arena_init(33554432); // 32 megabytes via sys_mmap</code></pre>
         <p>
-          The 10 modular components parsed and compiled are:
+          The 11 modular components parsed and compiled are:
         </p>
         <ul>
           <li><code>std/io.oc</code> — Low-level terminal I/O and integer-to-string formatters</li>
           <li><code>std/fs.oc</code> — POSIX file reading, writing, and unlinking syscall wrappers</li>
           <li><code>std/mem.oc</code> — <code>sys_mmap</code> regional bump arena and scrubbing allocators</li>
+          <li><code>std/os.oc</code> — Canonical OS flags, <code>OC_TARGET_*</code> identifiers and <code>sys_host_target</code></li>
           <li><code>compiler/token.oc</code> — Lexical token tags and token structures</li>
           <li><code>compiler/lexer.oc</code> — Deterministic lexical scanner and keyword lookup</li>
           <li><code>compiler/ast.oc</code> — AST node representations and allocation arena helpers</li>
           <li><code>compiler/parser.oc</code> — Pratt expression parser &amp; <code>EscapeValidator</code></li>
           <li><code>compiler/codegen.oc</code> — C11 backend code generator and type mapper</li>
-          <li><code>compiler/elf.oc</code> — Direct x86_64 machine code generator and ELF64 serializer</li>
-          <li><code>compiler/main.oc</code> — Driver, path security sanitizer, and CLI option processor</li>
+          <li><code>compiler/elf.oc</code> — Direct x86_64 machine code generator, ELF64 and PE32+ serializers</li>
+          <li><code>compiler/main.oc</code> — Driver, path security sanitizer, <code>--target</code> resolution, and CLI option processor</li>
         </ul>
       </section>
 
@@ -367,7 +434,7 @@ $ cmp /tmp/occ_stage2 /tmp/occ_stage3
               <td><code>1</code></td>
               <td>Compiler / Execution Error</td>
               <td>
-                Parse error, <code>EscapeValidator</code> memory safety violation, unsafe CLI path, native ELF emission failure, or child program termination via hardware trap (<code>SIGILL</code> / <code>SIGTRAP</code>).
+                Parse error, <code>EscapeValidator</code> memory safety violation, unsafe CLI path, unknown or unsupported <code>--target</code>, native image emission failure (including a Linux-only intrinsic on <code>windows-x86_64</code>), or child program termination via hardware trap (<code>SIGILL</code> / <code>SIGTRAP</code>).
               </td>
             </tr>
             <tr>
