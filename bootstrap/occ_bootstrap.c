@@ -29,6 +29,18 @@ __declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);
 #ifndef O_BINARY
 #define O_BINARY 0
 #endif
+#ifdef htons
+#undef htons
+#endif
+#ifdef ntohs
+#undef ntohs
+#endif
+#ifdef htonl
+#undef htonl
+#endif
+#ifdef ntohl
+#undef ntohl
+#endif
 
 static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }
 #ifdef _WIN32
@@ -3826,7 +3838,11 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST O_CLOEXEC\n"), .len = sizeof("#define O_CLOEXEC_HOST O_CLOEXEC\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n"), .len = sizeof("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n\n"), .len = sizeof("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n"), .len = sizeof("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htons\n#undef htons\n#endif\n"), .len = sizeof("#ifdef htons\n#undef htons\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohs\n#undef ntohs\n#endif\n"), .len = sizeof("#ifdef ntohs\n#undef ntohs\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htonl\n#undef htonl\n#endif\n"), .len = sizeof("#ifdef htonl\n#undef htonl\n#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohl\n#undef ntohl\n#endif\n\n"), .len = sizeof("#ifdef ntohl\n#undef ntohl\n#endif\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n"), .len = sizeof("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n") - 1 });
