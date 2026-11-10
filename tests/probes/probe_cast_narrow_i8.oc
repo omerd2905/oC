@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let big: i64 = 300;
+    let small: i8 = big.as(i8);
+    print(small);
+    return 0;
+}

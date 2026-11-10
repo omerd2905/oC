@@ -171,8 +171,8 @@
           <ul>
             <li><strong>Zero General-Purpose Heap:</strong> All dynamic memory allocations are serviced by explicit kernel-backed regional bump arenas (<code>sys_mmap</code>). Zero inline chunk headers exist to be corrupted.</li>
             <li><strong>Compile-Time EscapeValidator:</strong> Temporal memory safety (UAF, double-free, dangling stack pointers) is validated statically at compile time with 0.00 ns runtime overhead.</li>
-            <li><strong>Hardware-Enforced Traps:</strong> Arithmetic overflow (<code>jo</code>), division by zero (<code>test + jz</code>), null pointer dereferences, and slice out-of-bounds reads/writes trigger immediate hardware traps before arbitrary behavior can occur.</li>
-            <li><strong>Standalone Static ELF Emission:</strong> <code>occ --backend native</code> directly emits standalone, statically linked Linux <code>x86_64</code> ELF binaries under 5.0 KB without requiring GCC, Clang, or libc.</li>
+            <li><strong>Hardware &amp; Runtime Trap Enforcement:</strong> Both backends enforce arithmetic overflow/underflow checks, division-by-zero checks, signed/unsigned narrowing cast range checks, null-pointer dereference traps, and spatial slice/array bounds verification.</li>
+            <li><strong>Dual Codegen Backends:</strong> The default backend (<code>--backend c</code>) emits C11 IR with <code>__builtin_*_overflow</code> / trap checks and invokes system <code>cc</code>/<code>gcc</code> for <code>-O1/-O2/-O3</code> vectorization; <code>--backend native</code> emits standalone static Linux <code>x86_64</code> ELF64 binaries (&lt;5.0 KB) with strict W^X segment permissions (<code>PF_R</code> <code>.rodata</code>, <code>PF_R|PF_X</code> <code>.text</code>, <code>PF_R|PF_W</code> <code>PT_GNU_STACK</code>) and zero external toolchain or <code>libc</code> dependencies.</li>
           </ul>
         </div>
       </section>
@@ -262,7 +262,7 @@
               <tr>
                 <td>
                   <strong>12.8M Variable-Sized Allocs + CWE-14 Scrub</strong><br>
-                  <small>50,000 waves × 256 allocations (64–256B), zero-scrubbed per wave</small>
+                  <small>Allocation-strategy comparison: Regional Bump Arena + bulk reset scrub vs per-object <code>malloc</code> + <code>memset</code> + <code>free</code></small>
                 </td>
                 <td>
                   <strong>43 ms</strong><br>

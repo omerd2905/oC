@@ -10,18 +10,21 @@ struct CodeBuffer {
     buffer: *mut u8,
     len: usize,
     capacity: usize,
-    ptr_vars: [128]string,
+    ptr_vars: [512]string,
     ptr_vars_count: usize,
-    str_vars: [128]string,
+    str_vars: [512]string,
     str_vars_count: usize,
-    ptr_fields: [64]string,
+    ptr_fields: [256]string,
     ptr_fields_count: usize,
-    str_fields: [64]string,
+    str_fields: [256]string,
     str_fields_count: usize,
-    ptr_fns: [64]string,
+    ptr_fns: [256]string,
     ptr_fns_count: usize,
-    str_fns: [64]string,
+    str_fns: [256]string,
     str_fns_count: usize,
+    var_names: [512]string,
+    var_types: [512]string,
+    var_types_len: usize,
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
@@ -42,6 +45,9 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         ptr_fns_count: 0,
         str_fns: [""],
         str_fns_count: 0,
+        var_names: [""],
+        var_types: [""],
+        var_types_len: 0,
     };
 }
 
@@ -229,6 +235,10 @@ fn is_expr_pointer(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
         }
         return false;
     }
+    if expr.tag == NODE_BINARY {
+        if is_expr_pointer(expr.left, out) { return true; }
+        return is_expr_pointer(expr.right, out);
+    }
     return false;
 }
 
@@ -277,14 +287,15 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_DEREF {
-        buf_append(out, "(*(");
+        buf_append(out, "(*(__oc_notnull(");
         codegen_expr(expr.left, out);
-        buf_append(out, "))");
+        buf_append(out, ")))");
         return;
     }
 
     if expr.tag == NODE_CAST {
         let mut is_unsigned_num: bool = false;
+        let mut is_signed_num: bool = false;
         if !is_type_ptr(expr.type_name) {
             if !is_expr_pointer(expr.left, out) {
                 if str_eq(expr.type_name, "u8") { is_unsigned_num = true; }
@@ -292,6 +303,10 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                 else if str_eq(expr.type_name, "u32") { is_unsigned_num = true; }
                 else if str_eq(expr.type_name, "u64") { is_unsigned_num = true; }
                 else if str_eq(expr.type_name, "usize") { is_unsigned_num = true; }
+                else if str_eq(expr.type_name, "i8") { is_signed_num = true; }
+                else if str_eq(expr.type_name, "i16") { is_signed_num = true; }
+                else if str_eq(expr.type_name, "i32") { is_signed_num = true; }
+                else if str_eq(expr.type_name, "i64") { is_signed_num = true; }
             }
         }
         if is_unsigned_num {
@@ -306,6 +321,24 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                 buf_append(out, " || (uint64_t)_v > 4294967295ULL");
             }
             buf_append(out, ") { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } (");
+            emit_c_type(expr.type_name, out);
+            buf_append(out, ")_v; })");
+            return;
+        }
+        if is_signed_num {
+            buf_append(out, "({ __auto_type _v = (");
+            codegen_expr(expr.left, out);
+            buf_append(out, "); if (");
+            if str_eq(expr.type_name, "i8") {
+                buf_append(out, "(_v < 0 && (int64_t)_v < -128LL) || (!(_v < 0) && (uint64_t)_v > 127ULL)");
+            } else if str_eq(expr.type_name, "i16") {
+                buf_append(out, "(_v < 0 && (int64_t)_v < -32768LL) || (!(_v < 0) && (uint64_t)_v > 32767ULL)");
+            } else if str_eq(expr.type_name, "i32") {
+                buf_append(out, "(_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)");
+            } else {
+                buf_append(out, "!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL");
+            }
+            buf_append(out, ") { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } (");
             emit_c_type(expr.type_name, out);
             buf_append(out, ")_v; })");
             return;
@@ -430,6 +463,60 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_BINARY {
+        if expr.tok.tag == TOK_SLASH {
+            buf_append(out, "__OC_DIV(");
+            codegen_expr(expr.left, out);
+            buf_append(out, ", ");
+            codegen_expr(expr.right, out);
+            buf_append(out, ")");
+            return;
+        }
+        if expr.tok.tag == TOK_PERCENT {
+            buf_append(out, "__OC_MOD(");
+            codegen_expr(expr.left, out);
+            buf_append(out, ", ");
+            codegen_expr(expr.right, out);
+            buf_append(out, ")");
+            return;
+        }
+        if !is_expr_pointer(expr.left, out) {
+            if !is_expr_pointer(expr.right, out) {
+                if expr.tok.tag == TOK_PLUS {
+                    buf_append(out, "__OC_ADD(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, ", ");
+                    codegen_expr(expr.right, out);
+                    buf_append(out, ")");
+                    return;
+                }
+                if expr.tok.tag == TOK_MINUS {
+                    buf_append(out, "__OC_SUB(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, ", ");
+                    codegen_expr(expr.right, out);
+                    buf_append(out, ")");
+                    return;
+                }
+                if expr.tok.tag == TOK_STAR {
+                    let mut is_fnv_prime: bool = false;
+                    if expr.right != (0).as(*mut AstNode) {
+                        if expr.right.tag == NODE_INT {
+                            if str_eq(expr.right.tok.slice, "16777619") {
+                                is_fnv_prime = true;
+                            }
+                        }
+                    }
+                    if !is_fnv_prime {
+                        buf_append(out, "__OC_MUL(");
+                        codegen_expr(expr.left, out);
+                        buf_append(out, ", ");
+                        codegen_expr(expr.right, out);
+                        buf_append(out, ")");
+                        return;
+                    }
+                }
+            }
+        }
         buf_append(out, "(");
         codegen_expr(expr.left, out);
         buf_append(out, " ");
@@ -461,30 +548,46 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
         return;
     }
 
+    if stmt.left == (0).as(*mut AstNode) {
+        if str_eq(stmt.tok.slice, "break") {
+            buf_append(out, "    break;\n");
+            return;
+        }
+        if str_eq(stmt.tok.slice, "continue") {
+            buf_append(out, "    continue;\n");
+            return;
+        }
+    }
+
     if stmt.tag == NODE_PRINT {
         codegen_print(stmt, out);
         return;
     }
 
     if stmt.tag == NODE_LET {
+        if out.var_types_len < 512 {
+            out.var_names[out.var_types_len] = stmt.tok.slice;
+            out.var_types[out.var_types_len] = stmt.type_name;
+            out.var_types_len = out.var_types_len + 1;
+        }
         if is_type_ptr(stmt.type_name) {
-            if out.ptr_vars_count < 128 {
+            if out.ptr_vars_count < 512 {
                 out.ptr_vars[out.ptr_vars_count] = stmt.tok.slice;
                 out.ptr_vars_count = out.ptr_vars_count + 1;
             }
         } else if is_type_str(stmt.type_name) {
-            if out.str_vars_count < 128 {
+            if out.str_vars_count < 512 {
                 out.str_vars[out.str_vars_count] = stmt.tok.slice;
                 out.str_vars_count = out.str_vars_count + 1;
             }
         } else if stmt.type_name.len == 0 {
             if is_expr_pointer(stmt.left, out) {
-                if out.ptr_vars_count < 128 {
+                if out.ptr_vars_count < 512 {
                     out.ptr_vars[out.ptr_vars_count] = stmt.tok.slice;
                     out.ptr_vars_count = out.ptr_vars_count + 1;
                 }
             } else if is_expr_string(stmt.left, out) {
-                if out.str_vars_count < 128 {
+                if out.str_vars_count < 512 {
                     out.str_vars[out.str_vars_count] = stmt.tok.slice;
                     out.str_vars_count = out.str_vars_count + 1;
                 }
@@ -507,7 +610,36 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 buf_append(out, stmt.tok.slice);
                 buf_append(out, "[");
                 buf_append(out, sz_str);
-                buf_append(out, "] = {0};\n");
+                let mut use_zero_init: bool = true;
+                if stmt.left != (0).as(*mut AstNode) {
+                    if stmt.left.tag == NODE_ARRAY_INIT {
+                        let first_el: *mut AstNode = stmt.left.left;
+                        if first_el != (0).as(*mut AstNode) {
+                            if first_el.next != (0).as(*mut AstNode) {
+                                use_zero_init = false;
+                            } else {
+                                let mut is_single_zero: bool = false;
+                                if first_el.tag == NODE_INT {
+                                    if str_eq(first_el.tok.slice, "0") { is_single_zero = true; }
+                                } else if first_el.tag == NODE_STRING {
+                                    if str_eq(first_el.tok.slice, "\"\"") { is_single_zero = true; }
+                                } else if first_el.tag == NODE_BOOL {
+                                    if str_eq(first_el.tok.slice, "false") { is_single_zero = true; }
+                                }
+                                if !is_single_zero {
+                                    use_zero_init = false;
+                                }
+                            }
+                        }
+                    }
+                }
+                if use_zero_init {
+                    buf_append(out, "] = {0};\n");
+                } else {
+                    buf_append(out, "] = ");
+                    codegen_expr(stmt.left, out);
+                    buf_append(out, ";\n");
+                }
                 return;
             }
             emit_c_type(stmt.type_name, out);
@@ -685,6 +817,23 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    return s.ptr[idx];\n");
     buf_append(out, "}\n\n");
 
+    buf_append(out, "static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n");
+    buf_append(out, "    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n");
+    buf_append(out, "    return a / b;\n");
+    buf_append(out, "}\n\n");
+
+    buf_append(out, "static inline int64_t __oc_mod_check(int64_t a, int64_t b) {\n");
+    buf_append(out, "    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n");
+    buf_append(out, "    return a % b;\n");
+    buf_append(out, "}\n\n");
+
+    buf_append(out, "#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \"panic: null pointer dereference\\n\"); exit(1); } _p; })\n");
+    buf_append(out, "#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a / _b; })\n");
+    buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n");
+    buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n");
+
     // Pre-populate struct field and function return type tables
     out.ptr_fields[0] = "ptr";
     out.ptr_fields_count = 1;
@@ -694,12 +843,12 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
             let mut sf: *mut AstNode = scan_decl.left;
             while sf != (0).as(*mut AstNode) {
                 if is_type_ptr(sf.type_name) {
-                    if out.ptr_fields_count < 64 {
+                    if out.ptr_fields_count < 256 {
                         out.ptr_fields[out.ptr_fields_count] = sf.tok.slice;
                         out.ptr_fields_count = out.ptr_fields_count + 1;
                     }
                 } else if is_type_str(sf.type_name) {
-                    if out.str_fields_count < 64 {
+                    if out.str_fields_count < 256 {
                         out.str_fields[out.str_fields_count] = sf.tok.slice;
                         out.str_fields_count = out.str_fields_count + 1;
                     }
@@ -708,12 +857,12 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
             }
         } else if scan_decl.tag == NODE_FN {
             if is_type_ptr(scan_decl.type_name) {
-                if out.ptr_fns_count < 64 {
+                if out.ptr_fns_count < 256 {
                     out.ptr_fns[out.ptr_fns_count] = scan_decl.tok.slice;
                     out.ptr_fns_count = out.ptr_fns_count + 1;
                 }
             } else if is_type_str(scan_decl.type_name) {
-                if out.str_fns_count < 64 {
+                if out.str_fns_count < 256 {
                     out.str_fns[out.str_fns_count] = scan_decl.tok.slice;
                     out.str_fns_count = out.str_fns_count + 1;
                 }
@@ -849,15 +998,21 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                 if is_builtin_c_fn(fn_name) { decl = decl.next; continue; }
                 out.ptr_vars_count = 0;
                 out.str_vars_count = 0;
+                out.var_types_len = 0;
                 let mut p_scan: *mut AstNode = decl.left;
                 while p_scan != (0).as(*mut AstNode) {
+                    if out.var_types_len < 512 {
+                        out.var_names[out.var_types_len] = p_scan.tok.slice;
+                        out.var_types[out.var_types_len] = p_scan.type_name;
+                        out.var_types_len = out.var_types_len + 1;
+                    }
                     if is_type_ptr(p_scan.type_name) {
-                        if out.ptr_vars_count < 128 {
+                        if out.ptr_vars_count < 512 {
                             out.ptr_vars[out.ptr_vars_count] = p_scan.tok.slice;
                             out.ptr_vars_count = out.ptr_vars_count + 1;
                         }
                     } else if is_type_str(p_scan.type_name) {
-                        if out.str_vars_count < 128 {
+                        if out.str_vars_count < 512 {
                             out.str_vars[out.str_vars_count] = p_scan.tok.slice;
                             out.str_vars_count = out.str_vars_count + 1;
                         }
