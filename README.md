@@ -41,7 +41,7 @@ fn main() i32 {
 
 - **Regional Arenas:** Dynamic allocations are performed against explicit arenas. There are no inline chunk headers, metadata footers, or global heap freelists.
 - **Compile-Time Lifetime & Escape Checks:** An AST-level validator checks that references do not outlive their targets, stack addresses cannot be returned or leaked into outer scopes, and pointers into arenas cannot be accessed after the arena is reset or deinitialized.
-- **Checked Arithmetic and Slices:** Integer overflow (`+`, `-`, `*`), division by zero, narrowing casts (`.as(T)`), and slice indexing (`s[i]`) are explicitly checked. In the C backend, these map to overflow intrinsics; in the native backend, they lower to hardware condition checks and trap instructions.
+- **Checked Arithmetic and Slices:** Integer overflow (`+`, `-`, `*`), division by zero, narrowing casts (`.as(T)`), and slice indexing (`s[i]`) are explicitly checked. In the C backend, these map to overflow intrinsics; in the native backend, they lower to hardware condition checks and trap instructions. Code that needs modular arithmetic (hashes, PRNGs) opts in explicitly with `wrapping_add`, `wrapping_sub` and `wrapping_mul`.
 - **Zero Required Runtime:** Programs compiled with `--backend native` have no dependency on libc or an external runtime library.
 
 ---

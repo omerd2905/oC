@@ -553,7 +553,7 @@ fn main() i32 {
               <td>Multiplicative: Multiplication, Division, Modulo</td>
               <td>Left-to-right</td>
               <td>
-                <code>*</code> emits <code>__trap_overflow</code> on signed overflow.<br>
+                <code>*</code> emits <code>__trap_overflow</code> on signed and unsigned overflow.<br>
                 <code>/</code> &amp; <code>%</code> emit <code>__trap_div_zero</code> if divisor == 0.
               </td>
             </tr>
@@ -642,6 +642,10 @@ fn main() i32 {
             </tr>
           </tbody>
         </table>
+
+        <p>
+          <strong>Explicit wrapping arithmetic:</strong> <code>+</code>, <code>-</code> and <code>*</code> always trap on overflow. Code that needs modular arithmetic (hashes, checksums, PRNGs) says so with the built-in functions <code>wrapping_add(a, b)</code>, <code>wrapping_sub(a, b)</code> and <code>wrapping_mul(a, b)</code>, which wrap at the width of their operands instead of trapping, for example <code>h = wrapping_mul(h ^ byte, 16777619)</code> in FNV-1a.
+        </p>
 
         <!-- Example Card 4 -->
         <div class="example-card">
