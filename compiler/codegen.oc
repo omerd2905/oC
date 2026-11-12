@@ -370,32 +370,32 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_SLICE {
-        buf_append(out, "__oc_slice_str(");
-        codegen_expr(expr.left, out);
-        buf_append(out, ", ");
+        // A string is sliced as is; a fixed-size array is first viewed as { ptr: &a[0], len: N }.
+        let is_str: bool = is_expr_string(expr.left, out);
         let mut has_start: bool = false;
+        let mut has_end: bool = false;
         if expr.right != (0).as(*mut AstNode) {
-            if expr.right.left != (0).as(*mut AstNode) {
-                has_start = true;
-            }
+            if expr.right.left != (0).as(*mut AstNode) { has_start = true; }
+            if expr.right.right != (0).as(*mut AstNode) { has_end = true; }
         }
+        buf_append(out, "__oc_slice_str(");
+        if !is_str { buf_append(out, "__OC_ARR("); }
+        codegen_expr(expr.left, out);
+        if !is_str { buf_append(out, ")"); }
+        buf_append(out, ", ");
         if has_start {
             codegen_expr(expr.right.left, out);
         } else {
             buf_append(out, "0");
         }
         buf_append(out, ", ");
-        let mut has_end: bool = false;
-        if expr.right != (0).as(*mut AstNode) {
-            if expr.right.right != (0).as(*mut AstNode) {
-                has_end = true;
-            }
-        }
         if has_end {
             codegen_expr(expr.right.right, out);
         } else {
             buf_append(out, "((");
+            if !is_str { buf_append(out, "__OC_ARR("); }
             codegen_expr(expr.left, out);
+            if !is_str { buf_append(out, ")"); }
             buf_append(out, ").len)");
         }
         buf_append(out, ")");
@@ -915,6 +915,10 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n");
     buf_append(out, "    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n");
     buf_append(out, "}\n\n");
+
+    // View of a fixed-size array as a slice. A raw pointer has no length, so slicing one is a
+    // C compile error (void initializer) instead of an unbounded slice.
+    buf_append(out, "#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n");
 
     buf_append(out, "static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n");
     buf_append(out, "    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n");

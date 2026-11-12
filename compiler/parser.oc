@@ -995,8 +995,27 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     return "";
 }
 
+// `buf[a..b]` on a local fixed-size array borrows the stack frame, like `&buf`. Returns the
+// array's name, or "" when `expr` is not such a slice.
+fn get_local_array_slice_source(v: *mut Validator, expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag != NODE_SLICE { return ""; }
+    if expr.left == (0).as(*mut AstNode) { return ""; }
+    if expr.left.tag != NODE_IDENT { return ""; }
+    let idx: i32 = validator_find_var(v, expr.left.tok.slice);
+    if idx < 0 { return ""; }
+    if !v.vars[idx.as(usize)].is_stack_local { return ""; }
+    if !starts_with(v.vars[idx.as(usize)].type_name, "[") { return ""; }
+    return expr.left.tok.slice;
+}
+
 fn contains_stack_ref(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_SLICE {
+        let arr: string = get_local_array_slice_source(v, expr);
+        if arr.len > 0 { return arr; }
+        return contains_stack_ref(v, expr.left);
+    }
     if expr.tag == NODE_ADDRESS_OF {
         let id: string = get_ident_name(expr.left);
         if id.len > 0 {
@@ -1182,6 +1201,31 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
 
     if expr.tag == NODE_FIELD_ACCESS { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_SLICE {
+        if expr.left != (0).as(*mut AstNode) {
+            if expr.left.tag == NODE_IDENT {
+                let s_idx: i32 = validator_find_var(v, expr.left.tok.slice);
+                if s_idx >= 0 {
+                    let s_type: string = v.vars[s_idx.as(usize)].type_name;
+                    let mut is_raw_ptr: bool = starts_with(s_type, "*");
+                    if starts_with(s_type, "&") { is_raw_ptr = true; }
+                    if is_raw_ptr {
+                        print_str_raw("error: cannot slice raw pointer '");
+                        print_str_raw(expr.left.tok.slice);
+                        print_str_raw("': it has no length (slice a string or a [N]T array)\n");
+                        v.has_error = true;
+                        return false;
+                    }
+                }
+            }
+        }
+        if !check_expr_use(v, expr.left) { return false; }
+        if expr.right != (0).as(*mut AstNode) {
+            if !check_expr_use(v, expr.right.left) { return false; }
+            return check_expr_use(v, expr.right.right);
+        }
+        return true;
+    }
     if expr.tag == NODE_INDEX {
         if !check_expr_use(v, expr.left) { return false; }
         return check_expr_use(v, expr.right);
@@ -1366,7 +1410,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
             }
         }
 
-        let src_opt: string = get_underlying_address_of(stmt.right);
+        let mut src_opt: string = get_underlying_address_of(stmt.right);
+        if src_opt.len == 0 { src_opt = get_local_array_slice_source(v, stmt.right); }
         let tgt_opt: string = get_ident_name(stmt.left);
         let val_ident: string = get_ident_name(stmt.right);
         let rhs_arena: string = get_expr_arena_borrow(v, stmt.right);
