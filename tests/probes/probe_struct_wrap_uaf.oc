@@ -1,0 +1,9 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_alloc(&mut a, 16);
+    let s: string = string { ptr: p.as(*u8), len: 16 };
+    arena_reset(&mut a);
+    print(s[0]); // use-after-reset: s still points into the arena
+}
