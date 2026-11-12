@@ -8550,7 +8550,8 @@ oc_string host_tmp_prefix(void) {
 }
 
 void print_usage(void) {
-    printf("%s\n", "Usage: occ [run|build|update|version] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    printf("%s\n", "       occ update | version | help   (also: --version, -v, --help, -h)");
     printf("%s\n", "Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
 }
 
@@ -8589,7 +8590,7 @@ int32_t handle_update(int32_t host) {
 int main(int argc, char** argv) {
     if ((argc < 2)) {
     print_usage();
-    return 1;
+    return 0;
     }
     oc_string in_file_str = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     oc_string out_file_str = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -8617,6 +8618,11 @@ int main(int argc, char** argv) {
     return 0;
     }
     else {
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("help"), .len = sizeof("help") - 1 })) {
+    print_usage();
+    return 0;
+    }
+    else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("update"), .len = sizeof("update") - 1 })) {
     int32_t host = sys_host_target();
     return handle_update(host);
@@ -8629,6 +8635,7 @@ int main(int argc, char** argv) {
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("build"), .len = sizeof("build") - 1 })) {
     i = __OC_ADD(i, 1);
+    }
     }
     }
     }
@@ -8686,7 +8693,27 @@ int main(int argc, char** argv) {
     opt_flag = (oc_string){ .ptr = (const uint8_t*)(" -O3"), .len = sizeof(" -O3") - 1 };
     }
     else {
+    if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--help"), .len = sizeof("--help") - 1 })) {
+    print_usage();
+    return 0;
+    }
+    else {
+    if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("-h"), .len = sizeof("-h") - 1 })) {
+    print_usage();
+    return 0;
+    }
+    else {
+    if ((((arg).len) > 0)) {
+    if ((__oc_index_str(arg, 0) == 45)) {
+    printf("%s\n", "error: unknown option:");
+    __oc_print(arg);
+    print_usage();
+    return 1;
+    }
     in_file_str = arg;
+    }
+    }
+    }
     }
     }
     }

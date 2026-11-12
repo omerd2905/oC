@@ -32,6 +32,26 @@ RUNTIME_TRAP=(
 PASS=0
 TOTAL=0
 
+echo "=== CLI: help and unknown options ==="
+for flag in --help -h help; do
+  TOTAL=$((TOTAL + 1))
+  if "$OCC" "$flag" | grep -q "^Usage: occ"; then
+    echo "  [PASS] occ $flag prints usage and exits 0"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] occ $flag did not print usage with exit code 0"
+    exit 1
+  fi
+done
+TOTAL=$((TOTAL + 1))
+if "$OCC" build --no-such-option >/dev/null 2>&1; then
+  echo "  [FAIL] occ accepted an unknown option"
+  exit 1
+else
+  echo "  [PASS] unknown option rejected"
+  PASS=$((PASS + 1))
+fi
+
 echo "=== [1/4] Compile-Time Rejection Probes (C & Native Backends) ==="
 for p in "${COMPILE_REJECT[@]}"; do
   for backend in c native; do
