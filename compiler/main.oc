@@ -710,6 +710,19 @@ fn main(argc: i32, argv: **u8) -> i32 {
         return 1;
     }
 
+    // Native Windows images get their sys_* runtime from oC source (KERNEL32 instead of syscalls).
+    if is_native {
+        if out_target == OC_TARGET_WINDOWS_X86_64 {
+            let rt_ok: bool = load_module_recursive("std/sys/windows.oc", "", std_root, &mut combined_buf, &mut loader, &mut arena);
+            if !rt_ok {
+                print("error: the native Windows runtime std/sys/windows.oc was not found; set OC_HOME to the directory that contains std/");
+                buf_deinit(&mut combined_buf);
+                arena_deinit(&mut arena);
+                return 1;
+            }
+        }
+    }
+
     let combined_src: string = buf_to_string(&mut combined_buf);
 
     let mut parser: Parser = parser_init(combined_src, &mut arena);

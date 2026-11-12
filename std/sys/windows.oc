@@ -1,0 +1,118 @@
+// Windows implementation of the sys_* intrinsics for `--backend native --target windows-x86_64`.
+//
+// On Linux the native backend turns sys_* calls into raw syscalls. Windows has no stable syscall
+// ABI, so there they are ordinary oC functions built on KERNEL32.dll. The compiler appends this
+// file to every native Windows build; it is never loaded for another target or for the C backend
+// (which has its own host shims), so nothing here needs to be imported by hand.
+//
+// A call to win32_<Name>(...) is lowered to an import of <Name> from KERNEL32.dll using the Win64
+// calling convention. Up to six arguments are passed; a seventh is always 0 (hTemplateFile).
+
+extern fn win32_GetStdHandle(id: i64) -> i64;
+extern fn win32_ReadFile(handle: i64, buf: *mut u8, count: usize, got: *mut u32, overlapped: usize) -> i32;
+extern fn win32_WriteFile(handle: i64, buf: *u8, count: usize, written: *mut u32, overlapped: usize) -> i32;
+extern fn win32_CreateFileA(path: *u8, access: u32, share: u32, security: usize, disposition: u32, attrs: u32) -> i64;
+extern fn win32_CloseHandle(handle: i64) -> i32;
+extern fn win32_DeleteFileA(path: *u8) -> i32;
+extern fn win32_VirtualAlloc(addr: usize, size: usize, kind: u32, protect: u32) -> *mut void;
+extern fn win32_VirtualFree(addr: *mut void, size: usize, kind: u32) -> i32;
+
+// File descriptors 0, 1 and 2 are the standard streams (STD_INPUT/OUTPUT/ERROR_HANDLE are
+// -10, -11, -12). Any other descriptor is the Win32 HANDLE itself: handles are multiples of 4,
+// so they can never be mistaken for 0..2.
+fn win_fd_handle(fd: i32) -> i64 {
+    if fd >= 0 {
+        if fd <= 2 {
+            return win32_GetStdHandle(-10 - fd.as(i64));
+        }
+    }
+    return fd.as(i64);
+}
+
+// ReadFile / WriteFile take a 32-bit length.
+fn win_io_len(count: usize) -> usize {
+    if count > 2147483647 { return 2147483647; }
+    return count;
+}
+
+// Returns bytes read, 0 at end of file, -1 on error (a closed pipe also reports -1).
+fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64 {
+    let mut got: u32 = 0;
+    if win32_ReadFile(win_fd_handle(fd), buf, win_io_len(count), &mut got, 0) == 0 {
+        return -1;
+    }
+    return got.as(i64);
+}
+
+fn sys_write(fd: i32, buf: *u8, count: usize) -> i64 {
+    let mut written: u32 = 0;
+    if win32_WriteFile(win_fd_handle(fd), buf, win_io_len(count), &mut written, 0) == 0 {
+        return -1;
+    }
+    return written.as(i64);
+}
+
+// `flags` uses the canonical oC values (see std/os.oc): access mode in the low two bits,
+// O_CREAT = 64, O_TRUNC = 512. O_APPEND is not supported. `mode` has no Windows equivalent.
+fn sys_open(path: *u8, flags: i32, mode: u32) -> i32 {
+    let acc: i32 = flags & 3;
+    let mut access: u32 = 0x80000000;       // GENERIC_READ
+    if acc == 1 { access = 0x40000000; }    // GENERIC_WRITE
+    if acc == 2 { access = 0xC0000000; }    // GENERIC_READ | GENERIC_WRITE
+    let mut disposition: u32 = 3;           // OPEN_EXISTING
+    if (flags & 64) != 0 {
+        disposition = 4;                    // OPEN_ALWAYS
+        if (flags & 512) != 0 {
+            disposition = 2;                // CREATE_ALWAYS
+        }
+    } else if (flags & 512) != 0 {
+        disposition = 5;                    // TRUNCATE_EXISTING
+    }
+    // share = FILE_SHARE_READ | FILE_SHARE_WRITE, attrs = FILE_ATTRIBUTE_NORMAL
+    let handle: i64 = win32_CreateFileA(path, access, 3, 0, disposition, 128);
+    if handle == -1 {                       // INVALID_HANDLE_VALUE
+        return -1;
+    }
+    return handle.as(i32);
+}
+
+fn sys_close(fd: i32) -> i32 {
+    if win32_CloseHandle(win_fd_handle(fd)) == 0 { return -1; }
+    return 0;
+}
+
+fn sys_unlink(path: *u8) -> i32 {
+    if win32_DeleteFileA(path) == 0 { return -1; }
+    return 0;
+}
+
+// Windows has no POSIX permission bits; whether a file can run is decided by its extension.
+fn sys_chmod(path: *u8, mode: u32) -> i32 {
+    return 0;
+}
+
+// Anonymous private read-write memory, which is all std/mem.oc asks for:
+// MEM_COMMIT | MEM_RESERVE (0x3000), PAGE_READWRITE (4). Fails with (void*)-1 like the C backend.
+fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -> *mut void {
+    let p: *mut void = win32_VirtualAlloc(0, len, 0x3000, 4);
+    if p.as(usize) == 0 {
+        return (0xffffffffffffffff).as(*mut void);
+    }
+    return p;
+}
+
+// MEM_RELEASE (0x8000) frees the whole reservation, so the size passed must be 0.
+fn sys_munmap(addr: *mut void, len: usize) -> i32 {
+    if win32_VirtualFree(addr, 0, 0x8000) == 0 { return -1; }
+    return 0;
+}
+
+// Sockets need Winsock (ws2_32.dll), which this runtime does not import: fail closed, exactly
+// like the C backend does on Windows.
+fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -> i32 {
+    return -1;
+}
+
+fn sys_connect(fd: i32, addr: *u8, len: u32) -> i32 {
+    return -1;
+}

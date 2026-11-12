@@ -143,6 +143,15 @@ jobs:
           $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
           if (($userPath -split ';') -notcontains $bin) { Write-Error "user PATH does not contain $bin"; exit 1 }
 
+      - name: Native PE32+ std runtime (arenas and file I/O on KERNEL32, no C compiler)
+        run: |
+          for ex in arena_demo core_suite; do
+            ./bin/occ.exe build "examples/$ex.oc" -o "build/${ex}_native" --backend native
+            "./build/${ex}_native.exe"
+          done
+          ./bin/occ.exe build tests/win_native_io.oc -o build/win_native_io --backend native
+          test "$(./build/win_native_io.exe | tr -d '\r')" = "$(cat tests/win_native_io.expected)"
+
       - name: Validate PE32+ headers and strict W^X section flags
         shell: pwsh
         run: python tests/check_pe.py build/hello_native.exe
