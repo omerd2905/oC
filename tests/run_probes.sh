@@ -12,6 +12,7 @@ COMPILE_REJECT=(
   "probe_param_escape.oc"
   "probe_indirect_deinit_uaf.oc"
   "probe_indirect_reset_uaf.oc"
+  "probe_array_slice_escape.oc"
 )
 
 RUNTIME_TRAP=(
@@ -21,6 +22,7 @@ RUNTIME_TRAP=(
   "probe_div_zero.oc"
   "probe_slice_bounds.oc"
   "probe_array_bounds.oc"
+  "probe_array_slice_bounds.oc"
   "probe_cast_narrow_i8.oc"
   "probe_cast_neg_u64.oc"
 )

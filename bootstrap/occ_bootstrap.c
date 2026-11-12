@@ -116,6 +116,8 @@ static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {
     return (oc_string){ .ptr = s.ptr + start, .len = end - start };
 }
 
+#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })
+
 static inline uint8_t __oc_index_str(oc_string s, size_t idx) {
     if (idx >= s.len) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); }
     return s.ptr[idx];
@@ -457,6 +459,7 @@ oc_string get_arena_arg_name(AstNode* arg);
 bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n);
 oc_string get_arena_source(AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
+oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
 bool validate_stmt(Validator* v, AstNode* stmt);
@@ -2292,9 +2295,42 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
+oc_string get_local_array_slice_source(Validator* v, AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) != NODE_SLICE)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->left) == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->left))->tag) != NODE_IDENT)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    int32_t idx = validator_find_var(v, ((((((expr)->left))->tok)).slice));
+    if ((idx < 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((!starts_with(((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name), (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return ((((((expr)->left))->tok)).slice);
+}
+
 oc_string contains_stack_ref(Validator* v, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_SLICE)) {
+    oc_string arr = get_local_array_slice_source(v, expr);
+    if ((((arr).len) > 0)) {
+    return arr;
+    }
+    return contains_stack_ref(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
     oc_string id = get_ident_name(((expr)->left));
@@ -2541,6 +2577,37 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
     return check_expr_use(v, ((expr)->left));
     }
+    if ((((expr)->tag) == NODE_SLICE)) {
+    if ((((expr)->left) != ((AstNode*)(0)))) {
+    if ((((((expr)->left))->tag) == NODE_IDENT)) {
+    int32_t s_idx = validator_find_var(v, ((((((expr)->left))->tok)).slice));
+    if ((s_idx >= 0)) {
+    oc_string s_type = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name);
+    bool is_raw_ptr = starts_with(s_type, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
+    if (starts_with(s_type, (oc_string){ .ptr = (const uint8_t*)("&"), .len = sizeof("&") - 1 })) {
+    is_raw_ptr = true;
+    }
+    if (is_raw_ptr) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot slice raw pointer '"), .len = sizeof("error: cannot slice raw pointer '") - 1 });
+    print_str_raw(((((((expr)->left))->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("': it has no length (slice a string or a [N]T array)\n"), .len = sizeof("': it has no length (slice a string or a [N]T array)\n") - 1 });
+    ((v)->has_error) = true;
+    return false;
+    }
+    }
+    }
+    }
+    if ((!check_expr_use(v, ((expr)->left)))) {
+    return false;
+    }
+    if ((((expr)->right) != ((AstNode*)(0)))) {
+    if ((!check_expr_use(v, ((((expr)->right))->left)))) {
+    return false;
+    }
+    return check_expr_use(v, ((((expr)->right))->right));
+    }
+    return true;
+    }
     if ((((expr)->tag) == NODE_INDEX)) {
     if ((!check_expr_use(v, ((expr)->left)))) {
     return false;
@@ -2742,6 +2809,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     oc_string src_opt = get_underlying_address_of(((stmt)->right));
+    if ((((src_opt).len) == 0)) {
+    src_opt = get_local_array_slice_source(v, ((stmt)->right));
+    }
     oc_string tgt_opt = get_ident_name(((stmt)->left));
     oc_string val_ident = get_ident_name(((stmt)->right));
     oc_string rhs_arena = get_expr_arena_borrow(v, ((stmt)->right));
@@ -3525,15 +3595,26 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_SLICE)) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__oc_slice_str("), .len = sizeof("__oc_slice_str(") - 1 });
-    codegen_expr(((expr)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
+    bool is_str = is_expr_string(((expr)->left), out);
     bool has_start = false;
+    bool has_end = false;
     if ((((expr)->right) != ((AstNode*)(0)))) {
     if ((((((expr)->right))->left) != ((AstNode*)(0)))) {
     has_start = true;
     }
+    if ((((((expr)->right))->right) != ((AstNode*)(0)))) {
+    has_end = true;
     }
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__oc_slice_str("), .len = sizeof("__oc_slice_str(") - 1 });
+    if ((!is_str)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_ARR("), .len = sizeof("__OC_ARR(") - 1 });
+    }
+    codegen_expr(((expr)->left), out);
+    if ((!is_str)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     if (has_start) {
     codegen_expr(((((expr)->right))->left), out);
     }
@@ -3541,18 +3622,18 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
-    bool has_end = false;
-    if ((((expr)->right) != ((AstNode*)(0)))) {
-    if ((((((expr)->right))->right) != ((AstNode*)(0)))) {
-    has_end = true;
-    }
-    }
     if (has_end) {
     codegen_expr(((((expr)->right))->right), out);
     }
     else {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(("), .len = sizeof("((") - 1 });
+    if ((!is_str)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_ARR("), .len = sizeof("__OC_ARR(") - 1 });
+    }
     codegen_expr(((expr)->left), out);
+    if ((!is_str)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(").len)"), .len = sizeof(").len)") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
@@ -4130,6 +4211,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return s.ptr[idx];\n"), .len = sizeof("    return s.ptr[idx];\n") - 1 });
@@ -5831,7 +5913,30 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_SLICE)) {
+    oc_string base_t = ng_expr_type(ng, ((expr)->left));
+    bool is_array = false;
+    if ((((base_t).len) > 0)) {
+    if ((__oc_index_str(base_t, 0) == 91)) {
+    is_array = true;
+    }
+    if ((__oc_index_str(base_t, 0) == 42)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: cannot slice a raw pointer (it has no length)"), .len = sizeof("native codegen error: cannot slice a raw pointer (it has no length)") - 1 });
+    }
+    if ((__oc_index_str(base_t, 0) == 38)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: cannot slice a raw pointer (it has no length)"), .len = sizeof("native codegen error: cannot slice a raw pointer (it has no length)") - 1 });
+    }
+    }
+    if (is_array) {
+    size_t arr_bytes = __OC_MUL(ng_parse_array_len(base_t), ({ __auto_type _v = (ng_type_stride(ng_parse_array_elem(base_t))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    ng_emit_lvalue_addr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 194);
+    elf_append_u32(code, ({ __auto_type _v = (arr_bytes); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    }
+    else {
     ng_emit_expr(ng, code, data, ((expr)->left));
+    }
     buf_append_u8(code, 80);
     buf_append_u8(code, 82);
     AstNode* range_node = ((expr)->right);
