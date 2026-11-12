@@ -153,7 +153,13 @@ jobs:
             "./build/${ex}_native.exe"
           done
           ./bin/occ.exe build tests/win_native_io.oc -o build/win_native_io --backend native
-          test "$(./build/win_native_io.exe | tr -d '\r')" = "$(cat tests/win_native_io.expected)"
+          # CR is stripped on both sides: git may check the expected file out with CRLF on Windows.
+          got="$(./build/win_native_io.exe | tr -d '\r')"
+          want="$(tr -d '\r' < tests/win_native_io.expected)"
+          if [ "$got" != "$want" ]; then
+            printf -- '--- got:\n%s\n--- expected:\n%s\n' "$got" "$want"
+            exit 1
+          fi
 
       - name: Validate PE32+ headers and strict W^X section flags
         shell: pwsh
