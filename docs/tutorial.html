@@ -91,7 +91,7 @@
                   <span>SRC: hello.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="fn">print</span>(<span class="str">"Hello, World from oC Active Defense!"</span>);
     <span class="kw">return</span> <span class="num">0</span>;
 }</code></pre>
@@ -143,7 +143,7 @@
                   <span>SRC: variables.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="cm">// Immutable binding: cannot be altered</span>
     <span class="kw">let</span> <span class="ty">port</span>: <span class="ty">u16</span> = <span class="num">8080</span>;
 
@@ -212,7 +212,7 @@
                   <span>SRC: overflow_check.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">max_signed</span>: <span class="ty">i32</span> = <span class="num">2147483640</span>;
     <span class="kw">let</span> <span class="ty">safe_val</span>: <span class="ty">i32</span> = <span class="ty">max_signed</span> + <span class="num">5</span>;
     <span class="fn">print</span>(<span class="str">"Safe value:"</span>);
@@ -274,7 +274,7 @@
                   <span>SRC: checked_casts.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">wide</span>: <span class="ty">i64</span> = <span class="num">1000</span>;
     <span class="cm">// Safe widening/narrowing within bounds:</span>
     <span class="kw">let</span> <span class="ty">narrow</span>: <span class="ty">i32</span> = <span class="ty">wide</span>.<span class="fn">as</span>(<span class="ty">i32</span>);
@@ -337,7 +337,7 @@
                   <span>SRC: slices.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">full_text</span>: <span class="ty">string</span> = <span class="str">"Secured systems with oC slices"</span>;
     <span class="fn">print</span>(<span class="str">"Full text length:"</span>);
     <span class="fn">print</span>(<span class="ty">full_text</span>.<span class="ty">len</span>);
@@ -405,7 +405,7 @@
                   <span>SRC: control_flow.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">check_permission</span>(<span class="ty">level</span>: <span class="ty">i32</span>, <span class="ty">is_admin</span>: <span class="ty">bool</span>) <span class="ty">bool</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">check_permission</span>(<span class="ty">level</span>: <span class="ty">i32</span>, <span class="ty">is_admin</span>: <span class="ty">bool</span>) -&gt; <span class="ty">bool</span> {
     <span class="kw">if</span> <span class="ty">is_admin</span> {
         <span class="kw">return</span> <span class="kw">true</span>;
     } <span class="kw">else if</span> <span class="ty">level</span> &gt; <span class="num">10</span> {
@@ -414,7 +414,7 @@
     <span class="kw">return</span> <span class="kw">false</span>;
 }
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let mut</span> <span class="ty">step</span>: <span class="ty">i32</span> = <span class="num">1</span>;
     <span class="kw">while</span> <span class="ty">step</span> &lt;= <span class="num">3</span> {
         <span class="fn">print</span>(<span class="str">"Loop Step:"</span>);
@@ -477,14 +477,14 @@
                   <span>SRC: recursion.oc</span>
                   
                 </div>
-                <pre><code><span class="kw">fn</span> <span class="fn">fibonacci</span>(<span class="ty">n</span>: <span class="ty">i64</span>) <span class="ty">i64</span> {
+                <pre><code><span class="kw">fn</span> <span class="fn">fibonacci</span>(<span class="ty">n</span>: <span class="ty">i64</span>) -&gt; <span class="ty">i64</span> {
     <span class="kw">if</span> <span class="ty">n</span> &lt;= <span class="num">1</span> {
         <span class="kw">return</span> <span class="ty">n</span>;
     }
     <span class="kw">return</span> <span class="fn">fibonacci</span>(<span class="ty">n</span> - <span class="num">1</span>) + <span class="fn">fibonacci</span>(<span class="ty">n</span> - <span class="num">2</span>);
 }
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">n</span>: <span class="ty">i64</span> = <span class="num">10</span>;
     <span class="kw">let</span> <span class="ty">ans</span>: <span class="ty">i64</span> = <span class="fn">fibonacci</span>(<span class="ty">n</span>);
     <span class="fn">print</span>(<span class="str">"Fibonacci(10) result:"</span>);
@@ -510,7 +510,7 @@
               </div>
             </div>
             <div class="explanation-box">
-              <strong>Architecture:</strong> Both <code>occ -O2</code> and <code>--backend native</code> generate standard Linux x86_64 System V ABI call frames (<code>%rdi</code>, <code>%rsi</code>, <code>%rdx</code>). The empirical benchmark suite executes 78.1M recursive calls in 79 ms, demonstrating exact parity with GCC.
+              <strong>Architecture:</strong> Both <code>occ -O2</code> and <code>--backend native</code> generate standard Linux x86_64 System V ABI call frames (<code>%rdi</code>, <code>%rsi</code>, <code>%rdx</code>). On the recursive <code>fib(38)</code> + Collatz benchmark the C backend takes about 2.6x the time of plain C (197 ms vs 77 ms): overflow checks on <code>+</code> keep <code>gcc</code> from removing one of the two recursive calls.
             </div>
           </div>
         </div>
@@ -556,7 +556,7 @@
     <span class="ty">authenticated</span>: <span class="ty">bool</span>,
 }
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">pkt</span> = <span class="ty">PacketHeader</span> {
         <span class="ty">version</span>: <span class="num">1</span>,
         <span class="ty">msg_type</span>: <span class="num">4</span>,
@@ -621,7 +621,7 @@
                   
                 </div>
                 <pre><code><span class="cm">// Safe: reference passed down the call tree</span>
-<span class="kw">fn</span> <span class="fn">compute_hash</span>(<span class="ty">val</span>: <span class="ty">&amp;u32</span>) <span class="ty">u32</span> {
+<span class="kw">fn</span> <span class="fn">compute_hash</span>(<span class="ty">val</span>: <span class="ty">&amp;u32</span>) -&gt; <span class="ty">u32</span> {
     <span class="kw">return</span> *<span class="ty">val</span> * <span class="num">31</span>;
 }
 
@@ -631,7 +631,7 @@
 <span class="cm">//     return &amp;local; // Compile Error: CWE-562</span>
 <span class="cm">// }</span>
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="kw">let</span> <span class="ty">data</span>: <span class="ty">u32</span> = <span class="num">100</span>;
     <span class="kw">let</span> <span class="ty">hash</span>: <span class="ty">u32</span> = <span class="fn">compute_hash</span>(&amp;<span class="ty">data</span>);
     <span class="fn">print</span>(<span class="str">"Computed hash:"</span>);
@@ -696,7 +696,7 @@
                 <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
 <span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="cm">// 1. Allocate 64 KB memory arena directly from kernel</span>
     <span class="kw">let mut</span> <span class="ty">arena</span>: <span class="ty">Arena</span> = <span class="fn">arena_init</span>(<span class="num">65536</span>);
 
@@ -757,7 +757,7 @@
   </div>
 
   <footer>
-    oC v1.0 Systems Programming Language • Step-by-Step Curriculum • Active Defense Systems
+    oC v1.0.2 Systems Programming Language • Step-by-Step Curriculum • Active Defense Systems
   </footer>
 
   <!-- Interactive Copy Script -->

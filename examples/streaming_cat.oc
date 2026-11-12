@@ -1,3 +1,5 @@
+import "std/fs.oc";
+
 extern fn sys_open(path: *u8, flags: i32, mode: u32) -> i32;
 extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
 extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
@@ -7,7 +9,9 @@ fn stream_cat(path: string) {
     print("=== Streaming File: ===");
     print(path);
 
-    let fd: i32 = sys_open(path.ptr.as(*u8), 0, 0);
+    // sys_open needs a NUL-terminated path: copy it instead of relying on how `path` is stored.
+    let mut pbuf: [4096]u8 = [0];
+    let fd: i32 = sys_open(cstr_path(path, (&mut pbuf).as(*mut u8)), 0, 0);
     if fd < 0 {
         print("Error: unable to open file");
         return;

@@ -139,9 +139,9 @@
                   <span>OC-SECURITY(7) Matrix</span>
                   <span>→</span>
                 </a>
-                <p>Deep dive into the 17 CWE vulnerability classes neutralized by oC, active defense IoB tripwires, and the 13 automated exploit regression tests.</p>
+                <p>Deep dive into the CWE weakness classes oC addresses, active defense IoB tripwires, and the 13 automated exploit regression tests.</p>
               </div>
-              <div class="card-footer">17 CWEs Neutralized • Active Defense</div>
+              <div class="card-footer">CWE Coverage • Active Defense</div>
             </div>
 
             <div class="card">
@@ -170,7 +170,7 @@
           </p>
           <ul>
             <li><strong>Zero General-Purpose Heap:</strong> All dynamic memory allocations are serviced by explicit kernel-backed regional bump arenas (<code>sys_mmap</code>). Zero inline chunk headers exist to be corrupted.</li>
-            <li><strong>Compile-Time EscapeValidator:</strong> Temporal memory safety (UAF, double-free, dangling stack pointers) is validated statically at compile time with 0.00 ns runtime overhead.</li>
+            <li><strong>Compile-Time EscapeValidator:</strong> Temporal memory safety (UAF, double-free, dangling stack pointers) is validated statically at compile time, so it adds no runtime checks.</li>
             <li><strong>Hardware &amp; Runtime Trap Enforcement:</strong> Both backends enforce arithmetic overflow/underflow checks, division-by-zero checks, signed/unsigned narrowing cast range checks, null-pointer dereference traps, and spatial slice/array bounds verification.</li>
             <li><strong>Dual Codegen Backends:</strong> The default backend (<code>--backend c</code>) emits C11 IR with <code>__builtin_*_overflow</code> / trap checks and invokes system <code>cc</code>/<code>gcc</code> for <code>-O1/-O2/-O3</code> vectorization; <code>--backend native</code> emits standalone static Linux <code>x86_64</code> ELF64 binaries (&lt;5.0 KB) with strict W^X segment permissions (<code>PF_R</code> <code>.rodata</code>, <code>PF_R|PF_X</code> <code>.text</code>, <code>PF_R|PF_W</code> <code>PT_GNU_STACK</code>) and zero external toolchain or <code>libc</code> dependencies.</li>
           </ul>
@@ -197,7 +197,7 @@
                 <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
 <span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="cm">// 1. Allocate a 64 KB kernel-backed arena via direct sys_mmap</span>
     <span class="kw">let mut</span> <span class="ty">arena</span>: <span class="ty">Arena</span> = <span class="fn">arena_init</span>(<span class="num">65536</span>);
 
@@ -247,7 +247,7 @@
         <h2>EMPIRICAL STRESS-TEST BENCHMARKS (run_benchmarks.sh)</h2>
         <div class="man-body">
           <p>
-            Benchmarked across 3 high-intensity stress workloads designed to defeat dead-store elimination and constant folding (3-run averages on Linux x86_64; outputs verified byte-for-byte identical against GCC <code>-O2</code>):
+            Benchmarked across 3 high-intensity stress workloads designed to defeat dead-store elimination and constant folding (best of 5 runs on Linux x86_64, Intel Xeon @ 2.30GHz, GCC 13.3.0, measured 2026-11-12; checksums identical to GCC <code>-O2</code> on both backends; regenerate with <code>benchmarks/run_benchmarks.sh</code>):
           </p>
           <table>
             <thead>
@@ -265,16 +265,16 @@
                   <small>Allocation-strategy comparison: Regional Bump Arena + bulk reset scrub vs per-object <code>malloc</code> + <code>memset</code> + <code>free</code></small>
                 </td>
                 <td>
-                  <strong>43 ms</strong><br>
-                  <small class="pass">(297.6M allocs/s)</small>
+                  <strong>45 ms</strong> (<code>occ -O2</code>)<br>
+                  <small>3330 ms (<code>--backend native</code>)</small>
                 </td>
                 <td>
-                  320 ms<br>
+                  289 ms<br>
                   <small>(<code>malloc</code> + <code>memset</code> + <code>free</code>)</small>
                 </td>
                 <td>
-                  <strong class="pass">7.44x faster</strong><br>
-                  Kernel <code>sys_mmap</code> bump arena + linear scrub completely eliminates <code>ptmalloc</code> heap metadata management overhead.
+                  <strong class="pass">6.4x faster</strong> on the C backend.<br>
+                  This compares allocation strategies, not code generation: one bump arena reset vs per-object <code>malloc</code> / <code>free</code>. The unoptimized native backend is slow here because the scrub is a byte-by-byte loop.
                 </td>
               </tr>
               <tr>
@@ -283,16 +283,16 @@
                   <small>Data-dependent 64B frames, 3 sub-slices + 3 indexed reads per frame</small>
                 </td>
                 <td>
-                  <strong>88 ms</strong><br>
-                  <small class="pass">(Checked fat slices &amp; casts)</small>
+                  <strong>109 ms</strong> (<code>occ -O2</code>)<br>
+                  <small>355 ms (<code>--backend native</code>)</small>
                 </td>
                 <td>
-                  98 ms<br>
+                  96 ms<br>
                   <small>(Unchecked raw <code>uint8_t*</code>)</small>
                 </td>
                 <td>
-                  <strong class="pass">1.11x faster (Parity)</strong><br>
-                  Spatial bounds and CWE-197 truncation guards add negligible instruction cache penalty while guaranteeing safety.
+                  <strong>1.14x the C time</strong> on the C backend.<br>
+                  The price of bounds-checked fat slices and checked casts on every frame.
                 </td>
               </tr>
               <tr>
@@ -301,16 +301,16 @@
                   <small>Heavy call-frame stress + unpredictable hailstone branch &amp; div/mul ops</small>
                 </td>
                 <td>
-                  <strong>79 ms</strong> (<code>occ -O2</code>)<br>
-                  <small>738 ms (<code>--backend native</code>)</small>
+                  <strong>197 ms</strong> (<code>occ -O2</code>)<br>
+                  <small>394 ms (<code>--backend native</code>)</small>
                 </td>
                 <td>
-                  78 ms<br>
+                  77 ms<br>
                   <small>(<code>gcc -O2</code>)</small>
                 </td>
                 <td>
-                  <strong class="pass">1.01x parity</strong> on <code>-O2</code>.<br>
-                  Direct native backend emits single-pass machine code with hardware <code>jo</code>/<code>jz</code> traps without an LLVM/GCC pipeline.
+                  <strong>2.6x the C time</strong> on the C backend.<br>
+                  Overflow-checked <code>+</code> stops <code>gcc</code> from turning one recursive call into a loop, so the full double recursion remains. The native backend emits single-pass machine code with <code>jo</code>/<code>jz</code> traps and no optimizer.
                 </td>
               </tr>
               <tr>
@@ -377,7 +377,7 @@
   </div>
 
   <footer>
-    oC v1.0 Systems Programming Language • Zero-Libc Active Defense • Linux x86_64
+    oC v1.0.2 Systems Programming Language • Zero-Libc Active Defense • Linux x86_64
   </footer>
 
   <!-- Interactive Copy Script -->

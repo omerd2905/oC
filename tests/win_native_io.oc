@@ -1,0 +1,30 @@
+// Exercises the native Windows runtime (std/sys/windows.oc): arenas on VirtualAlloc and file
+// I/O on CreateFileA / ReadFile / WriteFile / DeleteFileA. The Windows CI job builds it with
+// --backend native, runs it and compares stdout with win_native_io.expected. The Linux native
+// backend prints the same lines.
+import "std/mem.oc";
+import "std/fs.oc";
+
+fn main() -> i32 {
+    let mut a: Arena = arena_init(65536);
+    let p: *mut u8 = arena_alloc(&mut a, 64);
+    p[0] = 79;
+    p[1] = 75;
+    print(p[0] + p[1]);                                // 154
+
+    print(write_file("oc_win_test.txt", "hello from kernel32\n")); // true
+    let mut buf: [64]u8 = [0];
+    let n: i64 = read_file("oc_win_test.txt", (&mut buf).as(*mut u8), 63);
+    print(n);                                          // 20
+    print(buf);                                        // hello from kernel32
+    print(read_file("no_such_file.txt", (&mut buf).as(*mut u8), 63)); // -1
+    print(write_file("oc_win_test.txt", "short\n"));   // true (truncates)
+    let mut buf2: [64]u8 = [0];
+    print(read_file("oc_win_test.txt", (&mut buf2).as(*mut u8), 63)); // 6
+    print(unlink_file("oc_win_test.txt"));             // true
+    print(unlink_file("oc_win_test.txt"));             // false
+    sys_write(1, "raw stdout\n".ptr, 11);
+    arena_reset(&mut a);
+    arena_deinit(&mut a);
+    return 0;
+}

@@ -1,0 +1,66 @@
+// Structs passed and returned by value must arrive whole on both backends (up to 32 bytes
+// travel in registers on the native backend).
+struct Pair { a: u64, b: u64, }
+struct Tok { tag: u32, text: string, }
+struct Quad { a: u64, b: u64, c: u64, d: u64, }
+struct One { v: u64, }
+struct Outer { id: u64, inner: Pair, }
+
+fn sum_pair(p: Pair) -> u64 { return p.a + p.b; }
+fn text_len(t: Tok) -> usize { return t.text.len; }
+fn head(t: Tok) -> string { return t.text[0..2]; }
+fn quad_last(q: Quad) -> u64 { return q.d + q.a; }
+fn mixed(x: u64, p: Pair, s: string, y: u64) -> u64 { return x + p.a + p.b + s.len.as(u64) + y; }
+fn make_pair(n: u64) -> Pair { return Pair { a: n, b: n + 1 }; }
+fn one(o: One, k: u64) -> u64 { return o.v + k; }
+fn via_ptr(q: *Pair) -> u64 {
+    let copy: Pair = *q;                // copy out of a pointer
+    return sum_pair(copy) + sum_pair(*q);
+}
+fn make_outer(n: u64) -> Outer { return Outer { id: n, inner: Pair { a: n + 1, b: n + 2 } }; }
+fn make_tok(s: string) -> Tok { return Tok { tag: 3, text: s }; }
+fn set_through(q: *mut Pair, v: Pair) { *q = v; }
+fn bump(p: Pair) -> u64 {
+    let mut q: Pair = p;
+    q.a = q.a + 100; // a by-value parameter is a private copy
+    return q.a + q.b;
+}
+
+fn main() {
+    let p: Pair = Pair { a: 3, b: 4 };
+    print(sum_pair(p));                        // 7
+    let t: Tok = Tok { tag: 9, text: "hello" };
+    print(text_len(t));                        // 5
+    print(head(t));                            // he
+    let q: Quad = Quad { a: 1, b: 2, c: 3, d: 40 };
+    print(quad_last(q));                       // 41
+    print(mixed(10, p, "abc", 1000));          // 1020
+    print(sum_pair(Pair { a: 20, b: 22 }));    // 42 (struct literal argument)
+    print(sum_pair(make_pair(5)));             // 11 (call result argument)
+    print(one(One { v: 6 }, 1));               // 7
+    print(bump(p));                            // 107
+    print(p.a);                                // 3
+    print(via_ptr(&p));                        // 14
+    let o: Outer = Outer { id: 7, inner: Pair { a: 10, b: 20 } };
+    let inner_copy: Pair = o.inner;            // copy out of a nested field
+    print(sum_pair(inner_copy));               // 30
+    print(sum_pair(o.inner));                  // 30
+
+    // struct literals with multi-word fields, as arguments and return values
+    print(text_len(Tok { tag: 1, text: "literal" })); // 7
+    print(head(make_tok("world")));            // wo
+    let o2: Outer = make_outer(100);
+    print(o2.id + o2.inner.a + o2.inner.b);    // 303
+
+    // assigning a struct value into a field and through a pointer
+    let mut o3: Outer = Outer { id: 1, inner: Pair { a: 0, b: 0 } };
+    o3.inner = p;
+    print(o3.id + o3.inner.a + o3.inner.b);    // 8
+    let mut target: Pair = Pair { a: 0, b: 0 };
+    set_through(&mut target, Pair { a: 50, b: 60 });
+    print(sum_pair(target));                   // 110
+    let mut big: Quad = Quad { a: 0, b: 0, c: 0, d: 0 };
+    let bp: *mut Quad = &mut big;
+    *bp = q;
+    print(big.a + big.b + big.c + big.d);      // 46
+}
