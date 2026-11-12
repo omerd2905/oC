@@ -111,7 +111,8 @@ jobs:
           mkdir -p build
           ./bin/occ.exe build compiler/main.oc -o build/occ_stage2
           ./build/occ_stage2.exe build compiler/main.oc -o build/occ_stage3
-          cmp build/occ_stage2.exe build/occ_stage3.exe
+          # sha256sum, not cmp: base MSYS2 ships coreutils but not diffutils
+          test "$(sha256sum < build/occ_stage2.exe)" = "$(sha256sum < build/occ_stage3.exe)"
 
       - name: Native PE32+ backend (no C compiler, no linker) + runtime trap probes
         run: |
