@@ -4,15 +4,23 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OCC="$ROOT/bin/occ"
 
+# A compiler that cannot even start must not be mistaken for a compiler that rejects programs.
+if ! "$OCC" --version >/dev/null 2>&1; then
+  echo "error: $OCC is missing or does not run on this machine." >&2
+  echo "       Build it first:  make   (or: cc -O2 bootstrap/occ_bootstrap.c -o bin/occ)" >&2
+  exit 1
+fi
+
+# probe file | text the compiler must print when it rejects the probe
 COMPILE_REJECT=(
-  "probe_immut_assign.oc"
-  "probe_uninit_self.oc"
-  "probe_cond_uaf.oc"
-  "probe_loop_uaf.oc"
-  "probe_param_escape.oc"
-  "probe_indirect_deinit_uaf.oc"
-  "probe_indirect_reset_uaf.oc"
-  "probe_array_slice_escape.oc"
+  "probe_immut_assign.oc|cannot assign to immutable variable"
+  "probe_uninit_self.oc|variable used in its own initializer"
+  "probe_cond_uaf.oc|use-after-free: variable 'p' used after arena 'a' was reset"
+  "probe_loop_uaf.oc|use-after-free: variable 'p' used after arena 'a' was reset"
+  "probe_param_escape.oc|cannot return reference to local stack variable 'x'"
+  "probe_indirect_deinit_uaf.oc|use-after-free: variable 'p' used after arena 'a' was deinitialized"
+  "probe_indirect_reset_uaf.oc|use-after-free: variable 'p' used after arena 'a' was reset"
+  "probe_array_slice_escape.oc|cannot return reference to local stack variable 's'"
 )
 
 RUNTIME_TRAP=(
@@ -67,15 +75,21 @@ fi
 rm -rf "$WORK"
 
 echo "=== [1/4] Compile-Time Rejection Probes (C & Native Backends) ==="
-for p in "${COMPILE_REJECT[@]}"; do
+for entry in "${COMPILE_REJECT[@]}"; do
+  p="${entry%%|*}"
+  want="${entry#*|}"
   for backend in c native; do
     TOTAL=$((TOTAL + 1))
-    if "$OCC" build "$ROOT/tests/probes/$p" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null 2>&1; then
+    if out="$("$OCC" build "$ROOT/tests/probes/$p" -o /tmp/oc_probe_bin --backend "$backend" 2>&1)"; then
       echo "  [FAIL] $p (--backend $backend) unexpectedly compiled!"
       exit 1
-    else
-      echo "  [PASS] $p (--backend $backend) rejected at compile time"
+    elif grep -qF -- "$want" <<<"$out"; then
+      echo "  [PASS] $p (--backend $backend) rejected: $want"
       PASS=$((PASS + 1))
+    else
+      echo "  [FAIL] $p (--backend $backend) failed, but not with the expected error \"$want\":"
+      echo "$out"
+      exit 1
     fi
   done
 done
@@ -84,17 +98,22 @@ echo "=== [2/4] Runtime Hardware Trap Probes (C & Native Backends) ==="
 for p in "${RUNTIME_TRAP[@]}"; do
   for backend in c native; do
     TOTAL=$((TOTAL + 1))
-    "$OCC" build "$ROOT/tests/probes/$p" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null 2>&1
+    if ! "$OCC" build "$ROOT/tests/probes/$p" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null 2>&1; then
+      echo "  [FAIL] $p (--backend $backend) did not compile!"
+      exit 1
+    fi
     set +e
-    /tmp/oc_probe_bin >/dev/null 2>&1
+    out="$(/tmp/oc_probe_bin 2>&1)"
     RC=$?
     set -e
     rm -f /tmp/oc_probe_bin
-    if [ "$RC" -ne 0 ]; then
-      echo "  [PASS] $p (--backend $backend) trapped at runtime (exit $RC)"
+    # A controlled trap prints "panic: ..." and exits non-zero; a crash (e.g. SIGSEGV) is not a pass.
+    if [ "$RC" -ne 0 ] && grep -q "^panic: " <<<"$out"; then
+      echo "  [PASS] $p (--backend $backend) trapped at runtime (exit $RC, $(grep "^panic: " <<<"$out" | head -n 1))"
       PASS=$((PASS + 1))
     else
-      echo "  [FAIL] $p (--backend $backend) exited 0 without trapping!"
+      echo "  [FAIL] $p (--backend $backend) did not trap (exit $RC):"
+      echo "$out"
       exit 1
     fi
   done
