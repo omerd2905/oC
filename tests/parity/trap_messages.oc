@@ -1,0 +1,8 @@
+// A runtime trap must print the same panic text and exit with the same code on both backends.
+// This one is a failed narrowing cast; the trap probes in tests/probes cover the other kinds.
+fn main() {
+    let big: i64 = 300;
+    print(big.as(u16));   // 300
+    print(big.as(u8));    // panic: invalid unsigned cast
+    print("unreachable");
+}

@@ -562,7 +562,7 @@ void ng_emit_disp_load_rcx(CodeBuffer* code, int32_t off);
 void ng_emit_disp_load_r8(CodeBuffer* code, int32_t off);
 void ng_emit_disp_lea_rax(CodeBuffer* code, int32_t off);
 size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw);
-void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t);
+void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string trap);
 void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width);
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
@@ -5438,7 +5438,7 @@ size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw) {
     return emitted;
 }
 
-void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
+void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string trap) {
     if ((((t).len) == 0)) {
     return;
     }
@@ -5446,7 +5446,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_u32(code, 255);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 135);
     elf_append_u32(code, 0);
@@ -5456,7 +5456,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_u32(code, 65535);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 135);
     elf_append_u32(code, 0);
@@ -5469,7 +5469,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 57);
     buf_append_u8(code, 200);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 135);
     elf_append_u32(code, 0);
@@ -5479,14 +5479,14 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_i32(code, (-128));
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 140);
     elf_append_u32(code, 0);
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_u32(code, 127);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 143);
     elf_append_u32(code, 0);
@@ -5496,14 +5496,14 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_i32(code, (-32768));
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 140);
     elf_append_u32(code, 0);
     buf_append_u8(code, 72);
     buf_append_u8(code, 61);
     elf_append_u32(code, 32767);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 143);
     elf_append_u32(code, 0);
@@ -5517,7 +5517,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 57);
     buf_append_u8(code, 200);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 140);
     elf_append_u32(code, 0);
@@ -5527,7 +5527,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 57);
     buf_append_u8(code, 200);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 143);
     elf_append_u32(code, 0);
@@ -5937,16 +5937,20 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     bool src_uns = ng_is_unsigned_expr(ng, ((expr)->left));
+    oc_string cast_trap = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_signed"), .len = sizeof("__trap_cast_signed") - 1 };
+    if (is_unsigned_type_name(dst)) {
+    cast_trap = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
+    }
     if (str_eq(dst, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
-    ng_emit_range_check(ng, code, dst);
+    ng_emit_range_check(ng, code, dst, cast_trap);
     return;
     }
     if (str_eq(dst, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
-    ng_emit_range_check(ng, code, dst);
+    ng_emit_range_check(ng, code, dst, cast_trap);
     return;
     }
     if (str_eq(dst, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
-    ng_emit_range_check(ng, code, dst);
+    ng_emit_range_check(ng, code, dst, cast_trap);
     return;
     }
     bool is_u64_dst = false;
@@ -5961,7 +5965,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 72);
     buf_append_u8(code, 133);
     buf_append_u8(code, 192);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), cast_trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 136);
     elf_append_u32(code, 0);
@@ -5995,13 +5999,13 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 72);
     buf_append_u8(code, 57);
     buf_append_u8(code, 200);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), cast_trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 135);
     elf_append_u32(code, 0);
     }
     else {
-    ng_emit_range_check(ng, code, dst);
+    ng_emit_range_check(ng, code, dst, cast_trap);
     }
     return;
     }
@@ -6010,7 +6014,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 72);
     buf_append_u8(code, 133);
     buf_append_u8(code, 192);
-    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    ng_add_fixup(ng, ((code)->len), cast_trap, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 136);
     elf_append_u32(code, 0);
@@ -6283,7 +6287,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 128);
     }
     elf_append_u32(code, 0);
-    ng_emit_range_check(ng, code, res_type);
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     }
     return;
     }
@@ -6301,7 +6305,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 128);
     }
     elf_append_u32(code, 0);
-    ng_emit_range_check(ng, code, res_type);
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     }
     return;
     }
@@ -6321,7 +6325,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 15);
     buf_append_u8(code, 128);
     elf_append_u32(code, 0);
-    ng_emit_range_check(ng, code, res_type);
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     return;
     }
     if ((((((expr)->tok)).tag) == TOK_LT)) {
@@ -7001,7 +7005,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     return;
     }
     ng_emit_expr(ng, code, data, ((stmt)->left));
-    ng_emit_range_check(ng, code, t_name);
+    ng_emit_range_check(ng, code, t_name, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
     int32_t off = ((ng)->curr_off);
     if (is_slice) {
@@ -7043,7 +7047,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     return;
     }
-    ng_emit_range_check(ng, code, vt);
+    ng_emit_range_check(ng, code, vt, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     ng_emit_disp_store_rax(code, off);
     if (ng_is_var_slice(ng, ((((((stmt)->left))->tok)).slice))) {
     ng_emit_disp_store_rdx(code, __OC_SUB(off, 8));
@@ -7052,7 +7056,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     oc_string lhs_t = ng_expr_type(ng, ((stmt)->left));
     ng_emit_expr(ng, code, data, ((stmt)->right));
-    ng_emit_range_check(ng, code, lhs_t);
+    ng_emit_range_check(ng, code, lhs_t, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     buf_append_u8(code, 80);
     if (str_eq(lhs_t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
     buf_append_u8(code, 82);
@@ -8159,18 +8163,22 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     buf_append_u8(code, 236);
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
-    oc_string traps[4] = {0};
+    oc_string traps[6] = {0};
     __OC_AT((traps), (0)) = (oc_string){ .ptr = (const uint8_t*)("__trap_null_deref"), .len = sizeof("__trap_null_deref") - 1 };
     __OC_AT((traps), (1)) = (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 };
     __OC_AT((traps), (2)) = (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 };
     __OC_AT((traps), (3)) = (oc_string){ .ptr = (const uint8_t*)("__trap_div_zero"), .len = sizeof("__trap_div_zero") - 1 };
-    oc_string trap_msgs[4] = {0};
+    __OC_AT((traps), (4)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_signed"), .len = sizeof("__trap_cast_signed") - 1 };
+    __OC_AT((traps), (5)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
+    oc_string trap_msgs[6] = {0};
     __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\n"), .len = sizeof("panic: null pointer dereference\n") - 1 };
     __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\n"), .len = sizeof("panic: slice index out of bounds\n") - 1 };
     __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\n"), .len = sizeof("panic: integer overflow\n") - 1 };
     __OC_AT((trap_msgs), (3)) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\n"), .len = sizeof("panic: division by zero\n") - 1 };
+    __OC_AT((trap_msgs), (4)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid signed cast\n"), .len = sizeof("panic: invalid signed cast\n") - 1 };
+    __OC_AT((trap_msgs), (5)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid unsigned cast\n"), .len = sizeof("panic: invalid unsigned cast\n") - 1 };
     size_t ti = 0;
-    while ((ti < 4)) {
+    while ((ti < 6)) {
     ng_define_helper(ng, has_offset, __OC_AT((traps), (ti)), ((code)->len));
     oc_string tmsg = __OC_AT((trap_msgs), (ti));
     size_t t_data_off = ((data)->len);
