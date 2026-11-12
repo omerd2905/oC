@@ -339,6 +339,7 @@ struct FnEffects {
 
 struct Validator {
     FnEffects* fx;
+    AstNode* program;
     VarInfo vars[512];
     size_t vars_count;
     oc_string deinit_arenas[128];
@@ -484,11 +485,13 @@ oc_string get_arena_arg_name(AstNode* arg);
 bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n);
 oc_string get_arena_source(AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
+oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name);
+oc_string validator_stack_place_type(Validator* v, AstNode* expr);
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
 bool validate_stmt(Validator* v, AstNode* stmt);
-bool validate_function(AstNode* f, FnEffects* fx);
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program);
 bool validate_program(AstNode* root);
 AstNode* parse_program(Parser* p);
 CodeBuffer buf_init(size_t capacity);
@@ -2338,6 +2341,72 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
+oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name) {
+    AstNode* decl = ((((v)->program))->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_STRUCT_DECL)) {
+    if (str_eq(((((decl)->tok)).slice), s_name)) {
+    AstNode* f = ((decl)->left);
+    while ((f != ((AstNode*)(0)))) {
+    if (str_eq(((((f)->tok)).slice), f_name)) {
+    return ((f)->type_name);
+    }
+    f = ((f)->next);
+    }
+    }
+    }
+    decl = ((decl)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string validator_stack_place_type(Validator* v, AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_IDENT)) {
+    int32_t idx = validator_find_var(v, ((((expr)->tok)).slice));
+    if ((idx < 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return ((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name);
+    }
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string base = validator_stack_place_type(v, ((expr)->left));
+    if ((((base).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (starts_with(base, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (starts_with(base, (oc_string){ .ptr = (const uint8_t*)("&"), .len = sizeof("&") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return validator_field_type(v, base, ((((expr)->tok)).slice));
+    }
+    if ((((expr)->tag) == NODE_INDEX)) {
+    oc_string base = validator_stack_place_type(v, ((expr)->left));
+    if ((!starts_with(base, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    size_t close = 1;
+    while ((close < ((base).len))) {
+    if ((__oc_index_str(base, close) == 93)) {
+    break;
+    }
+    close = __OC_ADD(close, 1);
+    }
+    if ((__OC_ADD(close, 1) >= ((base).len))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return __oc_slice_str(base, __OC_ADD(close, 1), ((base).len));
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -2345,23 +2414,10 @@ oc_string get_local_array_slice_source(Validator* v, AstNode* expr) {
     if ((((expr)->tag) != NODE_SLICE)) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
-    if ((((expr)->left) == ((AstNode*)(0)))) {
+    if ((!starts_with(validator_stack_place_type(v, ((expr)->left)), (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
-    if ((((((expr)->left))->tag) != NODE_IDENT)) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    int32_t idx = validator_find_var(v, ((((((expr)->left))->tok)).slice));
-    if ((idx < 0)) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    if ((!starts_with(((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name), (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    return ((((((expr)->left))->tok)).slice);
+    return get_ident_name(((expr)->left));
 }
 
 oc_string contains_stack_ref(Validator* v, AstNode* expr) {
@@ -2723,6 +2779,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     inferred_type = (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 };
     }
     }
+    if ((((((stmt)->left))->tag) == NODE_STRUCT_INIT)) {
+    inferred_type = ((((((stmt)->left))->tok)).slice);
+    }
     }
     }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
@@ -3047,11 +3106,11 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return check_expr_use(v, stmt);
 }
 
-bool validate_function(AstNode* f, FnEffects* fx) {
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program) {
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .fx = fx, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    Validator v = (Validator){ .fx = fx, .program = program, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -3133,7 +3192,7 @@ bool validate_program(AstNode* root) {
     decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
-    if ((!validate_function(decl, (&(fx))))) {
+    if ((!validate_function(decl, (&(fx)), root))) {
     return false;
     }
     }
