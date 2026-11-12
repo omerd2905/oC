@@ -360,11 +360,12 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, ")");
             return;
         }
-        buf_append(out, "((");
+        // __OC_AT bounds-checks fixed-size arrays ([N]T) against N; raw pointers stay unchecked.
+        buf_append(out, "__OC_AT((");
         codegen_expr(expr.left, out);
-        buf_append(out, ")[");
+        buf_append(out, "), (");
         codegen_expr(expr.right, out);
-        buf_append(out, "])");
+        buf_append(out, "))");
         return;
     }
 
@@ -856,6 +857,10 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n");
     buf_append(out, "    return s.ptr[idx];\n");
     buf_append(out, "}\n\n");
+
+    // Array vs pointer is decided by the C type, so struct fields and shadowed names are covered too.
+    // "+ 0" keeps -Wsizeof-pointer-div quiet in the branch that is discarded for pointers.
+    buf_append(out, "#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n");
 
     buf_append(out, "static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n");
     buf_append(out, "    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n");
