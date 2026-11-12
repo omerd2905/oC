@@ -815,6 +815,7 @@ fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "getenv") { return true; }
     if str_eq(fn_name, "sys_mkdtemp") { return true; }
     if str_eq(fn_name, "sys_rmdir") { return true; }
+    if str_eq(fn_name, "sys_exe_path") { return true; }
     if str_eq(fn_name, "exit") { return true; }
     if str_eq(fn_name, "sys_read") { return true; }
     if str_eq(fn_name, "sys_write") { return true; }
@@ -899,6 +900,18 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#else\n");
     buf_append(out, "static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n");
     buf_append(out, "static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n");
+    buf_append(out, "#endif\n");
+    // Absolute path of the running executable with symlinks resolved (compiler driver: locating
+    // std/ next to the install). Returns its length, or -1 where the host offers no way to ask.
+    buf_append(out, "#if defined(_WIN32)\n");
+    buf_append(out, "__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n");
+    buf_append(out, "#elif defined(__APPLE__)\n");
+    buf_append(out, "#include <limits.h>\n");
+    buf_append(out, "#include <mach-o/dyld.h>\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n");
+    buf_append(out, "#else\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n");
     buf_append(out, "#endif\n");
     buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
     // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.

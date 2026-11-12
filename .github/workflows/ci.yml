@@ -19,6 +19,14 @@ jobs:
           cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
           ./showcase.sh
 
+      - name: occ install, then run by name from another directory
+        run: |
+          ./bin/occ install
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$(occ run t.oc)" = "std ok"
+
       - name: Verify W^X ELF64 segments on --backend native
         run: |
           ./bin/occ build examples/oc_tripwire.oc -o /tmp/oc_tripwire --backend native
@@ -56,6 +64,14 @@ jobs:
             ./bin/occ build "examples/$ex.oc" -o "build/$ex"
             "./build/$ex"
           done
+
+      - name: occ install, then run by name from another directory
+        run: |
+          ./bin/occ install
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$(occ run t.oc)" = "std ok"
 
       - name: Cross-compile a Windows PE32+ from macOS (--backend native)
         run: |
@@ -102,6 +118,22 @@ jobs:
             fi
             echo "probe_$p.oc trapped as expected"
           done
+
+      - name: occ.exe runs from another directory (std found via the real executable path)
+        run: |
+          occ="$PWD/bin/occ.exe"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$("$occ" run t.oc | tr -d '\r')" = "std ok"
+
+      - name: occ install adds the bin directory to the user PATH
+        shell: pwsh
+        run: |
+          .\bin\occ.exe install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $bin = (Resolve-Path .\bin).Path
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains $bin) { Write-Error "user PATH does not contain $bin"; exit 1 }
 
       - name: Validate PE32+ headers and strict W^X section flags
         shell: pwsh
