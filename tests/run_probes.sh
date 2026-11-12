@@ -172,7 +172,7 @@ for p in "${RUNTIME_TRAP[@]}"; do
     exit 1
   fi
 done
-# Examples either emit a valid PE32+ or are rejected for Linux-only syscall intrinsics (fail closed).
+# Every example must emit a valid PE32+: arenas and file I/O run on KERNEL32 (std/sys/windows.oc).
 for ex in "$ROOT"/examples/*.oc; do
   base="$(basename "$ex")"
   if [ "$base" = "math_utils.oc" ] || [ "$base" = "bad_stack_escape.oc" ]; then
@@ -180,19 +180,11 @@ for ex in "$ROOT"/examples/*.oc; do
   fi
   TOTAL=$((TOTAL + 1))
   rm -f "$PE_OUT.exe"
-  if out="$("$OCC" build "$ex" -o "$PE_OUT" --backend native --target windows-x86_64 2>&1)"; then
-    if pe_check; then
-      echo "  [PASS] $base -> valid PE32+"
-      PASS=$((PASS + 1))
-    else
-      echo "  [FAIL] $base produced an invalid PE32+ image"
-      exit 1
-    fi
-  elif grep -q "unavailable on target windows-x86_64" <<<"$out"; then
-    echo "  [PASS] $base rejected at compile time (Linux syscall intrinsic: $(grep -A1 "unavailable on target" <<<"$out" | tail -n 1))"
+  if out="$("$OCC" build "$ex" -o "$PE_OUT" --backend native --target windows-x86_64 2>&1)" && pe_check; then
+    echo "  [PASS] $base -> valid PE32+"
     PASS=$((PASS + 1))
   else
-    echo "  [FAIL] $base: unexpected windows-x86_64 build failure:"
+    echo "  [FAIL] $base did not produce a valid PE32+ image:"
     echo "$out"
     exit 1
   fi

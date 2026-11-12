@@ -334,22 +334,24 @@ fn main() i32 {
               <td><code>sys_mmap</code>, <code>sys_munmap</code></td>
               <td><code>mmap</code> / <code>VirtualAlloc</code> (Windows)</td>
               <td><code>syscall</code> 9 / 11</td>
-              <td rowspan="3">Rejected at compile time: <code>native codegen error: syscall intrinsic unavailable on target windows-x86_64</code>. Use <code>--backend c</code>.</td>
+              <td><code>KERNEL32!VirtualAlloc</code> / <code>VirtualFree</code></td>
             </tr>
             <tr>
               <td><code>sys_read</code>, <code>sys_write</code>, <code>sys_open</code>, <code>sys_close</code>, <code>sys_unlink</code>, <code>sys_chmod</code></td>
               <td>POSIX / MSVCRT <code>_read</code>, <code>_open</code>, ... (Windows)</td>
               <td><code>syscall</code> 0, 1, 2, 3, 87, 90</td>
+              <td><code>KERNEL32!ReadFile</code>, <code>WriteFile</code>, <code>CreateFileA</code>, <code>CloseHandle</code>, <code>DeleteFileA</code>; <code>sys_chmod</code> is a no-op</td>
             </tr>
             <tr>
               <td><code>sys_socket</code>, <code>sys_connect</code></td>
               <td>BSD sockets; return <code>-1</code> on Windows</td>
               <td><code>syscall</code> 41 / 42</td>
+              <td>return <code>-1</code> (no Winsock import)</td>
             </tr>
           </tbody>
         </table>
         <div class="note-box">
-          <strong>Fail-closed portability:</strong> the native backend has no dead-code elimination, so a program that merely <em>imports</em> a module containing a Linux-only intrinsic (for example <code>std/mem.oc</code>) is rejected for <code>windows-x86_64</code> rather than producing a binary that would execute a Linux syscall number on Windows.
+          <strong>Windows native runtime:</strong> Windows has no stable syscall ABI, so for <code>--backend native --target windows-x86_64</code> the <code>sys_*</code> intrinsics are ordinary oC functions defined in <code>std/sys/windows.oc</code>, which the compiler appends to every such build. They call <code>KERNEL32.dll</code> through <code>win32_&lt;Name&gt;(...)</code>, a call form the PE emitter lowers to an import using the Win64 calling convention. File descriptors 0, 1 and 2 are the standard streams; any other descriptor is the Win32 handle itself. <code>O_APPEND</code> and sockets are not supported there.
         </div>
       </section>
 

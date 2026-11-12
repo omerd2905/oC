@@ -108,16 +108,40 @@ struct NativeGen {
 
     target: i32,
     has_error: bool,
-    iat_fix_code: [16]usize,
-    iat_fix_slot: [16]usize,
+    iat_fix_code: [64]usize,
+    iat_fix_slot: [64]usize,
     iat_fix_count: usize,
 }
 
-// KERNEL32.dll imports used by the windows-x86_64 runtime helpers (IAT slot indices).
+// KERNEL32.dll imports of every windows-x86_64 image (IAT slot indices). The first three are
+// used by the built-in print/trap helpers; all of them can be called from oC as win32_<Name>
+// (std/sys/windows.oc builds the sys_* runtime on them).
 let NG_IMP_EXIT_PROCESS: usize = 0;
 let NG_IMP_GET_STD_HANDLE: usize = 1;
 let NG_IMP_WRITE_FILE: usize = 2;
-let NG_IMP_COUNT: usize = 3;
+let NG_IMP_COUNT: usize = 9;
+
+fn ng_imp_name(slot: usize) -> string {
+    if slot == 0 { return "ExitProcess"; }
+    if slot == 1 { return "GetStdHandle"; }
+    if slot == 2 { return "WriteFile"; }
+    if slot == 3 { return "ReadFile"; }
+    if slot == 4 { return "CreateFileA"; }
+    if slot == 5 { return "CloseHandle"; }
+    if slot == 6 { return "DeleteFileA"; }
+    if slot == 7 { return "VirtualAlloc"; }
+    return "VirtualFree";
+}
+
+// IAT slot of a KERNEL32 import by name, -1 if this image does not import it.
+fn ng_imp_slot(name: string) -> i32 {
+    let mut k: usize = 0;
+    while k < NG_IMP_COUNT {
+        if str_eq(ng_imp_name(k), name) { return k.as(i32); }
+        k = k + 1;
+    }
+    return -1;
+}
 
 fn ng_fail(ng: *mut NativeGen, msg: string) {
     if !ng.has_error {
@@ -148,12 +172,12 @@ fn ng_add_data_reloc(ng: *mut NativeGen, code_off: usize, data_off: usize) {
 }
 
 fn ng_add_iat_fixup(ng: *mut NativeGen, code_off: usize, slot: usize) {
-    if ng.iat_fix_count < 16 {
+    if ng.iat_fix_count < 64 {
         ng.iat_fix_code[ng.iat_fix_count] = code_off;
         ng.iat_fix_slot[ng.iat_fix_count] = slot;
         ng.iat_fix_count = ng.iat_fix_count + 1;
     } else {
-        ng_fail(ng, "native codegen error: import fixup table full (16)");
+        ng_fail(ng, "native codegen error: import fixup table full (64)");
     }
 }
 
@@ -1700,27 +1724,57 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
         if is_sys {
             if ng.target == OC_TARGET_WINDOWS_X86_64 {
-                // Linux syscall numbers are meaningless on Windows: map what the kernel32 runtime covers, reject the rest.
+                // Linux syscall numbers are meaningless on Windows. sys_exit maps to the built-in
+                // ExitProcess helper; every other sys_* is an ordinary oC function there, defined
+                // in std/sys/windows.oc, and is called like any other function below.
                 if sys_nr == 60 {
                     ng_emit_call(ng, code, "__win_exit");
                     return;
                 }
+            } else {
+                buf_append_u8(code, 73);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 202); // mov %rcx, %r10
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 199);
+                buf_append_u8(code, 192);
+                elf_append_u32(code, sys_nr);
+                buf_append_u8(code, 15);
+                buf_append_u8(code, 5); // syscall
+                return;
+            }
+        }
+
+        // win32_<Name>(...): call the KERNEL32 import <Name> through the Win64 ABI thunk.
+        let mut is_win32: bool = false;
+        if fn_name.len > 6 {
+            if str_eq(fn_name[0..6], "win32_") { is_win32 = true; }
+        }
+        if is_win32 {
+            let slot: i32 = ng_imp_slot(fn_name[6..fn_name.len]);
+            if ng.target != OC_TARGET_WINDOWS_X86_64 {
+                ng_fail(ng, "native codegen error: win32_* imports exist only on target windows-x86_64");
+                return;
+            }
+            if slot < 0 {
                 if !ng.has_error {
-                    print("native codegen error: syscall intrinsic unavailable on target windows-x86_64 (use --backend c):");
+                    print("native codegen error: not a KERNEL32 import known to the PE emitter:");
                     print(fn_name);
                 }
                 ng.has_error = true;
                 return;
             }
-            buf_append_u8(code, 73);
-            buf_append_u8(code, 137);
-            buf_append_u8(code, 202); // mov %rcx, %r10
-            buf_append_u8(code, 72);
-            buf_append_u8(code, 199);
-            buf_append_u8(code, 192);
-            elf_append_u32(code, sys_nr);
-            buf_append_u8(code, 15);
-            buf_append_u8(code, 5); // syscall
+            buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 5); // lea slot(%rip), %rax
+            ng_add_iat_fixup(ng, code.len, slot.as(usize));
+            elf_append_u32(code, 0);
+            ng_emit_call(ng, code, "__win_call");
+            // A 32-bit result (BOOL, DWORD) leaves the upper half of %rax undefined.
+            let ret_t: string = ng_find_fn_ret_type(ng, fn_name);
+            if str_eq(ret_t, "i32") {
+                buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
+            } else if str_eq(ret_t, "u32") {
+                buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
+            }
             return;
         }
 
@@ -2339,6 +2393,25 @@ fn ng_emit_win_runtime(ng: *mut NativeGen, code: *mut CodeBuffer, has_offset: *m
     buf_append_u8(code, 93);                                                        // pop %rbp
     buf_append_u8(code, 195);                                                       // ret
 
+    // __win_call(%rax = &IAT slot; args in %rdi, %rsi, %rdx, %rcx, %r8, %r9): calls a KERNEL32
+    // import with up to six oC arguments, passing 0 as a seventh. Returns the callee's %rax.
+    ng_define_helper(ng, has_offset, "__win_call", code.len);
+    buf_append_u8(code, 85);                                                        // push %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229);    // mov %rsp, %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 64);  // sub $64, %rsp (shadow space + 3 stack args)
+    buf_append_u8(code, 76); buf_append_u8(code, 137); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 32); // mov %r8, 32(%rsp)  (arg 5)
+    buf_append_u8(code, 76); buf_append_u8(code, 137); buf_append_u8(code, 76); buf_append_u8(code, 36); buf_append_u8(code, 40); // mov %r9, 40(%rsp)  (arg 6)
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 48); elf_append_u32(code, 0); // movq $0, 48(%rsp) (arg 7)
+    buf_append_u8(code, 73); buf_append_u8(code, 137); buf_append_u8(code, 201);    // mov %rcx, %r9  (arg 4)
+    buf_append_u8(code, 73); buf_append_u8(code, 137); buf_append_u8(code, 208);    // mov %rdx, %r8  (arg 3)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 242);    // mov %rsi, %rdx (arg 2)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 249);    // mov %rdi, %rcx (arg 1)
+    buf_append_u8(code, 255); buf_append_u8(code, 16);                              // call *(%rax)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236);    // mov %rbp, %rsp
+    buf_append_u8(code, 93);                                                        // pop %rbp
+    buf_append_u8(code, 195);                                                       // ret
+
     // __win_exit(code = %rdi): never returns
     ng_define_helper(ng, has_offset, "__win_exit", code.len);
     buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
@@ -2385,10 +2458,6 @@ fn pe_append_section_header(pe: *mut CodeBuffer, name: string, vsize: usize, rva
 // No section is ever writable; the loader temporarily unprotects the IAT (data directory 12)
 // while binding imports. Code is position independent, so ASLR needs no .reloc section.
 fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {
-    let mut imp_names: [3]string = [""];
-    imp_names[NG_IMP_EXIT_PROCESS] = "ExitProcess";
-    imp_names[NG_IMP_GET_STD_HANDLE] = "GetStdHandle";
-    imp_names[NG_IMP_WRITE_FILE] = "WriteFile";
     let dll_name: string = "KERNEL32.dll";
 
     // .rdata layout: IAT | import lookup table | import descriptors | hint/name entries | DLL name | user data
@@ -2397,12 +2466,12 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     let ilt_off: usize = iat_off + thunk_bytes;
     let idt_off: usize = ilt_off + thunk_bytes;
     let idt_bytes: usize = 2 * 20;
-    let mut hint_offs: [3]usize = [0];
+    let mut hint_offs: [9]usize = [0]; // NG_IMP_COUNT entries
     let mut cur: usize = idt_off + idt_bytes;
     let mut k: usize = 0;
     while k < NG_IMP_COUNT {
         hint_offs[k] = cur;
-        cur = pe_align(cur + 2 + imp_names[k].len + 1, 2);
+        cur = pe_align(cur + 2 + ng_imp_name(k).len + 1, 2);
         k = k + 1;
     }
     let dll_off: usize = cur;
@@ -2567,7 +2636,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     while k < NG_IMP_COUNT {
         pe_append_zeros(pe, rdata_raw_off + hint_offs[k] - pe.len);
         elf_append_u16(pe, 0); // Hint
-        buf_append(pe, imp_names[k]);
+        buf_append(pe, ng_imp_name(k));
         buf_append_u8(pe, 0);
         k = k + 1;
     }

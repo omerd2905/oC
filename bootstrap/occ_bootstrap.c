@@ -261,7 +261,7 @@ static const uint32_t NODE_CONTINUE = 28;
 static const size_t NG_IMP_EXIT_PROCESS = 0;
 static const size_t NG_IMP_GET_STD_HANDLE = 1;
 static const size_t NG_IMP_WRITE_FILE = 2;
-static const size_t NG_IMP_COUNT = 3;
+static const size_t NG_IMP_COUNT = 9;
 
 typedef struct Arena Arena;
 typedef struct Token Token;
@@ -404,8 +404,8 @@ struct NativeGen {
     size_t break_count;
     int32_t target;
     bool has_error;
-    size_t iat_fix_code[16];
-    size_t iat_fix_slot[16];
+    size_t iat_fix_code[64];
+    size_t iat_fix_slot[64];
     size_t iat_fix_count;
 };
 
@@ -513,6 +513,8 @@ void elf_patch_u32(CodeBuffer* buf, size_t offset, uint32_t v);
 void elf_patch_u64(CodeBuffer* buf, size_t offset, uint64_t v);
 void elf_append_i32(CodeBuffer* buf, int32_t v);
 void elf_patch_i32(CodeBuffer* buf, size_t offset, int32_t v);
+oc_string ng_imp_name(size_t slot);
+int32_t ng_imp_slot(oc_string name);
 void ng_fail(NativeGen* ng, oc_string msg);
 void ng_add_fixup(NativeGen* ng, size_t code_off, oc_string fn_name, bool is_6byte);
 void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off);
@@ -4614,6 +4616,45 @@ void elf_patch_i32(CodeBuffer* buf, size_t offset, int32_t v) {
     elf_patch_u32(buf, offset, ({ __auto_type _v = (uv); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
 }
 
+oc_string ng_imp_name(size_t slot) {
+    if ((slot == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)("ExitProcess"), .len = sizeof("ExitProcess") - 1 };
+    }
+    if ((slot == 1)) {
+    return (oc_string){ .ptr = (const uint8_t*)("GetStdHandle"), .len = sizeof("GetStdHandle") - 1 };
+    }
+    if ((slot == 2)) {
+    return (oc_string){ .ptr = (const uint8_t*)("WriteFile"), .len = sizeof("WriteFile") - 1 };
+    }
+    if ((slot == 3)) {
+    return (oc_string){ .ptr = (const uint8_t*)("ReadFile"), .len = sizeof("ReadFile") - 1 };
+    }
+    if ((slot == 4)) {
+    return (oc_string){ .ptr = (const uint8_t*)("CreateFileA"), .len = sizeof("CreateFileA") - 1 };
+    }
+    if ((slot == 5)) {
+    return (oc_string){ .ptr = (const uint8_t*)("CloseHandle"), .len = sizeof("CloseHandle") - 1 };
+    }
+    if ((slot == 6)) {
+    return (oc_string){ .ptr = (const uint8_t*)("DeleteFileA"), .len = sizeof("DeleteFileA") - 1 };
+    }
+    if ((slot == 7)) {
+    return (oc_string){ .ptr = (const uint8_t*)("VirtualAlloc"), .len = sizeof("VirtualAlloc") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)("VirtualFree"), .len = sizeof("VirtualFree") - 1 };
+}
+
+int32_t ng_imp_slot(oc_string name) {
+    size_t k = 0;
+    while ((k < NG_IMP_COUNT)) {
+    if (str_eq(ng_imp_name(k), name)) {
+    return ({ __auto_type _v = (k); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    }
+    k = __OC_ADD(k, 1);
+    }
+    return (-1);
+}
+
 void ng_fail(NativeGen* ng, oc_string msg) {
     if ((!((ng)->has_error))) {
     __oc_print(msg);
@@ -4645,13 +4686,13 @@ void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off) {
 }
 
 void ng_add_iat_fixup(NativeGen* ng, size_t code_off, size_t slot) {
-    if ((((ng)->iat_fix_count) < 16)) {
+    if ((((ng)->iat_fix_count) < 64)) {
     __OC_AT((((ng)->iat_fix_code)), (((ng)->iat_fix_count))) = code_off;
     __OC_AT((((ng)->iat_fix_slot)), (((ng)->iat_fix_count))) = slot;
     ((ng)->iat_fix_count) = __OC_ADD(((ng)->iat_fix_count), 1);
     }
     else {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: import fixup table full (16)"), .len = sizeof("native codegen error: import fixup table full (16)") - 1 });
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: import fixup table full (64)"), .len = sizeof("native codegen error: import fixup table full (64)") - 1 });
     }
 }
 
@@ -6600,13 +6641,8 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("__win_exit"), .len = sizeof("__win_exit") - 1 });
     return;
     }
-    if ((!((ng)->has_error))) {
-    printf("%s\n", "native codegen error: syscall intrinsic unavailable on target windows-x86_64 (use --backend c):");
-    __oc_print(fn_name);
     }
-    ((ng)->has_error) = true;
-    return;
-    }
+    else {
     buf_append_u8(code, 73);
     buf_append_u8(code, 137);
     buf_append_u8(code, 202);
@@ -6616,6 +6652,47 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     elf_append_u32(code, sys_nr);
     buf_append_u8(code, 15);
     buf_append_u8(code, 5);
+    return;
+    }
+    }
+    bool is_win32 = false;
+    if ((((fn_name).len) > 6)) {
+    if (str_eq(__oc_slice_str(fn_name, 0, 6), (oc_string){ .ptr = (const uint8_t*)("win32_"), .len = sizeof("win32_") - 1 })) {
+    is_win32 = true;
+    }
+    }
+    if (is_win32) {
+    int32_t slot = ng_imp_slot(__oc_slice_str(fn_name, 6, ((fn_name).len)));
+    if ((((ng)->target) != OC_TARGET_WINDOWS_X86_64)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: win32_* imports exist only on target windows-x86_64"), .len = sizeof("native codegen error: win32_* imports exist only on target windows-x86_64") - 1 });
+    return;
+    }
+    if ((slot < 0)) {
+    if ((!((ng)->has_error))) {
+    printf("%s\n", "native codegen error: not a KERNEL32 import known to the PE emitter:");
+    __oc_print(fn_name);
+    }
+    ((ng)->has_error) = true;
+    return;
+    }
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 141);
+    buf_append_u8(code, 5);
+    ng_add_iat_fixup(ng, ((code)->len), ({ __auto_type _v = (slot); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    elf_append_u32(code, 0);
+    ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("__win_call"), .len = sizeof("__win_call") - 1 });
+    oc_string ret_t = ng_find_fn_ret_type(ng, fn_name);
+    if (str_eq(ret_t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 99);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(ret_t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 192);
+    }
+    }
     return;
     }
     ng_add_fixup(ng, ((code)->len), ((((expr)->tok)).slice), false);
@@ -7320,6 +7397,54 @@ void ng_emit_win_runtime(NativeGen* ng, CodeBuffer* code, bool* has_offset) {
     buf_append_u8(code, 236);
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
+    ng_define_helper(ng, has_offset, (oc_string){ .ptr = (const uint8_t*)("__win_call"), .len = sizeof("__win_call") - 1 }, ((code)->len));
+    buf_append_u8(code, 85);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 229);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 131);
+    buf_append_u8(code, 228);
+    buf_append_u8(code, 240);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 131);
+    buf_append_u8(code, 236);
+    buf_append_u8(code, 64);
+    buf_append_u8(code, 76);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 68);
+    buf_append_u8(code, 36);
+    buf_append_u8(code, 32);
+    buf_append_u8(code, 76);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 76);
+    buf_append_u8(code, 36);
+    buf_append_u8(code, 40);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 68);
+    buf_append_u8(code, 36);
+    buf_append_u8(code, 48);
+    elf_append_u32(code, 0);
+    buf_append_u8(code, 73);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 201);
+    buf_append_u8(code, 73);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 208);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 242);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 249);
+    buf_append_u8(code, 255);
+    buf_append_u8(code, 16);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 236);
+    buf_append_u8(code, 93);
+    buf_append_u8(code, 195);
     ng_define_helper(ng, has_offset, (oc_string){ .ptr = (const uint8_t*)("__win_exit"), .len = sizeof("__win_exit") - 1 }, ((code)->len));
     buf_append_u8(code, 72);
     buf_append_u8(code, 131);
@@ -7370,22 +7495,18 @@ void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size
 }
 
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
-    oc_string imp_names[3] = {0};
-    __OC_AT((imp_names), (NG_IMP_EXIT_PROCESS)) = (oc_string){ .ptr = (const uint8_t*)("ExitProcess"), .len = sizeof("ExitProcess") - 1 };
-    __OC_AT((imp_names), (NG_IMP_GET_STD_HANDLE)) = (oc_string){ .ptr = (const uint8_t*)("GetStdHandle"), .len = sizeof("GetStdHandle") - 1 };
-    __OC_AT((imp_names), (NG_IMP_WRITE_FILE)) = (oc_string){ .ptr = (const uint8_t*)("WriteFile"), .len = sizeof("WriteFile") - 1 };
     oc_string dll_name = (oc_string){ .ptr = (const uint8_t*)("KERNEL32.dll"), .len = sizeof("KERNEL32.dll") - 1 };
     size_t thunk_bytes = __OC_MUL(__OC_ADD(NG_IMP_COUNT, 1), 8);
     size_t iat_off = 0;
     size_t ilt_off = __OC_ADD(iat_off, thunk_bytes);
     size_t idt_off = __OC_ADD(ilt_off, thunk_bytes);
     size_t idt_bytes = __OC_MUL(2, 20);
-    size_t hint_offs[3] = {0};
+    size_t hint_offs[9] = {0};
     size_t cur = __OC_ADD(idt_off, idt_bytes);
     size_t k = 0;
     while ((k < NG_IMP_COUNT)) {
     __OC_AT((hint_offs), (k)) = cur;
-    cur = pe_align(__OC_ADD(__OC_ADD(__OC_ADD(cur, 2), ((__OC_AT((imp_names), (k))).len)), 1), 2);
+    cur = pe_align(__OC_ADD(__OC_ADD(__OC_ADD(cur, 2), ((ng_imp_name(k)).len)), 1), 2);
     k = __OC_ADD(k, 1);
     }
     size_t dll_off = cur;
@@ -7536,7 +7657,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     while ((k < NG_IMP_COUNT)) {
     pe_append_zeros(pe, __OC_SUB(__OC_ADD(rdata_raw_off, __OC_AT((hint_offs), (k))), ((pe)->len)));
     elf_append_u16(pe, 0);
-    buf_append(pe, __OC_AT((imp_names), (k)));
+    buf_append(pe, ng_imp_name(k));
     buf_append_u8(pe, 0);
     k = __OC_ADD(k, 1);
     }
@@ -8985,6 +9106,17 @@ int main(int argc, char** argv) {
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));
     return 1;
+    }
+    if (is_native) {
+    if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
+    bool rt_ok = load_module_recursive((oc_string){ .ptr = (const uint8_t*)("std/sys/windows.oc"), .len = sizeof("std/sys/windows.oc") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
+    if ((!rt_ok)) {
+    printf("%s\n", "error: the native Windows runtime std/sys/windows.oc was not found; set OC_HOME to the directory that contains std/");
+    buf_deinit((&(combined_buf)));
+    arena_deinit((&(arena)));
+    return 1;
+    }
+    }
     }
     oc_string combined_src = buf_to_string((&(combined_buf)));
     Parser parser = parser_init(combined_src, (&(arena)));
