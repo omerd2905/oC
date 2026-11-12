@@ -8986,17 +8986,17 @@ int main(int argc, char** argv) {
     if ((i < argc)) {
     oc_string first = cstr_to_string(__OC_AT((argv), (i)));
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("version"), .len = sizeof("version") - 1 })) {
-    printf("%s\n", "oC 1.0.1");
+    printf("%s\n", "oC 1.0.2");
     return 0;
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("--version"), .len = sizeof("--version") - 1 })) {
-    printf("%s\n", "oC 1.0.1");
+    printf("%s\n", "oC 1.0.2");
     return 0;
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("-v"), .len = sizeof("-v") - 1 })) {
-    printf("%s\n", "oC 1.0.1");
+    printf("%s\n", "oC 1.0.2");
     return 0;
     }
     else {
