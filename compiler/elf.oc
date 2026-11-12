@@ -93,6 +93,7 @@ struct NativeGen {
     field_names: [256]string,
     field_offsets: [256]i32,
     field_types: [256]string,
+    field_packed: [256]bool,
     field_count: usize,
 
     const_names: [128]string,
@@ -265,7 +266,8 @@ fn ng_is_var_slice(ng: *mut NativeGen, name: string) -> bool {
     return false;
 }
 
-fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
+// Exact byte size of a struct; packed structs need not be a multiple of 8.
+fn ng_struct_raw_size(ng: *mut NativeGen, name: string) -> i32 {
     let mut i: usize = 0;
     while i < ng.struct_count {
         if str_eq(ng.struct_names[i], name) {
@@ -276,12 +278,19 @@ fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
     return 0;
 }
 
-fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+// Size of the stack slot / register group holding a struct by value (whole 8-byte words).
+fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
+    return ((ng_struct_raw_size(ng, name) + 7) / 8) * 8;
+}
+
+// Index of field `f_name` of struct `s_name`; falls back to any struct with that field name
+// when the base type could not be inferred. -1 if unknown.
+fn ng_find_field_idx(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
     let mut i: usize = 0;
     while i < ng.field_count {
         if str_eq(ng.field_struct[i], s_name) {
             if str_eq(ng.field_names[i], f_name) {
-                return ng.field_offsets[i];
+                return i.as(i32);
             }
         }
         i = i + 1;
@@ -289,33 +298,48 @@ fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i
     i = 0;
     while i < ng.field_count {
         if str_eq(ng.field_names[i], f_name) {
-            return ng.field_offsets[i];
+            return i.as(i32);
         }
         i = i + 1;
     }
-    return 0;
+    return -1;
+}
+
+fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return 0; }
+    return ng.field_offsets[idx.as(usize)];
 }
 
 fn ng_find_field_type(ng: *mut NativeGen, s_name: string, f_name: string) -> string {
     if str_eq(f_name, "len") { return "usize"; }
     if str_eq(f_name, "ptr") { return "*u8"; }
-    let mut i: usize = 0;
-    while i < ng.field_count {
-        if str_eq(ng.field_struct[i], s_name) {
-            if str_eq(ng.field_names[i], f_name) {
-                return ng.field_types[i];
-            }
-        }
-        i = i + 1;
-    }
-    i = 0;
-    while i < ng.field_count {
-        if str_eq(ng.field_names[i], f_name) {
-            return ng.field_types[i];
-        }
-        i = i + 1;
-    }
-    return "";
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return ""; }
+    return ng.field_types[idx.as(usize)];
+}
+
+// Natural width of a scalar type in memory: 1, 2, 4 or 8 bytes.
+fn ng_scalar_width(t: string) -> i32 {
+    if str_eq(t, "u8") { return 1; }
+    if str_eq(t, "i8") { return 1; }
+    if str_eq(t, "bool") { return 1; }
+    if str_eq(t, "u16") { return 2; }
+    if str_eq(t, "i16") { return 2; }
+    if str_eq(t, "u32") { return 4; }
+    if str_eq(t, "i32") { return 4; }
+    return 8;
+}
+
+// Bytes read/written when accessing a scalar struct field. Packed structs use the C layout
+// (exact widths, no padding); other structs keep one 8-byte slot per field (bytes stay 1 wide).
+fn ng_field_width(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return 8; }
+    let w: i32 = ng_scalar_width(ng.field_types[idx.as(usize)]);
+    if ng.field_packed[idx.as(usize)] { return w; }
+    if w == 1 { return 1; }
+    return 8;
 }
 
 fn ng_find_fn_ret_type(ng: *mut NativeGen, fn_name: string) -> string {
@@ -696,6 +720,48 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
     }
 }
 
+// %rax = value of scalar type `t` stored in `width` bytes at (%rax), sign- or zero-extended.
+fn ng_emit_load_at_rax(code: *mut CodeBuffer, t: string, width: i32) {
+    let mut is_signed: bool = false;
+    if str_eq(t, "i8") { is_signed = true; }
+    if str_eq(t, "i16") { is_signed = true; }
+    if str_eq(t, "i32") { is_signed = true; }
+    if width == 1 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 0); // movsbq (%rax), %rax
+        } else {
+            buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 0); // movzbl (%rax), %eax
+        }
+    } else if width == 2 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 0); // movswq (%rax), %rax
+        } else {
+            buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 0); // movzwl (%rax), %eax
+        }
+    } else if width == 4 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 0); // movslq (%rax), %rax
+        } else {
+            buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %eax
+        }
+    } else {
+        buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %rax
+    }
+}
+
+// Stores the low `width` bytes of %rax at (%rcx).
+fn ng_emit_store_at_rcx(code: *mut CodeBuffer, width: i32) {
+    if width == 1 {
+        buf_append_u8(code, 136); buf_append_u8(code, 1); // mov %al, (%rcx)
+    } else if width == 2 {
+        buf_append_u8(code, 102); buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %ax, (%rcx)
+    } else if width == 4 {
+        buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %eax, (%rcx)
+    } else {
+        buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %rax, (%rcx)
+    }
+}
+
 extern fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode);
 
 fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode) {
@@ -920,14 +986,13 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
             let f_off: i32 = ng_find_field_offset(ng, expr.tok.slice, f.tok.slice);
+            let f_w: i32 = ng_field_width(ng, expr.tok.slice, f.tok.slice);
             ng_emit_expr(ng, code, data, f.left);
             if f_off >= 0 {
-                if f_off < 32 {
-                    buf_append_u8(code, 72);
-                    buf_append_u8(code, 137);
-                    buf_append_u8(code, 68);
-                    buf_append_u8(code, 36);
-                    buf_append_u8(code, f_off.as(u8));
+                if f_off + f_w <= 32 {
+                    buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 76);
+                    buf_append_u8(code, 36); buf_append_u8(code, f_off.as(u8)); // lea f_off(%rsp), %rcx
+                    ng_emit_store_at_rcx(code, f_w);
                 }
             }
             f = f.next;
@@ -957,17 +1022,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0);
             return;
         }
-        if ng_is_byte_type(ft) {
-            buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 0);
-            return;
-        }
-        if str_eq(ft, "i8") {
-            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 0);
-            return;
-        }
-        buf_append_u8(code, 72);
-        buf_append_u8(code, 139);
-        buf_append_u8(code, 0);
+        ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, expr.tok.slice));
         return;
     }
 
@@ -1755,9 +1810,13 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                         let f_off: i32 = ng_find_field_offset(ng, t_name, f.tok.slice);
                         let f_type: string = ng_find_field_type(ng, t_name, f.tok.slice);
                         ng_emit_expr(ng, code, data, f.left);
-                        ng_emit_disp_store_rax(code, base_off + f_off);
                         if str_eq(f_type, "string") {
+                            ng_emit_disp_store_rax(code, base_off + f_off);
                             ng_emit_disp_store_rdx(code, base_off + f_off + 8);
+                        } else {
+                            buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 141);
+                            elf_append_i32(code, base_off + f_off); // lea off(%rbp), %rcx
+                            ng_emit_store_at_rcx(code, ng_field_width(ng, t_name, f.tok.slice));
                         }
                         f = f.next;
                     }
@@ -1838,16 +1897,14 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             }
             buf_append_u8(code, 88); // pop %rax
-            let mut is_1byte: bool = ng_is_byte_type(lhs_t);
-            if str_eq(lhs_t, "i8") { is_1byte = true; }
-            if is_1byte {
-                buf_append_u8(code, 136);
-                buf_append_u8(code, 1); // mov %al, (%rcx)
-            } else {
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 137);
-                buf_append_u8(code, 1); // mov %rax, (%rcx)
+            let mut width: i32 = 8;
+            if stmt.left.tag == NODE_FIELD_ACCESS {
+                let base_t: string = ng_strip_ptr_type(ng_expr_type(ng, stmt.left.left));
+                width = ng_field_width(ng, base_t, stmt.left.tok.slice);
+            } else if ng_scalar_width(lhs_t) == 1 {
+                width = 1;
             }
+            ng_emit_store_at_rcx(code, width);
             return;
         }
         return;
@@ -2472,6 +2529,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
         field_names: [""],
         field_offsets: [0],
         field_types: [""],
+        field_packed: [false],
         field_count: 0,
         const_names: [""],
         const_vals: [0],
@@ -2495,11 +2553,14 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
     while scan != (0).as(*mut AstNode) {
         if scan.tag == NODE_STRUCT_DECL {
             let s_name: string = scan.tok.slice;
+            // Packed structs follow the C layout: exact field widths, no padding.
+            let is_packed: bool = str_eq(scan.type_name, "packed");
             let mut f_off: i32 = 0;
             let mut sf: *mut AstNode = scan.left;
             while sf != (0).as(*mut AstNode) {
                 let ft: string = sf.type_name;
                 let mut f_sz: i32 = 8;
+                if is_packed { f_sz = ng_scalar_width(ft); }
                 if str_eq(ft, "string") {
                     f_sz = 16;
                 } else if ft.len > 0 {
@@ -2507,7 +2568,11 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                         let alen: usize = ng_parse_array_len(ft);
                         let ael: string = ng_parse_array_elem(ft);
                         let astr: i32 = ng_type_stride(ael);
-                        f_sz = (((alen.as(i32)) * astr + 7) / 8) * 8;
+                        f_sz = (alen.as(i32)) * astr;
+                        if !is_packed { f_sz = ((f_sz + 7) / 8) * 8; }
+                    } else if is_packed {
+                        let raw_sz: i32 = ng_struct_raw_size(ng, ft);
+                        if raw_sz > 0 { f_sz = raw_sz; }
                     } else {
                         let sub_sz: i32 = ng_find_struct_size(ng, ft);
                         if sub_sz > 0 { f_sz = sub_sz; }
@@ -2518,6 +2583,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                     ng.field_names[ng.field_count] = sf.tok.slice;
                     ng.field_offsets[ng.field_count] = f_off;
                     ng.field_types[ng.field_count] = ft;
+                    ng.field_packed[ng.field_count] = is_packed;
                     ng.field_count = ng.field_count + 1;
                 }
                 f_off = f_off + f_sz;
