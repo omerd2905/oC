@@ -526,13 +526,13 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if i < argc {
         let first: string = cstr_to_string(argv[i]);
         if str_eq(first, "version") {
-            print("oC 1.0.1");
+            print("oC 1.0.2");
             return 0;
         } else if str_eq(first, "--version") {
-            print("oC 1.0.1");
+            print("oC 1.0.2");
             return 0;
         } else if str_eq(first, "-v") {
-            print("oC 1.0.1");
+            print("oC 1.0.2");
             return 0;
         } else if str_eq(first, "help") {
             print_usage();
