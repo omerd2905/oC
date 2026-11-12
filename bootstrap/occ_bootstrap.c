@@ -78,6 +78,16 @@ static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path)
 static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }
 static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }
 #endif
+#if defined(_WIN32)
+__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);
+static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }
+#elif defined(__APPLE__)
+#include <limits.h>
+#include <mach-o/dyld.h>
+static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }
+#else
+static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink("/proc/self/exe", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }
+#endif
 static inline void sys_exit(int32_t code) { _exit(code); }
 #if defined(_WIN32)
 static inline int32_t sys_host_target(void) { return 2; }
@@ -579,7 +589,10 @@ oc_string make_private_tmp_dir(Arena* arena, bool allow_backslash);
 void remove_private_tmp_dir(Arena* arena, oc_string dir);
 void print_usage(void);
 int32_t run_sys_cmd(oc_string cmd);
-int32_t handle_update(int32_t host);
+oc_string exe_path(Arena* arena, oc_string argv0);
+int32_t handle_update(int32_t host, oc_string repo);
+int32_t handle_install(int32_t host, oc_string exe, oc_string exe_dir);
+int32_t handle_self_cmd(bool is_install, oc_string argv0);
 int main(int argc, char** argv);
 
 int32_t read_int(void) {
@@ -4113,6 +4126,9 @@ bool is_builtin_c_fn(oc_string fn_name) {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_rmdir"), .len = sizeof("sys_rmdir") - 1 })) {
     return true;
     }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_exe_path"), .len = sizeof("sys_exe_path") - 1 })) {
+    return true;
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("exit"), .len = sizeof("exit") - 1 })) {
     return true;
     }
@@ -4220,6 +4236,16 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\n"), .len = sizeof("#if defined(_WIN32)\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n"), .len = sizeof("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__)\n"), .len = sizeof("#elif defined(__APPLE__)\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <limits.h>\n"), .len = sizeof("#include <limits.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <mach-o/dyld.h>\n"), .len = sizeof("#include <mach-o/dyld.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\n"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n"), .len = sizeof("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n") - 1 });
@@ -8587,7 +8613,9 @@ void remove_private_tmp_dir(Arena* arena, oc_string dir) {
 
 void print_usage(void) {
     printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
-    printf("%s\n", "       occ update | version | help   (also: --version, -v, --help, -h)");
+    printf("%s\n", "       occ install | update | version | help   (also: --version, -v, --help, -h)");
+    printf("%s\n", "install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
+    printf("%s\n", "Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
     printf("%s\n", "Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
 }
 
@@ -8600,27 +8628,131 @@ int32_t run_sys_cmd(oc_string cmd) {
     return ret;
 }
 
-int32_t handle_update(int32_t host) {
+oc_string exe_path(Arena* arena, oc_string argv0) {
+    uint8_t* buf = arena_alloc(arena, 4096);
+    if ((((size_t)(buf)) != 0)) {
+    int64_t n = sys_exe_path(buf, 4096);
+    if ((n > 0)) {
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }) };
+    }
+    }
+    return argv0;
+}
+
+int32_t handle_update(int32_t host, oc_string repo) {
+    CodeBuffer cmd = buf_init(8192);
     printf("%s\n", "Updating oC from git...");
-    int32_t pull_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("git pull"), .len = sizeof("git pull") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("git "), .len = sizeof("git ") - 1 });
+    if ((((repo).len) > 0)) {
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("-C "), .len = sizeof("-C ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
+    }
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("pull"), .len = sizeof("pull") - 1 });
+    int32_t pull_ret = run_sys_cmd(buf_to_string((&(cmd))));
     if ((pull_ret != 0)) {
-    printf("%s\n", "error: 'git pull' failed. Make sure git is installed and you are in the oC repository.");
+    printf("%s\n", "error: 'git pull' failed. Make sure git is installed and occ lives in <oC checkout>/bin (checkout used:)");
+    __oc_print(repo);
+    buf_deinit((&(cmd)));
     return 1;
     }
     printf("%s\n", "Rebuilding oC compiler...");
-    int32_t build_ret = 0;
+    ((cmd).len) = 0;
     if ((host == OC_TARGET_WINDOWS_X86_64)) {
-    build_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("if exist bin\\occ.exe move /y bin\\occ.exe bin\\occ.exe.old >nul 2>&1 & gcc -O2 bootstrap\\occ_bootstrap.c -o bin\\occ.exe"), .len = sizeof("if exist bin\\occ.exe move /y bin\\occ.exe bin\\occ.exe.old >nul 2>&1 & gcc -O2 bootstrap\\occ_bootstrap.c -o bin\\occ.exe") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("if exist "), .len = sizeof("if exist ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe move /y "), .len = sizeof("bin\\occ.exe move /y ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe "), .len = sizeof("bin\\occ.exe ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe.old >nul 2>&1 & gcc -O2 "), .len = sizeof("bin\\occ.exe.old >nul 2>&1 & gcc -O2 ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bootstrap\\occ_bootstrap.c -o "), .len = sizeof("bootstrap\\occ_bootstrap.c -o ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe"), .len = sizeof("bin\\occ.exe") - 1 });
     }
     else {
-    build_ret = run_sys_cmd((oc_string){ .ptr = (const uint8_t*)("cc -O2 bootstrap/occ_bootstrap.c -o bin/occ"), .len = sizeof("cc -O2 bootstrap/occ_bootstrap.c -o bin/occ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("cc -O2 "), .len = sizeof("cc -O2 ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bootstrap/occ_bootstrap.c -o "), .len = sizeof("bootstrap/occ_bootstrap.c -o ") - 1 });
+    buf_append((&(cmd)), repo);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin/occ"), .len = sizeof("bin/occ") - 1 });
     }
+    int32_t build_ret = run_sys_cmd(buf_to_string((&(cmd))));
+    buf_deinit((&(cmd)));
     if ((build_ret != 0)) {
     printf("%s\n", "error: failed to rebuild compiler from bootstrap/occ_bootstrap.c");
     return 1;
     }
     printf("%s\n", "Successfully updated oC!");
     return 0;
+}
+
+int32_t handle_install(int32_t host, oc_string exe, oc_string exe_dir) {
+    bool host_is_windows = (host == OC_TARGET_WINDOWS_X86_64);
+    if ((!is_safe_path(exe, host_is_windows))) {
+    printf("%s\n", "error: cannot install: the path of this occ binary has characters that are unsafe on a command line:");
+    __oc_print(exe);
+    return 1;
+    }
+    CodeBuffer cmd = buf_init(8192);
+    if (host_is_windows) {
+    oc_string bin_dir = __oc_slice_str(exe_dir, 0, __OC_SUB(((exe_dir).len), 1));
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("powershell -NoProfile -Command \"$d='"), .len = sizeof("powershell -NoProfile -Command \"$d='") - 1 });
+    buf_append((&(cmd)), bin_dir);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\""), .len = sizeof("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\"") - 1 });
+    }
+    else {
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("mkdir -p \"$HOME/.local/bin\" && ln -sf "), .len = sizeof("mkdir -p \"$HOME/.local/bin\" && ln -sf ") - 1 });
+    buf_append((&(cmd)), exe);
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)(" \"$HOME/.local/bin/occ\""), .len = sizeof(" \"$HOME/.local/bin/occ\"") - 1 });
+    }
+    int32_t ret = run_sys_cmd(buf_to_string((&(cmd))));
+    buf_deinit((&(cmd)));
+    if ((ret != 0)) {
+    printf("%s\n", "error: install failed");
+    return 1;
+    }
+    if (host_is_windows) {
+    printf("%s\n", "Added the oC bin directory to your user PATH. Open a new terminal, then run: occ --version");
+    }
+    else {
+    printf("%s\n", "Linked ~/.local/bin/occ. If 'occ' is not found, add ~/.local/bin to your PATH.");
+    }
+    return 0;
+}
+
+int32_t handle_self_cmd(bool is_install, oc_string argv0) {
+    int32_t host = sys_host_target();
+    bool host_is_windows = (host == OC_TARGET_WINDOWS_X86_64);
+    Arena arena = arena_init(65536);
+    oc_string exe = exe_path((&(arena)), argv0);
+    oc_string exe_dir = dir_of_path((&(arena)), exe);
+    int32_t ret = 1;
+    if (is_install) {
+    if (is_abs_path(exe)) {
+    ret = handle_install(host, exe, exe_dir);
+    }
+    else {
+    printf("%s\n", "error: cannot install: could not determine the absolute path of this occ binary");
+    }
+    }
+    else {
+    oc_string up = (oc_string){ .ptr = (const uint8_t*)("../"), .len = sizeof("../") - 1 };
+    if (host_is_windows) {
+    up = (oc_string){ .ptr = (const uint8_t*)("..\\"), .len = sizeof("..\\") - 1 };
+    }
+    oc_string cand = str_concat((&(arena)), exe_dir, up);
+    oc_string repo = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if (is_abs_path(exe)) {
+    if (is_safe_path(cand, host_is_windows)) {
+    repo = cand;
+    }
+    }
+    ret = handle_update(host, repo);
+    }
+    arena_deinit((&(arena)));
+    return ret;
 }
 
 int main(int argc, char** argv) {
@@ -8660,8 +8792,11 @@ int main(int argc, char** argv) {
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("update"), .len = sizeof("update") - 1 })) {
-    int32_t host = sys_host_target();
-    return handle_update(host);
+    return handle_self_cmd(false, cstr_to_string(__OC_AT((argv), (0))));
+    }
+    else {
+    if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("install"), .len = sizeof("install") - 1 })) {
+    return handle_self_cmd(true, cstr_to_string(__OC_AT((argv), (0))));
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("run"), .len = sizeof("run") - 1 })) {
@@ -8671,6 +8806,7 @@ int main(int argc, char** argv) {
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("build"), .len = sizeof("build") - 1 })) {
     i = __OC_ADD(i, 1);
+    }
     }
     }
     }
@@ -8837,11 +8973,14 @@ int main(int argc, char** argv) {
     }
     }
     }
-    oc_string argv0 = cstr_to_string(__OC_AT((argv), (0)));
-    oc_string exe_dir = dir_of_path((&(arena)), argv0);
+    oc_string std_root = dir_of_path((&(arena)), exe_path((&(arena)), cstr_to_string(__OC_AT((argv), (0)))));
+    oc_string oc_home = env_str((oc_string){ .ptr = (const uint8_t*)("OC_HOME"), .len = sizeof("OC_HOME") - 1 });
+    if ((((oc_home).len) > 0)) {
+    std_root = str_concat((&(arena)), oc_home, (oc_string){ .ptr = (const uint8_t*)("/"), .len = sizeof("/") - 1 });
+    }
     ModuleLoader loader = (ModuleLoader){ .visited = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .visited_count = 0 };
     CodeBuffer combined_buf = buf_init(4194304);
-    bool load_ok = load_module_recursive(in_file_str, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, exe_dir, (&(combined_buf)), (&(loader)), (&(arena)));
+    bool load_ok = load_module_recursive(in_file_str, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
     if ((!load_ok)) {
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));

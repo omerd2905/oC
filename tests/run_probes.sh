@@ -52,6 +52,20 @@ else
   PASS=$((PASS + 1))
 fi
 
+echo "=== Install layout: occ by name, through a symlink, from another directory ==="
+TOTAL=$((TOTAL + 1))
+WORK="$(mktemp -d)"
+ln -s "$OCC" "$WORK/occ"
+printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > "$WORK/t.oc"
+if [ "$(cd "$WORK" && PATH="$WORK:$PATH" occ run t.oc)" = "std ok" ]; then
+  echo "  [PASS] std/ is found relative to the real executable, not argv[0]"
+  PASS=$((PASS + 1))
+else
+  echo "  [FAIL] 'occ run' by name from another directory could not import std/mem.oc"
+  exit 1
+fi
+rm -rf "$WORK"
+
 echo "=== [1/4] Compile-Time Rejection Probes (C & Native Backends) ==="
 for p in "${COMPILE_REJECT[@]}"; do
   for backend in c native; do
