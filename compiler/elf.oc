@@ -672,13 +672,14 @@ fn ng_append_unescaped_str(data: *mut CodeBuffer, raw: string) -> usize {
     return emitted;
 }
 
-fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
+// Traps to `trap` unless the value in %rax fits type `t`.
+fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string, trap: string) {
     if t.len == 0 { return; }
     if str_eq(t, "u8") {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 255);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -688,7 +689,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 65535);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -701,7 +702,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -711,14 +712,14 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_i32(code, -128);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 127);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
@@ -728,14 +729,14 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_i32(code, -32768);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 32767);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
@@ -749,7 +750,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
@@ -759,7 +760,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
@@ -1087,16 +1088,18 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             if src[0] == 38 { return; }
         }
         let src_uns: bool = ng_is_unsigned_expr(ng, expr.left);
+        let mut cast_trap: string = "__trap_cast_signed";
+        if is_unsigned_type_name(dst) { cast_trap = "__trap_cast_unsigned"; }
         if str_eq(dst, "u8") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         if str_eq(dst, "u16") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         if str_eq(dst, "u32") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         let mut is_u64_dst: bool = false;
@@ -1107,7 +1110,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 133);
                 buf_append_u8(code, 192);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 136); // js
                 elf_append_u32(code, 0);
@@ -1129,12 +1132,12 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 57);
                 buf_append_u8(code, 200);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 135); // ja
                 elf_append_u32(code, 0);
             } else {
-                ng_emit_range_check(ng, code, dst);
+                ng_emit_range_check(ng, code, dst, cast_trap);
             }
             return;
         }
@@ -1143,7 +1146,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 133);
                 buf_append_u8(code, 192);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 136); // js
                 elf_append_u32(code, 0);
@@ -1403,7 +1406,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     buf_append_u8(code, 128); // jo
                 }
                 elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
+                ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             }
             return;
         }
@@ -1420,7 +1423,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     buf_append_u8(code, 128); // jo
                 }
                 elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
+                ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             }
             return;
         }
@@ -1439,7 +1442,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 15);
             buf_append_u8(code, 128); // jo
             elf_append_u32(code, 0);
-            ng_emit_range_check(ng, code, res_type);
+            ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             return;
         }
         if expr.tok.tag == TOK_LT {
@@ -1990,7 +1993,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
         // Scalar or slice local variable
         ng_emit_expr(ng, code, data, stmt.left);
-        ng_emit_range_check(ng, code, t_name);
+        ng_emit_range_check(ng, code, t_name, "__trap_overflow");
 
         ng.curr_off = ng.curr_off - 8;
         let off: i32 = ng.curr_off;
@@ -2028,7 +2031,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     if s_sz >= 32 { ng_emit_disp_store_r8(code, off + 24); }
                     return;
                 }
-                ng_emit_range_check(ng, code, vt);
+                ng_emit_range_check(ng, code, vt, "__trap_overflow");
                 ng_emit_disp_store_rax(code, off);
                 if ng_is_var_slice(ng, stmt.left.tok.slice) {
                     ng_emit_disp_store_rdx(code, off - 8);
@@ -2037,7 +2040,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             let lhs_t: string = ng_expr_type(ng, stmt.left);
             ng_emit_expr(ng, code, data, stmt.right);
-            ng_emit_range_check(ng, code, lhs_t);
+            ng_emit_range_check(ng, code, lhs_t, "__trap_overflow");
             buf_append_u8(code, 80); // push %rax (value)
             if str_eq(lhs_t, "string") {
                 buf_append_u8(code, 82); // push %rdx (len)
@@ -3029,18 +3032,23 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
     buf_append_u8(code, 195);
 
     // Trap functions
-    let mut traps: [4]string = [""];
+    // Same panic texts as the C backend, so a trap reads the same whichever backend built it.
+    let mut traps: [6]string = [""];
     traps[0] = "__trap_null_deref";
     traps[1] = "__trap_slice_bounds";
     traps[2] = "__trap_overflow";
     traps[3] = "__trap_div_zero";
-    let mut trap_msgs: [4]string = [""];
+    traps[4] = "__trap_cast_signed";
+    traps[5] = "__trap_cast_unsigned";
+    let mut trap_msgs: [6]string = [""];
     trap_msgs[0] = "panic: null pointer dereference\n";
     trap_msgs[1] = "panic: slice index out of bounds\n";
     trap_msgs[2] = "panic: integer overflow\n";
     trap_msgs[3] = "panic: division by zero\n";
+    trap_msgs[4] = "panic: invalid signed cast\n";
+    trap_msgs[5] = "panic: invalid unsigned cast\n";
     let mut ti: usize = 0;
-    while ti < 4 {
+    while ti < 6 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;
