@@ -564,6 +564,8 @@ void ng_emit_disp_lea_rax(CodeBuffer* code, int32_t off);
 size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw);
 void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string trap);
 void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width);
+int32_t ng_value_words(NativeGen* ng, oc_string t);
+bool ng_emit_load_struct_at_rax(NativeGen* ng, CodeBuffer* code, oc_string s_name);
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
@@ -5594,6 +5596,52 @@ void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width) {
     }
 }
 
+int32_t ng_value_words(NativeGen* ng, oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    return 2;
+    }
+    int32_t s_sz = ng_find_struct_size(ng, t);
+    if ((s_sz > 8)) {
+    return __OC_DIV(s_sz, 8);
+    }
+    return 1;
+}
+
+bool ng_emit_load_struct_at_rax(NativeGen* ng, CodeBuffer* code, oc_string s_name) {
+    int32_t size = ng_find_struct_size(ng, s_name);
+    if ((size <= 8)) {
+    return false;
+    }
+    if ((size > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct larger than 32 bytes cannot be read by value; use a pointer to it"), .len = sizeof("native codegen error: a struct larger than 32 bytes cannot be read by value; use a pointer to it") - 1 });
+    }
+    else {
+    if ((size != ng_struct_raw_size(ng, s_name))) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a packed struct whose size is not a multiple of 8 cannot be read by value; use a pointer to it"), .len = sizeof("native codegen error: a packed struct whose size is not a multiple of 8 cannot be read by value; use a pointer to it") - 1 });
+    }
+    }
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 80);
+    buf_append_u8(code, 8);
+    if ((size >= 24)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 16);
+    }
+    if ((size >= 32)) {
+    buf_append_u8(code, 76);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 64);
+    buf_append_u8(code, 24);
+    }
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 0);
+    return true;
+}
+
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width) {
     if ((width == 1)) {
     buf_append_u8(code, 136);
@@ -5871,6 +5919,36 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     int32_t f_w = ng_field_width(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     ng_emit_expr(ng, code, data, ((f)->left));
+    int32_t f_words = ng_value_words(ng, ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
+    if ((f_words > 1)) {
+    if ((__OC_ADD(f_off, __OC_MUL(f_words, 8)) <= 32)) {
+    int32_t w = 0;
+    while ((w < f_words)) {
+    if ((w == 3)) {
+    buf_append_u8(code, 76);
+    }
+    else {
+    buf_append_u8(code, 72);
+    }
+    buf_append_u8(code, 137);
+    if ((w == 1)) {
+    buf_append_u8(code, 84);
+    }
+    else {
+    if ((w == 2)) {
+    buf_append_u8(code, 76);
+    }
+    else {
+    buf_append_u8(code, 68);
+    }
+    }
+    buf_append_u8(code, 36);
+    buf_append_u8(code, ({ __auto_type _v = (__OC_ADD(f_off, __OC_MUL(w, 8))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; }));
+    w = __OC_ADD(w, 1);
+    }
+    }
+    }
+    else {
     if ((f_off >= 0)) {
     if ((__OC_ADD(f_off, f_w) <= 32)) {
     buf_append_u8(code, 72);
@@ -5879,6 +5957,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 36);
     buf_append_u8(code, ({ __auto_type _v = (f_off); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; }));
     ng_emit_store_at_rcx(code, f_w);
+    }
     }
     }
     f = ((f)->next);
@@ -5911,6 +5990,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 72);
     buf_append_u8(code, 139);
     buf_append_u8(code, 0);
+    return;
+    }
+    if (ng_emit_load_struct_at_rax(ng, code, ft)) {
     return;
     }
     ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, ((((expr)->tok)).slice)));
@@ -6131,6 +6213,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 15);
     buf_append_u8(code, 132);
     elf_append_u32(code, 0);
+    if (ng_emit_load_struct_at_rax(ng, code, elem_t)) {
+    return;
+    }
     if (ng_is_byte_type(elem_t)) {
     buf_append_u8(code, 15);
     buf_append_u8(code, 182);
@@ -6598,16 +6683,55 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     AstNode* a = ((expr)->left);
     while ((a != ((AstNode*)(0)))) {
     ng_emit_expr(ng, code, data, a);
+    int32_t a_sz = ng_find_struct_size(ng, ng_expr_type(ng, a));
     if (ng_is_expr_slice(ng, a)) {
     buf_append_u8(code, 80);
     buf_append_u8(code, 82);
     reg_count = __OC_ADD(reg_count, 2);
     }
     else {
+    if ((a_sz > 8)) {
+    bool whole_value = (((a)->tag) == NODE_IDENT);
+    if ((((a)->tag) == NODE_STRUCT_INIT)) {
+    whole_value = true;
+    }
+    if ((((a)->tag) == NODE_CALL)) {
+    whole_value = true;
+    }
+    if ((((a)->tag) == NODE_FIELD_ACCESS)) {
+    whole_value = true;
+    }
+    if ((((a)->tag) == NODE_DEREF)) {
+    whole_value = true;
+    }
+    if ((a_sz > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct argument larger than 32 bytes cannot be passed by value; pass a pointer"), .len = sizeof("native codegen error: a struct argument larger than 32 bytes cannot be passed by value; pass a pointer") - 1 });
+    }
+    else {
+    if ((!whole_value)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct passed by value must be a variable, a field, a dereference, a struct literal or a call result"), .len = sizeof("native codegen error: a struct passed by value must be a variable, a field, a dereference, a struct literal or a call result") - 1 });
+    }
+    }
+    buf_append_u8(code, 80);
+    buf_append_u8(code, 82);
+    if ((a_sz >= 24)) {
+    buf_append_u8(code, 81);
+    }
+    if ((a_sz >= 32)) {
+    buf_append_u8(code, 65);
+    buf_append_u8(code, 80);
+    }
+    reg_count = __OC_ADD(reg_count, ({ __auto_type _v = (__OC_DIV(a_sz, 8)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    else {
     buf_append_u8(code, 80);
     reg_count = __OC_ADD(reg_count, 1);
     }
+    }
     a = ((a)->next);
+    }
+    if ((reg_count > 6)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
     }
     size_t idx = reg_count;
     while ((idx > 0)) {
@@ -6975,9 +7099,16 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
     oc_string f_type = ng_find_field_type(ng, t_name, ((((f)->tok)).slice));
     ng_emit_expr(ng, code, data, ((f)->left));
-    if (str_eq(f_type, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    int32_t f_words = ng_value_words(ng, f_type);
+    if ((f_words > 1)) {
     ng_emit_disp_store_rax(code, __OC_ADD(base_off, f_off));
     ng_emit_disp_store_rdx(code, __OC_ADD(__OC_ADD(base_off, f_off), 8));
+    if ((f_words >= 3)) {
+    ng_emit_disp_store_rcx(code, __OC_ADD(__OC_ADD(base_off, f_off), 16));
+    }
+    if ((f_words >= 4)) {
+    ng_emit_disp_store_r8(code, __OC_ADD(__OC_ADD(base_off, f_off), 24));
+    }
     }
     else {
     buf_append_u8(code, 72);
@@ -7056,16 +7187,37 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     oc_string lhs_t = ng_expr_type(ng, ((stmt)->left));
     ng_emit_expr(ng, code, data, ((stmt)->right));
+    int32_t lhs_words = ng_value_words(ng, lhs_t);
+    if ((lhs_words > 2)) {
+    if ((lhs_words == 4)) {
+    buf_append_u8(code, 65);
+    buf_append_u8(code, 80);
+    }
+    buf_append_u8(code, 81);
+    buf_append_u8(code, 82);
+    buf_append_u8(code, 80);
+    ng_emit_lvalue_addr(ng, code, data, ((stmt)->left));
+    int32_t w = 0;
+    while ((w < lhs_words)) {
+    buf_append_u8(code, 90);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 80);
+    buf_append_u8(code, ({ __auto_type _v = (__OC_MUL(w, 8)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; }));
+    w = __OC_ADD(w, 1);
+    }
+    return;
+    }
     ng_emit_range_check(ng, code, lhs_t, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     buf_append_u8(code, 80);
-    if (str_eq(lhs_t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    if ((lhs_words == 2)) {
     buf_append_u8(code, 82);
     }
     ng_emit_lvalue_addr(ng, code, data, ((stmt)->left));
     buf_append_u8(code, 72);
     buf_append_u8(code, 137);
     buf_append_u8(code, 193);
-    if (str_eq(lhs_t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    if ((lhs_words == 2)) {
     buf_append_u8(code, 90);
     buf_append_u8(code, 88);
     buf_append_u8(code, 72);
@@ -7931,6 +8083,12 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
     param_bytes = __OC_ADD(param_bytes, 8);
     }
+    int32_t p_sz = ng_find_struct_size(ng, ((p)->type_name));
+    if ((p_sz > 8)) {
+    ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), __OC_SUB(p_sz, 8));
+    param_bytes = __OC_ADD(param_bytes, __OC_SUB(p_sz, 8));
+    __OC_AT((((ng)->var_offsets)), (__OC_SUB(((ng)->var_count), 1))) = ((ng)->curr_off);
+    }
     }
     p = ((p)->next);
     }
@@ -7970,8 +8128,17 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     ng_emit_store_param_reg(code, reg_idx, __OC_SUB(off, 8));
     reg_idx = __OC_ADD(reg_idx, 1);
     }
+    int32_t p_word = 8;
+    while ((p_word < ng_find_struct_size(ng, __OC_AT((((ng)->var_types)), (p_var_idx))))) {
+    ng_emit_store_param_reg(code, reg_idx, __OC_ADD(off, p_word));
+    reg_idx = __OC_ADD(reg_idx, 1);
+    p_word = __OC_ADD(p_word, 8);
+    }
     p_var_idx = __OC_ADD(p_var_idx, 1);
     p = ((p)->next);
+    }
+    if ((reg_idx > 6)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
     }
     if ((body_block != ((AstNode*)(0)))) {
     AstNode* stmt = ((body_block)->left);
