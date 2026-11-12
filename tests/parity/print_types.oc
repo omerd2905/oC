@@ -1,0 +1,39 @@
+// print() must render every type the same way on both backends.
+fn is_big(x: i32) -> bool { return x > 10; }
+
+fn main() {
+    // bool prints as true/false, whether it is a literal, a variable, a comparison or a call
+    print(true);            // true
+    print(false);           // false
+    let t: bool = false;
+    print(t);               // false
+    print(!t);              // true
+    print(1 < 2);           // true
+    print(2 == 3);          // false
+    print(is_big(11));      // true
+
+    // [N]u8 prints as text up to the first NUL, and never past its N bytes
+    let ok: [4]u8 = [79, 75, 0, 0];
+    print(ok);              // OK
+    let full: [4]u8 = [65, 66, 67, 68];
+    let guard: [4]u8 = [90, 90, 90, 90];
+    print(full);            // ABCD
+    let empty: [4]u8 = [0];
+    print(empty);           // (empty line)
+
+    // narrow signed integers keep their sign
+    let x: i8 = -5;
+    let y: i16 = -300;
+    print(x);               // -5
+    print(y);               // -300
+
+    // a name redeclared with another type in an inner scope
+    let mut i: i32 = 0;
+    while i < 2 {
+        let ok: bool = i == 1;
+        print(ok);          // false, true
+        i = i + 1;
+    }
+    print(ok);              // OK
+    print(guard[0]);        // 90
+}
