@@ -246,6 +246,7 @@ typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
 typedef struct Parser Parser;
 typedef struct VarInfo VarInfo;
+typedef struct FnEffects FnEffects;
 typedef struct Validator Validator;
 typedef struct CodeBuffer CodeBuffer;
 typedef struct NativeGen NativeGen;
@@ -301,7 +302,14 @@ struct VarInfo {
     bool is_mut;
 };
 
+struct FnEffects {
+    oc_string names[256];
+    uint8_t effects[4096];
+    size_t count;
+};
+
 struct Validator {
+    FnEffects* fx;
     VarInfo vars[512];
     size_t vars_count;
     oc_string deinit_arenas[128];
@@ -436,16 +444,20 @@ bool is_scalar_value_type(oc_string t);
 int32_t validator_find_var(Validator* v, oc_string name);
 void validator_set_points_to_stack_local(Validator* v, oc_string name);
 bool validator_is_arena_deinit(Validator* v, oc_string name);
+bool validator_mark_deinit(Validator* v, oc_string name);
 void validator_invalidate_arena(Validator* v, oc_string arena_name);
 void validator_invalidate_var(Validator* v, oc_string var_name);
 oc_string get_ident_name(AstNode* expr);
 oc_string get_underlying_address_of(AstNode* expr);
+uint8_t fx_param_effect(FnEffects* fx, oc_string fn_name, size_t idx);
+oc_string get_arena_arg_name(AstNode* arg);
+bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n);
 oc_string get_arena_source(AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
 bool validate_stmt(Validator* v, AstNode* stmt);
-bool validate_function(AstNode* f);
+bool validate_function(AstNode* f, FnEffects* fx);
 bool validate_program(AstNode* root);
 AstNode* parse_program(Parser* p);
 CodeBuffer buf_init(size_t capacity);
@@ -2063,6 +2075,20 @@ bool validator_is_arena_deinit(Validator* v, oc_string name) {
     return false;
 }
 
+bool validator_mark_deinit(Validator* v, oc_string name) {
+    if (validator_is_arena_deinit(v, name)) {
+    return true;
+    }
+    if ((((v)->deinit_count) >= 128)) {
+    printf("%s\n", "security error: validator deinit table capacity exceeded");
+    ((v)->has_error) = true;
+    return false;
+    }
+    __OC_AT((((v)->deinit_arenas)), (((v)->deinit_count))) = name;
+    ((v)->deinit_count) = __OC_ADD(((v)->deinit_count), 1);
+    return true;
+}
+
 void validator_invalidate_arena(Validator* v, oc_string arena_name) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
@@ -2116,6 +2142,77 @@ oc_string get_underlying_address_of(AstNode* expr) {
     return get_underlying_address_of(((expr)->left));
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+uint8_t fx_param_effect(FnEffects* fx, oc_string fn_name, size_t idx) {
+    if ((idx == 0)) {
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("arena_deinit"), .len = sizeof("arena_deinit") - 1 })) {
+    return 2;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("arena_reset"), .len = sizeof("arena_reset") - 1 })) {
+    return 1;
+    }
+    }
+    if ((idx >= 16)) {
+    return 0;
+    }
+    size_t i = 0;
+    while ((i < ((fx)->count))) {
+    if (str_eq(__OC_AT((((fx)->names)), (i)), fn_name)) {
+    return __OC_AT((((fx)->effects)), (__OC_ADD(__OC_MUL(i, 16), idx)));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return 0;
+}
+
+oc_string get_arena_arg_name(AstNode* arg) {
+    oc_string u = get_underlying_address_of(arg);
+    if ((((u).len) > 0)) {
+    return u;
+    }
+    return get_ident_name(arg);
+}
+
+bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
+    bool changed = false;
+    AstNode* cur = n;
+    while ((cur != ((AstNode*)(0)))) {
+    if ((((cur)->tag) == NODE_CALL)) {
+    AstNode* arg = ((cur)->left);
+    size_t ai = 0;
+    while ((arg != ((AstNode*)(0)))) {
+    uint8_t eff = fx_param_effect(fx, ((((cur)->tok)).slice), ai);
+    if ((eff > 0)) {
+    oc_string name = get_arena_arg_name(arg);
+    AstNode* prm = params;
+    size_t pi = 0;
+    while ((prm != ((AstNode*)(0)))) {
+    if ((pi < 16)) {
+    if (str_eq(((((prm)->tok)).slice), name)) {
+    if ((__OC_AT((((fx)->effects)), (__OC_ADD(__OC_MUL(slot, 16), pi))) < eff)) {
+    __OC_AT((((fx)->effects)), (__OC_ADD(__OC_MUL(slot, 16), pi))) = eff;
+    changed = true;
+    }
+    }
+    }
+    prm = ((prm)->next);
+    pi = __OC_ADD(pi, 1);
+    }
+    }
+    arg = ((arg)->next);
+    ai = __OC_ADD(ai, 1);
+    }
+    }
+    if (fx_scan(fx, slot, params, ((cur)->left))) {
+    changed = true;
+    }
+    if (fx_scan(fx, slot, params, ((cur)->right))) {
+    changed = true;
+    }
+    cur = ((cur)->next);
+    }
+    return changed;
 }
 
 oc_string get_arena_source(AstNode* expr) {
@@ -2404,6 +2501,26 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return false;
     }
     a = ((a)->next);
+    }
+    AstNode* ea = ((expr)->left);
+    size_t ei = 0;
+    while ((ea != ((AstNode*)(0)))) {
+    uint8_t eff = fx_param_effect(((v)->fx), ((((expr)->tok)).slice), ei);
+    if ((eff > 0)) {
+    oc_string a_name = get_arena_arg_name(ea);
+    if ((((a_name).len) > 0)) {
+    if ((eff == 2)) {
+    if ((!validator_mark_deinit(v, a_name))) {
+    return false;
+    }
+    }
+    else {
+    validator_invalidate_arena(v, a_name);
+    }
+    }
+    }
+    ea = ((ea)->next);
+    ei = __OC_ADD(ei, 1);
     }
     return true;
     }
@@ -2800,44 +2917,14 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((stmt)->tag) == NODE_PRINT)) {
     return check_expr_use(v, ((stmt)->left));
     }
-    if ((((stmt)->tag) == NODE_CALL)) {
-    if (str_eq(((((stmt)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("arena_deinit"), .len = sizeof("arena_deinit") - 1 })) {
-    if ((((stmt)->left) != ((AstNode*)(0)))) {
-    oc_string a_name = get_underlying_address_of(((stmt)->left));
-    if ((((a_name).len) == 0)) {
-    a_name = get_ident_name(((stmt)->left));
-    }
-    if ((((a_name).len) > 0)) {
-    if ((((v)->deinit_count) >= 128)) {
-    printf("%s\n", "security error: validator deinit table capacity exceeded");
-    ((v)->has_error) = true;
-    return false;
-    }
-    __OC_AT((((v)->deinit_arenas)), (((v)->deinit_count))) = a_name;
-    ((v)->deinit_count) = __OC_ADD(((v)->deinit_count), 1);
-    }
-    }
-    }
-    if (str_eq(((((stmt)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("arena_reset"), .len = sizeof("arena_reset") - 1 })) {
-    if ((((stmt)->left) != ((AstNode*)(0)))) {
-    oc_string a_name = get_underlying_address_of(((stmt)->left));
-    if ((((a_name).len) == 0)) {
-    a_name = get_ident_name(((stmt)->left));
-    }
-    if ((((a_name).len) > 0)) {
-    validator_invalidate_arena(v, a_name);
-    }
-    }
-    }
-    }
     return check_expr_use(v, stmt);
 }
 
-bool validate_function(AstNode* f) {
+bool validate_function(AstNode* f, FnEffects* fx) {
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    Validator v = (Validator){ .fx = fx, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -2884,10 +2971,42 @@ bool validate_function(AstNode* f) {
 }
 
 bool validate_program(AstNode* root) {
+    FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .count = 0 };
     AstNode* decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
-    if ((!validate_function(decl))) {
+    if ((((decl)->right) != ((AstNode*)(0)))) {
+    if ((((fx).count) < 256)) {
+    __OC_AT((((fx).names)), (((fx).count))) = ((((decl)->tok)).slice);
+    ((fx).count) = __OC_ADD(((fx).count), 1);
+    }
+    }
+    }
+    decl = ((decl)->next);
+    }
+    bool changed = true;
+    while (changed) {
+    changed = false;
+    size_t slot = 0;
+    decl = ((root)->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_FN)) {
+    if ((((decl)->right) != ((AstNode*)(0)))) {
+    if ((slot < 256)) {
+    if (fx_scan((&(fx)), slot, ((decl)->left), ((decl)->right))) {
+    changed = true;
+    }
+    }
+    slot = __OC_ADD(slot, 1);
+    }
+    }
+    decl = ((decl)->next);
+    }
+    }
+    decl = ((root)->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_FN)) {
+    if ((!validate_function(decl, (&(fx))))) {
     return false;
     }
     }

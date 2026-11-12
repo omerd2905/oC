@@ -10,6 +10,8 @@ COMPILE_REJECT=(
   "probe_cond_uaf.oc"
   "probe_loop_uaf.oc"
   "probe_param_escape.oc"
+  "probe_indirect_deinit_uaf.oc"
+  "probe_indirect_reset_uaf.oc"
 )
 
 RUNTIME_TRAP=(
