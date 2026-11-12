@@ -69,7 +69,7 @@ for f in "${EXPLOITS[@]}"; do
         PASSED=$((PASSED + 1))
     fi
 done
-echo "✔ $PASSED/${#EXPLOITS[@]} exploit PoCs rejected at compile time with 0.00ns runtime overhead!"
+echo "✔ $PASSED/${#EXPLOITS[@]} exploit PoCs rejected at compile time!"
 ./tests/run_probes.sh
 echo ""
 

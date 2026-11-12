@@ -43,7 +43,7 @@
         <a href="#std-os" class="sidebar-link">OC-OS(3) Targets &amp; Portability</a>
         <a href="#std-mem" class="sidebar-link">OC-MEM(3) Arena Alloc</a>
         <a href="#std-fs" class="sidebar-link">OC-FS(3) Hardened I/O</a>
-        <a href="#std-io" class="sidebar-link">OC-IO(3) Tainted I/O</a>
+        <a href="#std-io" class="sidebar-link">OC-IO(3) Standard I/O</a>
         <a href="#std-net" class="sidebar-link">OC-NET(3) Sockets</a>
         <a href="#std-math" class="sidebar-link">OC-MATH(3) Checked Math</a>
         <a href="#see-also" class="sidebar-link">SEE ALSO</a>
@@ -86,20 +86,20 @@ import "std/math.oc"  // OC-MATH(3):  abs_i32, min_u32, max_u32, align_forward
 import "std/os.oc"    // OC-OS(3):    OC_PROT_*, OC_MAP_*, OC_O_*, OC_MODE_*, OC_AF_*, OC_SOCK_*, OC_TARGET_*, sys_host_target
 
 // Direct x86_64 Linux kernel intrinsics (extern declarations bound to direct syscall instructions)
-extern fn sys_read(fd: i32, buf: *mut u8, count: usize) i64;
-extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
-extern fn sys_open(path: *u8, flags: i32, mode: u32) i32;
-extern fn sys_close(fd: i32) i32;
-extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) *mut u8;
-extern fn sys_munmap(addr: *mut u8, len: usize) i32;
-extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) i32;
-extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) i32;
-extern fn sys_exit(code: i32) void;
-extern fn sys_unlink(path: *u8) i32;
-extern fn sys_chmod(path: *u8, mode: u32) i32;
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
+extern fn sys_open(path: *u8, flags: i32, mode: u32) -&gt; i32;
+extern fn sys_close(fd: i32) -&gt; i32;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut u8;
+extern fn sys_munmap(addr: *mut u8, len: usize) -&gt; i32;
+extern fn sys_socket(domain: i32, sock_type: i32, protocol: i32) -&gt; i32;
+extern fn sys_connect(fd: i32, addr: *sockaddr_in, len: u32) -&gt; i32;
+extern fn sys_exit(code: i32) -&gt; void;
+extern fn sys_unlink(path: *u8) -&gt; i32;
+extern fn sys_chmod(path: *u8, mode: u32) -&gt; i32;
 
 // Portable intrinsic (std/os.oc): the platform this binary was built for
-extern fn sys_host_target() i32;</code></pre>
+extern fn sys_host_target() -&gt; i32;</code></pre>
       </section>
 
       <!-- SECTION: SYSCALLS -->
@@ -245,11 +245,11 @@ extern fn sys_host_target() i32;</code></pre>
                 
               </div>
               <pre><code>// Direct kernel invocation without libc runtime
-extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
-extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) *mut u8;
-extern fn sys_munmap(addr: *mut u8, len: usize) i32;
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
+extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -&gt; *mut u8;
+extern fn sys_munmap(addr: *mut u8, len: usize) -&gt; i32;
 
-fn main() i32 {
+fn main() -> i32 {
     let msg: string = "[KERNEL] Direct x86_64 syscall execution verified!\n";
     sys_write(1, msg.ptr, msg.len);
 
@@ -420,7 +420,7 @@ fn main() {
     // 1. Initialize a 64 KB regional arena backed by sys_mmap
     let mut arena: Arena = arena_init(65536);
 
-    // 2. Fast bump allocation (0.00ns metadata overhead)
+    // 2. Fast bump allocation (no per-allocation metadata)
     let chunk: *mut u8 = arena_alloc(&amp;mut arena, 16);
     chunk[0] = 79; // 'O'
     chunk[1] = 67; // 'C'
@@ -551,16 +551,16 @@ fn main() {
             </div>
           </div>
           <div class="explanation-box">
-            <strong>Linear Resource Analysis:</strong> In oC, file descriptor lifecycles are linear. Attempting to close an already closed descriptor triggers double-close detection (CWE-415 / CWE-675), while functions returning without closing handles trigger resource leak diagnostics (CWE-404 / CWE-775).
+            <strong>Linear Resource Analysis (planned, not implemented):</strong> the compiler does not track file descriptor lifecycles yet. Closing a descriptor twice (CWE-415 / CWE-675) or returning without closing it (CWE-404 / CWE-775) is not diagnosed; close every descriptor you open.
           </div>
         </div>
       </section>
 
       <!-- SECTION: STD/IO -->
       <section id="std-io">
-        <h2>OC-IO(3) &mdash; `std/io.oc` Tainted Input &amp; Safe Output</h2>
+        <h2>OC-IO(3) &mdash; `std/io.oc` Standard Input &amp; Output</h2>
         <p>
-          The <code>std/io.oc</code> module handles standard streams without format string vulnerabilities (CWE-134). All external user input is tagged with taint flow tracking (CWE-20) to prevent unvalidated input from reaching sensitive sinks.
+          The <code>std/io.oc</code> module handles standard streams without format string vulnerabilities (CWE-134). Input is returned as plain values: the compiler does not track untrusted (tainted) data, so validate it before using it as a path, length or index.
         </p>
 
         <div class="fn-box">
@@ -612,7 +612,7 @@ fn main() {
             </div>
           </div>
           <div class="explanation-box">
-            <strong>Dataflow Taint Tracking:</strong> Slices read via <code>sys_read</code> or <code>read_int</code> are marked with <code>TAINTED_BIT</code>. The compiler prevents passing tainted variables into unchecked sinks (e.g. file paths or slice indices) without an explicit sanitization barrier.
+            <strong>Dataflow Taint Tracking (planned, not implemented):</strong> values read via <code>sys_read</code> or <code>read_int</code> are ordinary values. The compiler does not yet stop them from reaching file paths or slice indices unvalidated; bounds and overflow checks still apply at run time.
           </div>
         </div>
       </section>
@@ -778,7 +778,7 @@ fn main() {
         <p>
           <a href="index.html"><strong>OC(7)</strong></a> &mdash; oC Language Architectural Overview &amp; Benchmarks<br>
           <a href="syntax.html"><strong>OC-LANG(7)</strong></a> &mdash; Grammar Specification, Fat Slices &amp; Borrowing<br>
-          <a href="security.html"><strong>OC-SECURITY(7)</strong></a> &mdash; Active Memory Safety &amp; 17-CWE Rejection Matrix<br>
+          <a href="security.html"><strong>OC-SECURITY(7)</strong></a> &mdash; Active Memory Safety &amp; CWE Coverage Matrix<br>
           <a href="man-occ.html"><strong>OCC(1)</strong></a> &mdash; Self-Hosted Compiler Toolchain &amp; Machine Code Generator<br>
           <a href="tutorial.html"><strong>oC Tutorial</strong></a> &mdash; Hands-on Systems Programming Guide
         </p>

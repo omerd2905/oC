@@ -191,4 +191,7 @@ for ex in "$ROOT"/examples/*.oc; do
 done
 rm -f "$PE_OUT.exe"
 
+echo "=== Documentation examples (docs/*.html, README.md) ==="
+python3 "$ROOT/tests/check_docs.py" "$OCC"
+
 echo "=== ALL $PASS / $TOTAL PROBE & EXAMPLE CHECKS PASSED ==="

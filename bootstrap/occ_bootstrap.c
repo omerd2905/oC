@@ -3475,7 +3475,13 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_INT)) {
-    buf_append(out, ((((expr)->tok)).slice));
+    size_t di = 0;
+    while ((di < ((((((expr)->tok)).slice)).len))) {
+    if ((__oc_index_str(((((expr)->tok)).slice), di) != 95)) {
+    buf_append_u8(out, __oc_index_str(((((expr)->tok)).slice), di));
+    }
+    di = __OC_ADD(di, 1);
+    }
     return;
     }
     if ((((expr)->tag) == NODE_STRING)) {

@@ -254,13 +254,15 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
               <div class="pane-label"><span>SOURCE</span></div>
               <pre><code>import "std/io.oc";
 
-fn main() i32 {
+fn main() -> i32 {
     let dec_val: u32 = 42;
     let hex_val: u32 = 0x2A;
     let bin_val: u32 = 0b0010_1010;
 
-    if dec_val == hex_val && hex_val == bin_val {
-        print("All three radices equal 42 decimal!\n");
+    if dec_val == hex_val {
+        if hex_val == bin_val {
+            print("All three radices equal 42 decimal!");
+        }
     }
     return 0;
 }</code></pre>
@@ -452,7 +454,7 @@ fn print_slice_info(name: string, s: string) {
     print("\n");
 }
 
-fn main() i32 {
+fn main() -> i32 {
     let full: string = "Active-Defense Systems";
     print_slice_info("full", full);
 
@@ -507,7 +509,7 @@ let mut buf: [32]u8 = [0]; // Valid: zero-initialized fixed array
 
 let GLOBAL_RETRY_COUNT: u32 = 3; // Top-level constant
 
-fn main() i32 {
+fn main() -> i32 {
     let immut_val: i32 = 100;
     let mut mut_val: i32 = 200;
 
@@ -665,7 +667,7 @@ fn test_overflow_protection() {
     print(boom);
 }
 
-fn main() i32 {
+fn main() -> i32 {
     test_overflow_protection();
     return 0;
 }</code></pre>
@@ -726,7 +728,7 @@ let tail: string = src[4..9]; // "Alloc" (len = 5)
 
 fn print_bytes(data: string) {
     let mut i: usize = 0;
-    while i < data.len {
+    while i &lt; data.len {
         let b: u8 = data[i];
         print(b.as(u32));
         print(" ");
@@ -735,7 +737,7 @@ fn print_bytes(data: string) {
     print("\n");
 }
 
-fn main() i32 {
+fn main() -> i32 {
     let greeting: string = "oC-LANG";
     let token: string = greeting[0..2]; // "oC"
     print_bytes(token);
@@ -810,7 +812,7 @@ packed struct IPv4Header {
     dst_ip: u32,
 }
 
-fn main() i32 {
+fn main() -> i32 {
     let mut hdr: IPv4Header = IPv4Header {
         ver_ihl: 0x45, // IPv4, 5 words (20 bytes)
         tos: 0,
@@ -863,8 +865,8 @@ IPv4 Header Initialized. TTL: 64</code></pre>
         <p>
           External symbols (such as Linux kernel syscalls or standard C library functions) are declared with <code>extern fn</code> without a function body:
         </p>
-        <pre><code>extern fn sys_write(fd: i32, buf: *u8, count: usize) i64;
-extern fn sys_read(fd: i32, buf: *mut u8, count: usize) i64;
+        <pre><code>extern fn sys_write(fd: i32, buf: *u8, count: usize) -&gt; i64;
+extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -&gt; i64;
 extern fn sys_exit(code: i32);</code></pre>
 
         <!-- Example Card 7 -->
@@ -883,14 +885,14 @@ fn square_mut(val: *mut i32) {
     *val = current * current;
 }
 
-fn factorial(n: u64) u64 {
-    if n <= 1 {
+fn factorial(n: u64) -&gt; u64 {
+    if n &lt;= 1 {
         return 1;
     }
     return n * factorial(n - 1);
 }
 
-fn main() i32 {
+fn main() -> i32 {
     let mut num: i32 = 7;
     square_mut(&mut num);
     print("Squared: ");
@@ -935,7 +937,7 @@ Squared: 49 | 5! = 120</code></pre>
           The <code>while</code> statement executes repeatedly as long as the condition evaluates to <code>true</code>. There is no <code>for</code> loop construct in <code>oC</code>; all iteration is expressed through explicit <code>while</code> loops to preserve syntactic minimalism:
         </p>
         <pre><code>let mut idx: usize = 0;
-while idx < 10 {
+while idx &lt; 10 {
     // Process element
     idx = idx + 1;
 }</code></pre>
@@ -951,11 +953,11 @@ while idx < 10 {
               <div class="pane-label"><span>SOURCE</span></div>
               <pre><code>import "std/io.oc";
 
-fn main() i32 {
+fn main() -> i32 {
     let mut sum: i64 = 0;
     let mut n: i64 = 1;
 
-    while n <= 100 {
+    while n &lt;= 100 {
         sum = sum + n;
         n = n + 1;
     }
@@ -1011,7 +1013,7 @@ Sum of 1..100: 5050</code></pre>
 import "std/fs.oc";
 import "std/mem.oc";
 
-fn main() i32 {
+fn main() -> i32 {
     // Arena allocated in 64 KB page chunk
     let mut arena: Arena = arena_init(65536);
     let chunk: *mut u8 = arena_alloc(&mut arena, 128);

@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OC-SECURITY(7) — Active Defense Memory Safety &amp; 17-CWE Rejection Matrix</title>
+  <title>OC-SECURITY(7) — Active Defense Memory Safety &amp; CWE Coverage Matrix</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -39,7 +39,7 @@
         <a href="#name" class="sidebar-link active">NAME</a>
         <a href="#synopsis" class="sidebar-link">SYNOPSIS</a>
         <a href="#layers" class="sidebar-link">4 Defense Layers</a>
-        <a href="#cwe-matrix" class="sidebar-link">17-CWE Defense Matrix</a>
+        <a href="#cwe-matrix" class="sidebar-link">CWE Coverage Matrix</a>
         <a href="#exploit-catalog" class="sidebar-link">13 Exploit Rejections</a>
         <a href="#see-also" class="sidebar-link">SEE ALSO</a>
       </div>
@@ -82,7 +82,7 @@
       <!-- SECTION: NAME -->
       <section id="name">
         <h2>NAME</h2>
-        <p><code>oc-security</code> &mdash; Active-defense systems architecture, lexical hygiene, compile-time escape validator, linear resource analyzer, static taint propagation engine, and x86_64 hardware exception trapping.</p>
+        <p><code>oc-security</code> &mdash; Active-defense systems architecture, lexical hygiene, compile-time escape validator, and x86_64 hardware exception trapping. Static taint tracking and linear file-descriptor analysis are planned and are marked as such below.</p>
       </section>
 
       <!-- SECTION: SYNOPSIS -->
@@ -127,7 +127,7 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
         <!-- Layer 2 -->
         <div class="defense-card" id="layer2">
           
-          <h3>2. Regional Escape &amp; Linear Resource Analyzer</h3>
+          <h3>2. Regional Escape Analyzer</h3>
           <p>
             Implemented in <code>compiler/parser.oc</code> through the <code>EscapeValidator</code> pass:
           </p>
@@ -137,16 +137,16 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
             <li><strong>Regional Arena Lifetime Tracking (CWE-416):</strong> Pointers allocated via <code>arena_alloc(&amp;mut arena, size)</code> are bound to that specific arena's lifetime. When <code>arena_deinit</code> or <code>arena_reset</code> is encountered in the AST, all associated pointers are permanently invalidated in the validator's symbol table. Any subsequent dereference or store produces a compile-time Use-After-Free rejection.</li>
             <li><strong>Cross-Arena Escape Prevention:</strong> Writing a pointer allocated from a short-lived local arena into a longer-lived container arena or parent structure is blocked at compile time.</li>
             <li><strong>Collection Mutation Invalidation:</strong> Borrowing an element from an array or vector (<code>&amp;vec.data[0]</code>) creates an active borrow lock; invoking a mutating method (such as <code>append(&amp;mut vec, val)</code>) statically invalidates the previous borrow.</li>
-            <li><strong>Linear File Descriptor Tracking (CWE-404 / CWE-775 / CWE-415):</strong> File handles must follow strict linear lifecycles: double-closing or exiting scope with unclosed resources triggers compile-time verification warnings.</li>
+            <li><strong>Linear File Descriptor Tracking (CWE-404 / CWE-775 / CWE-415):</strong> <em>Planned, not implemented:</em> the validator does not track file descriptors today; a double <code>sys_close</code> or a leaked descriptor compiles without a diagnostic.</li>
           </ul>
         </div>
 
         <!-- Layer 3 -->
         <div class="defense-card" id="layer3">
           
-          <h3>3. Static Taint Tracking</h3>
+          <h3>3. Static Taint Tracking (planned)</h3>
           <p>
-            Ensures that untrusted external inputs cannot reach privileged operating system execution sinks:
+            <strong>This layer is not implemented in the current compiler.</strong> Nothing in <code>compiler/</code> tracks tainted data yet; the first three items describe the intended design. Only the last item exists today, and it protects <code>occ</code>'s own command lines, not user programs:
           </p>
           <ul>
             <li><strong>Tainted Input Sources (CWE-20):</strong> Data originating from external interfaces (<code>sys_read(0, ...)</code>, socket connections, network frames) is stamped with <code>TAINTED_BIT</code> in the compiler's intermediate representation.</li>
@@ -173,11 +173,11 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
         </div>
       </section>
 
-      <!-- SECTION: 17-CWE MATRIX -->
+      <!-- SECTION: CWE COVERAGE MATRIX -->
       <section id="cwe-matrix">
-        <h2>The 17-CWE Neutralization Matrix</h2>
+        <h2>CWE Coverage Matrix</h2>
         <p>
-          The table below demonstrates how the oC v1.0 architecture systematically eliminates all 17 target Common Weakness Enumeration (CWE) classes:
+          The table below lists the Common Weakness Enumeration (CWE) classes oC addresses and the mechanism behind each. Compile-time checks add no instructions to the program; runtime checks cost what the last column says.
         </p>
         <table>
           <thead>
@@ -195,28 +195,28 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
               <td>Use After Free (UAF)</td>
               <td>Layer 2 (Escape)</td>
               <td><code>EscapeValidator</code> statically invalidates references after <code>arena_reset</code> or <code>arena_deinit</code>; rejects compile</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
             <tr>
               <td><code>CWE-415</code></td>
               <td>Double Free</td>
               <td>Layer 2 (Escape)</td>
-              <td>Elimination of individual <code>free()</code>; linear lifecycle tracking on arena and file descriptors</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td>Elimination of individual <code>free()</code>; arena lifetimes tracked by the validator (file descriptors are not tracked)</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
             <tr>
               <td><code>CWE-562</code></td>
               <td>Return of Stack Variable Address</td>
               <td>Layer 2 (Escape)</td>
               <td>Recursive <code>contains_stack_local_ref</code> blocks direct returns, struct-wrapped leaves, and integer-laundered pointers</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
             <tr>
               <td><code>CWE-466</code></td>
               <td>Out-of-Scope Pointer Escape</td>
               <td>Layer 2 (Escape)</td>
               <td>Lexical scope depth counter blocks inner scope variables from being stored into outer pointers, arrays, or structs</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
             <tr>
               <td><code>CWE-122</code></td>
@@ -279,14 +279,14 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
               <td>Symlink Following / TOCTOU File Access</td>
               <td>Layer 1 &amp; 3</td>
               <td>Hardened filesystem I/O in <code>std/fs.oc</code> enforces <code>O_NOFOLLOW</code> by default on all open operations</td>
-              <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
+              <td class="tag-blocked">None (kernel flag)</td>
             </tr>
             <tr>
               <td><code>CWE-403</code></td>
               <td>File Descriptor Leak Across execve</td>
               <td>Layer 1 &amp; 3</td>
               <td>Hardened filesystem I/O in <code>std/fs.oc</code> enforces <code>O_CLOEXEC</code> by default on all descriptors</td>
-              <td class="tag-blocked">0.00 ns (Kernel Flag)</td>
+              <td class="tag-blocked">None (kernel flag)</td>
             </tr>
             <tr>
               <td><code>CWE-170</code></td>
@@ -298,16 +298,16 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
             <tr>
               <td><code>CWE-78</code></td>
               <td>OS Command Injection</td>
-              <td>Layer 3 (Taint)</td>
+              <td>Compiler driver</td>
               <td>Path verification routines (<code>is_safe_path</code>) reject shell metacharacters in CLI and filesystem parameters</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
             <tr>
               <td><code>CWE-134 / 20</code></td>
               <td>Format String Injection / Untrusted Input</td>
               <td>Layer 1 &amp; 3</td>
-              <td>Format-string-free printer (no <code>%s</code>/<code>%n</code>); static taint analysis prevents untrusted inputs reaching sensitive sinks</td>
-              <td class="tag-blocked">0.00 ns (Compile-Time)</td>
+              <td>Format-string-free printer (no <code>%s</code>/<code>%n</code>). Tracking of untrusted input (CWE-20) is planned, not implemented</td>
+              <td class="tag-blocked">None (compile time)</td>
             </tr>
           </tbody>
         </table>
@@ -317,7 +317,7 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
       <section id="exploit-catalog">
         <h2>13 Exploit PoCs vs `occ` Compiler Rejections</h2>
         <p>
-          The automated regression suite (verified via <code>./showcase.sh</code>) subjects the <code>occ</code> compiler to 13 malicious exploit proofs-of-concept designed to defeat standard compilers. <strong>All 13 exploits are rejected at compile time with 0.00 ns runtime penalty:</strong>
+          The automated regression suite (verified via <code>./showcase.sh</code>) subjects the <code>occ</code> compiler to 13 malicious exploit proofs-of-concept designed to defeat standard compilers. <strong>All 13 exploits are rejected at compile time:</strong>
         </p>
 
         <!-- PoC 1 -->
@@ -332,7 +332,7 @@ jae __trap_slice_bounds // Bounds violation aborts with 0 runtime allocations</c
                 <span>EXPLOIT POC: examples/bad_stack_escape.oc</span>
                 
               </div>
-              <pre><code>fn escape_pointer() *u8 {
+              <pre data-occ-rejects="cannot return reference to local stack variable &#x27;local&#x27;"><code>fn escape_pointer() -&gt; *u8 {
     let local: u8 = 42;
     return &amp;local;
 }
@@ -368,7 +368,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/case1.oc</span>
                 
               </div>
-              <pre><code>struct Node {
+              <pre data-occ-rejects="borrowed argument &#x27;local_leaf&#x27; does not live long enough (escapes into &#x27;root&#x27;)"><code>struct Node {
     next: &amp;Node,
 }
 
@@ -411,7 +411,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/case2.oc</span>
                 
               </div>
-              <pre><code>fn main() {
+              <pre data-occ-rejects="borrowed pointer escapes enclosing scope"><code>fn main() {
     let outer: i32 = 10;
     let mut ptr: &amp;i32 = &amp;outer;
     {
@@ -449,12 +449,12 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/case3.oc</span>
                 
               </div>
-              <pre><code>struct Slice {
+              <pre data-occ-rejects="cannot return reference to local stack variable &#x27;local&#x27;"><code>struct Slice {
     ptr: &amp;i32,
     len: usize,
 }
 
-fn bad_slice() Slice {
+fn bad_slice() -&gt; Slice {
     let local: i32 = 42;
     return Slice { ptr: &amp;local, len: 1 };
 }
@@ -490,7 +490,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/Cross-Arena_Escape.oc</span>
                 
               </div>
-              <pre><code>import "std/mem.oc"
+              <pre data-occ-rejects="cross-arena escape: pointer borrowed from arena &#x27;temp_arena&#x27; escapes into longer-lived target &#x27;container&#x27;"><code>import "std/mem.oc"
 
 struct Container {
     cached_ptr: *u8,
@@ -539,7 +539,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/CWE-416.oc</span>
                 
               </div>
-              <pre><code>import "std/mem.oc"
+              <pre data-occ-rejects="use-after-free: variable &#x27;chunk&#x27; used after arena &#x27;arena&#x27; was deinitialized"><code>import "std/mem.oc"
 
 struct Packet {
     id: i32,
@@ -584,7 +584,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/launder_escape.oc</span>
                 
               </div>
-              <pre><code>fn launder_escape() &amp;i32 {
+              <pre data-occ-rejects="cannot return reference to local stack variable &#x27;stolen_ptr&#x27;"><code>fn launder_escape() -&gt; &amp;i32 {
     let local: i32 = 1337;
     let raw_addr: usize = (&amp;local) as usize; // Cast pointer to integer
     let stolen_ptr: &amp;i32 = raw_addr as &amp;i32; // Cast integer back to pointer
@@ -622,7 +622,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/leak_test.oc</span>
                 
               </div>
-              <pre><code>struct Holder {
+              <pre data-occ-rejects="borrowed pointer escapes enclosing scope"><code>struct Holder {
     ptr: &amp;i32,
 }
 
@@ -661,7 +661,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/reset_exploit.oc</span>
                 
               </div>
-              <pre><code>import "std/mem.oc"
+              <pre data-occ-rejects="use-after-free: variable &#x27;p&#x27; used after arena &#x27;arena&#x27; was reset"><code>import "std/mem.oc"
 
 fn reset_exploit() {
     let mut arena = arena_init(1024);
@@ -706,7 +706,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/test1.oc</span>
                 
               </div>
-              <pre><code>struct Holder {
+              <pre data-occ-rejects="borrowed pointer escapes enclosing scope"><code>struct Holder {
     ptr: &amp;i32,
 }
 
@@ -747,7 +747,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/test2.oc</span>
                 
               </div>
-              <pre><code>fn main() {
+              <pre data-occ-rejects="borrowed pointer escapes enclosing scope"><code>fn main() {
     let mut arr: [2]&amp;i32 = [ (0).as(&amp;i32), (0).as(&amp;i32) ];
     {
         let x: i32 = 5;
@@ -782,7 +782,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/test3.oc</span>
                 
               </div>
-              <pre><code>fn main() {
+              <pre data-occ-rejects="borrowed pointer escapes enclosing scope"><code>fn main() {
     let mut dummy: i32 = 0;
     let mut outer: &amp;i32 = &amp;dummy;
     let mut p: &amp;mut &amp;i32 = &amp;mut outer;
@@ -819,7 +819,7 @@ fn main() {
                 <span>EXPLOIT POC: examples/exploits/vec_invalidation.oc</span>
                 
               </div>
-              <pre><code>struct Vector {
+              <pre data-occ-rejects="reference &#x27;elem_ref&#x27; invalidated by mutable operation on &#x27;vec&#x27;"><code>struct Vector {
     data: [4]i32,
     len: usize,
 }
