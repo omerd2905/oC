@@ -104,15 +104,25 @@ gcc -O2 bootstrap\occ_bootstrap.c -o bin\occ.exe
 bin\occ.exe run examples\hello.oc
 ```
 
-### Updating oC
-To update an existing installation to the latest commit:
+### 5. Put `occ` on your PATH (optional)
 ```bash
-./bin/occ update
+./bin/occ install
 
 # On Windows:
-bin\occ.exe update
+bin\occ.exe install
 ```
-*(Automatically pulls upstream changes via `git pull` and rebuilds the compiler binary).*
+- **Linux / macOS / BSD:** creates the symlink `~/.local/bin/occ` (add `~/.local/bin` to `PATH` if it is not there).
+- **Windows:** appends the `bin` directory to your user `PATH` (open a new terminal afterwards).
+- **NixOS / Nix:** `nix profile install .` builds and installs the flake's default package.
+
+After that, `occ build x.oc` works from any directory. `occ` locates `std/` relative to its own real location (`<prefix>/bin/occ` uses `<prefix>/std`), also when started through a symlink. To use a different standard library, set `OC_HOME` to the directory that contains `std/`.
+
+### Updating oC
+To update an existing installation to the latest commit (from any directory):
+```bash
+occ update
+```
+*(Runs `git pull` in the checkout the `occ` binary lives in and rebuilds the compiler from `bootstrap/occ_bootstrap.c`).*
 
 ---
 

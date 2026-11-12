@@ -12,6 +12,7 @@ extern fn system(cmd: *u8) -> i32;
 extern fn getenv(name: *u8) -> *u8;
 extern fn sys_mkdtemp(template: *mut u8) -> i32;
 extern fn sys_rmdir(path: *u8) -> i32;
+extern fn sys_exe_path(buf: *mut u8, cap: usize) -> i64;
 
 fn cstr_to_string(cstr: *u8) -> string {
     let mut len: usize = 0;
@@ -364,7 +365,9 @@ fn remove_private_tmp_dir(arena: *mut Arena, dir: string) {
 
 fn print_usage() {
     print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
-    print("       occ update | version | help   (also: --version, -v, --help, -h)");
+    print("       occ install | update | version | help   (also: --version, -v, --help, -h)");
+    print("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
+    print("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
     print("Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
 }
 
@@ -377,26 +380,131 @@ fn run_sys_cmd(cmd: string) -> i32 {
     return ret;
 }
 
-fn handle_update(host: i32) -> i32 {
+// Absolute path of the running occ binary with symlinks resolved, so the install is found when
+// occ is started by name from PATH or through a symlink. Falls back to argv[0].
+fn exe_path(arena: *mut Arena, argv0: string) -> string {
+    let buf: *mut u8 = arena_alloc(arena, 4096);
+    if buf.as(usize) != 0 {
+        let n: i64 = sys_exe_path(buf, 4096);
+        if n > 0 {
+            return string { ptr: buf.as(*u8), len: n.as(usize) };
+        }
+    }
+    return argv0;
+}
+
+// `occ update`: pull and rebuild the checkout this binary lives in (<repo>/bin/occ), from any
+// directory. `repo` is "" (use the current directory) or a shell-safe path ending in a separator.
+fn handle_update(host: i32, repo: string) -> i32 {
+    let mut cmd: CodeBuffer = buf_init(8192);
     print("Updating oC from git...");
-    let pull_ret: i32 = run_sys_cmd("git pull");
+    buf_append(&mut cmd, "git ");
+    if repo.len > 0 {
+        buf_append(&mut cmd, "-C ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, " ");
+    }
+    buf_append(&mut cmd, "pull");
+    let pull_ret: i32 = run_sys_cmd(buf_to_string(&mut cmd));
     if pull_ret != 0 {
-        print("error: 'git pull' failed. Make sure git is installed and you are in the oC repository.");
+        print("error: 'git pull' failed. Make sure git is installed and occ lives in <oC checkout>/bin (checkout used:)");
+        print(repo);
+        buf_deinit(&mut cmd);
         return 1;
     }
     print("Rebuilding oC compiler...");
-    let mut build_ret: i32 = 0;
+    cmd.len = 0;
     if host == OC_TARGET_WINDOWS_X86_64 {
-        build_ret = run_sys_cmd("if exist bin\\occ.exe move /y bin\\occ.exe bin\\occ.exe.old >nul 2>&1 & gcc -O2 bootstrap\\occ_bootstrap.c -o bin\\occ.exe");
+        // A running .exe cannot be overwritten, but it can be renamed out of the way.
+        buf_append(&mut cmd, "if exist ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bin\\occ.exe move /y ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bin\\occ.exe ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bin\\occ.exe.old >nul 2>&1 & gcc -O2 ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bootstrap\\occ_bootstrap.c -o ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bin\\occ.exe");
     } else {
-        build_ret = run_sys_cmd("cc -O2 bootstrap/occ_bootstrap.c -o bin/occ");
+        buf_append(&mut cmd, "cc -O2 ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bootstrap/occ_bootstrap.c -o ");
+        buf_append(&mut cmd, repo);
+        buf_append(&mut cmd, "bin/occ");
     }
+    let build_ret: i32 = run_sys_cmd(buf_to_string(&mut cmd));
+    buf_deinit(&mut cmd);
     if build_ret != 0 {
         print("error: failed to rebuild compiler from bootstrap/occ_bootstrap.c");
         return 1;
     }
     print("Successfully updated oC!");
     return 0;
+}
+
+// `occ install`: make `occ` runnable by name. POSIX: symlink into ~/.local/bin (std/ is found
+// through the symlink). Windows: append the binary's directory to the user PATH.
+fn handle_install(host: i32, exe: string, exe_dir: string) -> i32 {
+    let host_is_windows: bool = host == OC_TARGET_WINDOWS_X86_64;
+    if !is_safe_path(exe, host_is_windows) {
+        print("error: cannot install: the path of this occ binary has characters that are unsafe on a command line:");
+        print(exe);
+        return 1;
+    }
+    let mut cmd: CodeBuffer = buf_init(8192);
+    if host_is_windows {
+        let bin_dir: string = exe_dir[0..exe_dir.len - 1]; // without the trailing separator
+        buf_append(&mut cmd, "powershell -NoProfile -Command \"$d='");
+        buf_append(&mut cmd, bin_dir);
+        buf_append(&mut cmd, "'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\"");
+    } else {
+        buf_append(&mut cmd, "mkdir -p \"$HOME/.local/bin\" && ln -sf ");
+        buf_append(&mut cmd, exe);
+        buf_append(&mut cmd, " \"$HOME/.local/bin/occ\"");
+    }
+    let ret: i32 = run_sys_cmd(buf_to_string(&mut cmd));
+    buf_deinit(&mut cmd);
+    if ret != 0 {
+        print("error: install failed");
+        return 1;
+    }
+    if host_is_windows {
+        print("Added the oC bin directory to your user PATH. Open a new terminal, then run: occ --version");
+    } else {
+        print("Linked ~/.local/bin/occ. If 'occ' is not found, add ~/.local/bin to your PATH.");
+    }
+    return 0;
+}
+
+// `occ install` / `occ update`: both act on the install this binary belongs to.
+fn handle_self_cmd(is_install: bool, argv0: string) -> i32 {
+    let host: i32 = sys_host_target();
+    let host_is_windows: bool = host == OC_TARGET_WINDOWS_X86_64;
+    let mut arena: Arena = arena_init(65536);
+    let exe: string = exe_path(&mut arena, argv0);
+    let exe_dir: string = dir_of_path(&mut arena, exe);
+    let mut ret: i32 = 1;
+    if is_install {
+        if is_abs_path(exe) {
+            ret = handle_install(host, exe, exe_dir);
+        } else {
+            print("error: cannot install: could not determine the absolute path of this occ binary");
+        }
+    } else {
+        // occ lives in <repo>/bin; an unresolvable or shell-unsafe path falls back to the current directory.
+        let mut up: string = "../";
+        if host_is_windows { up = "..\\"; }
+        let cand: string = str_concat(&mut arena, exe_dir, up);
+        let mut repo: string = "";
+        if is_abs_path(exe) {
+            if is_safe_path(cand, host_is_windows) { repo = cand; }
+        }
+        ret = handle_update(host, repo);
+    }
+    arena_deinit(&mut arena);
+    return ret;
 }
 
 fn main(argc: i32, argv: **u8) -> i32 {
@@ -430,8 +538,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
             print_usage();
             return 0;
         } else if str_eq(first, "update") {
-            let host: i32 = sys_host_target();
-            return handle_update(host);
+            return handle_self_cmd(false, cstr_to_string(argv[0]));
+        } else if str_eq(first, "install") {
+            return handle_self_cmd(true, cstr_to_string(argv[0]));
         } else if str_eq(first, "run") {
             is_run = true;
             i = i + 1;
@@ -580,8 +689,13 @@ fn main(argc: i32, argv: **u8) -> i32 {
             }
         }
     }
-    let argv0: string = cstr_to_string(argv[0]);
-    let exe_dir: string = dir_of_path(&mut arena, argv0);
+    // std/ is looked up relative to the real location of this binary (<prefix>/bin/occ finds
+    // <prefix>/std), or under $OC_HOME (the directory that contains std/) when that is set.
+    let mut std_root: string = dir_of_path(&mut arena, exe_path(&mut arena, cstr_to_string(argv[0])));
+    let oc_home: string = env_str("OC_HOME");
+    if oc_home.len > 0 {
+        std_root = str_concat(&mut arena, oc_home, "/");
+    }
 
     let mut loader: ModuleLoader = ModuleLoader {
         visited: [""],
@@ -589,7 +703,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     };
     let mut combined_buf: CodeBuffer = buf_init(4194304);
 
-    let load_ok: bool = load_module_recursive(in_file_str, "", exe_dir, &mut combined_buf, &mut loader, &mut arena);
+    let load_ok: bool = load_module_recursive(in_file_str, "", std_root, &mut combined_buf, &mut loader, &mut arena);
     if !load_ok {
         buf_deinit(&mut combined_buf);
         arena_deinit(&mut arena);
