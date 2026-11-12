@@ -468,6 +468,7 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return ng_expr_type(ng, expr.left);
     }
     if expr.tag == NODE_BINARY {
+        if is_comparison_tok(expr.tok.tag) { return "bool"; }
         let lt: string = ng_expr_type(ng, expr.left);
         let rt: string = ng_expr_type(ng, expr.right);
         if lt.len > 0 { return lt; }
@@ -1666,6 +1667,44 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 }
 
+// Writes the literal text `raw` (escapes still encoded) plus a newline to stdout.
+fn ng_emit_print_lit(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, raw: string) {
+    let data_off: usize = data.len;
+    let emitted_len: usize = ng_append_unescaped_str(data, raw);
+    buf_append_u8(data, 10); // '\n'
+
+    let is_win: bool = ng.target == OC_TARGET_WINDOWS_X86_64;
+    if !is_win {
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 199);
+        buf_append_u8(code, 192);
+        elf_append_u32(code, 1);
+    }
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 199);
+    elf_append_u32(code, 1);
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 190);
+    let patch_pos: usize = code.len;
+    elf_append_u64(code, 0);
+    ng_add_data_reloc(ng, patch_pos, data_off);
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 194);
+    elf_append_u32(code, (emitted_len + 1).as(u32));
+
+    if is_win {
+        ng_emit_call(ng, code, "__win_write");
+    } else {
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 5);
+    }
+}
+
 fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, stmt: *mut AstNode) {
     if stmt == (0).as(*mut AstNode) { return; }
 
@@ -2038,40 +2077,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                         raw = raw[1..raw.len - 1];
                     }
                 }
-                let data_off: usize = data.len;
-                let emitted_len: usize = ng_append_unescaped_str(data, raw);
-                buf_append_u8(data, 10); // '\n'
-
-                let is_win: bool = ng.target == OC_TARGET_WINDOWS_X86_64;
-                if !is_win {
-                    buf_append_u8(code, 72);
-                    buf_append_u8(code, 199);
-                    buf_append_u8(code, 192);
-                    elf_append_u32(code, 1);
-                }
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 199);
-                buf_append_u8(code, 199);
-                elf_append_u32(code, 1);
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 190);
-                let patch_pos: usize = code.len;
-                elf_append_u64(code, 0);
-                ng_add_data_reloc(ng, patch_pos, data_off);
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 199);
-                buf_append_u8(code, 194);
-                elf_append_u32(code, (emitted_len + 1).as(u32));
-
-                if is_win {
-                    ng_emit_call(ng, code, "__win_write");
-                } else {
-                    buf_append_u8(code, 15);
-                    buf_append_u8(code, 5);
-                }
+                ng_emit_print_lit(ng, code, data, raw);
                 return;
             } else if ng_is_expr_slice(ng, arg) {
                 ng_emit_expr(ng, code, data, arg);
@@ -2087,6 +2093,36 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             } else {
                 let arg_t: string = ng_expr_type(ng, arg);
+                if str_eq(arg_t, "bool") {
+                    ng_emit_expr(ng, code, data, arg);
+                    buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 192); // test %rax, %rax
+                    buf_append_u8(code, 15); buf_append_u8(code, 132); // jz print_false
+                    let jz_pos: usize = code.len;
+                    elf_append_u32(code, 0);
+                    ng_emit_print_lit(ng, code, data, "true");
+                    buf_append_u8(code, 233); // jmp done
+                    let jmp_pos: usize = code.len;
+                    elf_append_u32(code, 0);
+                    elf_patch_i32(code, jz_pos, (code.len.as(i64) - (jz_pos + 4).as(i64)).as(i32));
+                    ng_emit_print_lit(ng, code, data, "false");
+                    elf_patch_i32(code, jmp_pos, (code.len.as(i64) - (jmp_pos + 4).as(i64)).as(i32));
+                    return;
+                }
+                if is_u8_array_type(arg_t) {
+                    // A [N]u8 prints as text up to the first NUL, and never past its N bytes.
+                    ng_emit_lvalue_addr(ng, code, data, arg);
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 199); // mov %rax, %rdi
+                    buf_append_u8(code, 49); buf_append_u8(code, 246);                           // xor %esi, %esi
+                    buf_append_u8(code, 72); buf_append_u8(code, 129); buf_append_u8(code, 254); // scan: cmp $N, %rsi
+                    elf_append_u32(code, ng_parse_array_len(arg_t).as(u32));
+                    buf_append_u8(code, 115); buf_append_u8(code, 11);                           // jae done
+                    buf_append_u8(code, 128); buf_append_u8(code, 60); buf_append_u8(code, 55); buf_append_u8(code, 0); // cmpb $0, (%rdi,%rsi)
+                    buf_append_u8(code, 116); buf_append_u8(code, 5);                            // je done
+                    buf_append_u8(code, 72); buf_append_u8(code, 255); buf_append_u8(code, 198); // inc %rsi
+                    buf_append_u8(code, 235); buf_append_u8(code, 236);                          // jmp scan
+                    ng_emit_call(ng, code, "__print_slice");                                     // done: (%rdi = ptr, %rsi = len)
+                    return;
+                }
                 ng_emit_expr(ng, code, data, arg);
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 137);
