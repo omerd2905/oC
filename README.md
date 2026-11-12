@@ -83,11 +83,11 @@ cd oC
 - **Windows:** GCC on `PATH` via [MSYS2](https://www.msys2.org/), [w64devkit](https://github.com/skeeto/w64devkit), or WinLibs (`winget install MSYS2.MSYS2`).
 
 ### 3. Bootstrap the Compiler
-The portable C source (`bootstrap/occ_bootstrap.c`) is committed in the repository so no existing `oC` installation is required:
+The portable C source (`bootstrap/occ_bootstrap.c`) is committed in the repository so no existing `oC` installation is required. The compiler binary itself is not committed; it is always built for your machine:
 
 On Linux, macOS, or BSD:
 ```bash
-cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
+make        # same as: cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
 ```
 
 On Windows:
