@@ -70,6 +70,14 @@ static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { 
 static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }
 #endif
 #endif
+#ifdef _WIN32
+#include <direct.h>
+static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }
+static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }
+#else
+static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }
+static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }
+#endif
 static inline void sys_exit(int32_t code) { _exit(code); }
 #if defined(_WIN32)
 static inline int32_t sys_host_target(void) { return 2; }
@@ -565,9 +573,10 @@ bool ends_with_exe(oc_string p);
 int32_t parse_target_name(oc_string name);
 bool is_macos_target(int32_t t);
 oc_string c_compiler_for(int32_t target, int32_t host);
-void append_hash_digits(CodeBuffer* buf, oc_string a, oc_string b);
 bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir, CodeBuffer* out, ModuleLoader* loader, Arena* arena);
-oc_string host_tmp_prefix(void);
+oc_string env_str(oc_string name);
+oc_string make_private_tmp_dir(Arena* arena, bool allow_backslash);
+void remove_private_tmp_dir(Arena* arena, oc_string dir);
 void print_usage(void);
 int32_t run_sys_cmd(oc_string cmd);
 int32_t handle_update(int32_t host);
@@ -4095,6 +4104,15 @@ bool is_builtin_c_fn(oc_string fn_name) {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("system"), .len = sizeof("system") - 1 })) {
     return true;
     }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("getenv"), .len = sizeof("getenv") - 1 })) {
+    return true;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_mkdtemp"), .len = sizeof("sys_mkdtemp") - 1 })) {
+    return true;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_rmdir"), .len = sizeof("sys_rmdir") - 1 })) {
+    return true;
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("exit"), .len = sizeof("exit") - 1 })) {
     return true;
     }
@@ -4194,6 +4212,14 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <direct.h>\n"), .len = sizeof("#include <direct.h>\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\n"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n"), .len = sizeof("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n") - 1 });
@@ -8368,35 +8394,6 @@ oc_string c_compiler_for(int32_t target, int32_t host) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
-void append_hash_digits(CodeBuffer* buf, oc_string a, oc_string b) {
-    uint64_t h = 5381;
-    size_t i = 0;
-    while ((i < ((a).len))) {
-    h = __OC_MOD((__OC_MUL(h, 33) ^ ({ __auto_type _v = (__oc_index_str(a, i)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; })), 1000000000);
-    i = __OC_ADD(i, 1);
-    }
-    i = 0;
-    while ((i < ((b).len))) {
-    h = __OC_MOD((__OC_MUL(h, 33) ^ ({ __auto_type _v = (__oc_index_str(b, i)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; })), 1000000000);
-    i = __OC_ADD(i, 1);
-    }
-    if ((h == 0)) {
-    buf_append_u8(buf, 48);
-    return;
-    }
-    uint8_t tmp[16] = {0};
-    size_t count = 0;
-    while ((h > 0)) {
-    __OC_AT((tmp), (count)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(h, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
-    h = __OC_DIV(h, 10);
-    count = __OC_ADD(count, 1);
-    }
-    while ((count > 0)) {
-    count = __OC_SUB(count, 1);
-    buf_append_u8(buf, __OC_AT((tmp), (count)));
-    }
-}
-
 bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir, CodeBuffer* out, ModuleLoader* loader, Arena* arena) {
     size_t i = 0;
     while ((i < ((loader)->visited_count))) {
@@ -8541,12 +8538,51 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     return true;
 }
 
-oc_string host_tmp_prefix(void) {
-    if (write_file((oc_string){ .ptr = (const uint8_t*)("/tmp/.occ_probe"), .len = sizeof("/tmp/.occ_probe") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 })) {
-    unlink_file((oc_string){ .ptr = (const uint8_t*)("/tmp/.occ_probe"), .len = sizeof("/tmp/.occ_probe") - 1 });
-    return (oc_string){ .ptr = (const uint8_t*)("/tmp/"), .len = sizeof("/tmp/") - 1 };
+oc_string env_str(oc_string name) {
+    uint8_t* p = getenv(((name).ptr));
+    if ((((size_t)(p)) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
-    return (oc_string){ .ptr = (const uint8_t*)("."), .len = sizeof(".") - 1 };
+    return cstr_to_string(p);
+}
+
+oc_string make_private_tmp_dir(Arena* arena, bool allow_backslash) {
+    oc_string bases[4] = {0};
+    __OC_AT((bases), (0)) = env_str((oc_string){ .ptr = (const uint8_t*)("TMPDIR"), .len = sizeof("TMPDIR") - 1 });
+    __OC_AT((bases), (1)) = env_str((oc_string){ .ptr = (const uint8_t*)("TEMP"), .len = sizeof("TEMP") - 1 });
+    __OC_AT((bases), (2)) = (oc_string){ .ptr = (const uint8_t*)("/tmp"), .len = sizeof("/tmp") - 1 };
+    __OC_AT((bases), (3)) = (oc_string){ .ptr = (const uint8_t*)("."), .len = sizeof(".") - 1 };
+    size_t i = 0;
+    while ((i < 4)) {
+    if (is_safe_path(__OC_AT((bases), (i)), allow_backslash)) {
+    oc_string tmpl = str_concat(arena, __OC_AT((bases), (i)), (oc_string){ .ptr = (const uint8_t*)("/occ_XXXXXX"), .len = sizeof("/occ_XXXXXX") - 1 });
+    uint8_t* buf = arena_alloc(arena, __OC_ADD(((tmpl).len), 1));
+    if ((((size_t)(buf)) != 0)) {
+    size_t k = 0;
+    while ((k < ((tmpl).len))) {
+    __OC_AT((buf), (k)) = __oc_index_str(tmpl, k);
+    k = __OC_ADD(k, 1);
+    }
+    __OC_AT((buf), (((tmpl).len))) = 0;
+    if ((sys_mkdtemp(buf) == 0)) {
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((tmpl).len) };
+    }
+    }
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+void remove_private_tmp_dir(Arena* arena, oc_string dir) {
+    if ((((dir).len) == 0)) {
+    return;
+    }
+    unlink_file(str_concat(arena, dir, (oc_string){ .ptr = (const uint8_t*)("/stage.c"), .len = sizeof("/stage.c") - 1 }));
+    unlink_file(str_concat(arena, dir, (oc_string){ .ptr = (const uint8_t*)("/run"), .len = sizeof("/run") - 1 }));
+    unlink_file(str_concat(arena, dir, (oc_string){ .ptr = (const uint8_t*)("/run.exe"), .len = sizeof("/run.exe") - 1 }));
+    uint8_t pbuf[4096] = {0};
+    sys_rmdir(cstr_path(dir, ((uint8_t*)((&(pbuf))))));
 }
 
 void print_usage(void) {
@@ -8773,18 +8809,13 @@ int main(int argc, char** argv) {
     printf("%s\n", "error: unsafe characters in file path");
     return 1;
     }
-    oc_string tmp_prefix = host_tmp_prefix();
     bool is_temp_out = false;
-    CodeBuffer run_path_buf = buf_init(256);
     if (is_run) {
     if ((((out_file_str).len) == 0)) {
     is_temp_out = true;
-    buf_append((&(run_path_buf)), tmp_prefix);
-    buf_append((&(run_path_buf)), (oc_string){ .ptr = (const uint8_t*)("occ_run_"), .len = sizeof("occ_run_") - 1 });
-    append_hash_digits((&(run_path_buf)), in_file_str, (oc_string){ .ptr = (const uint8_t*)("bin"), .len = sizeof("bin") - 1 });
-    out_file_str = buf_to_string((&(run_path_buf)));
     }
     }
+    if ((!is_temp_out)) {
     if ((((out_file_str).len) == 0)) {
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
     out_file_str = (oc_string){ .ptr = (const uint8_t*)("a.exe"), .len = sizeof("a.exe") - 1 };
@@ -8795,13 +8826,15 @@ int main(int argc, char** argv) {
     }
     if ((!is_safe_path(out_file_str, host_is_windows))) {
     printf("%s\n", "error: unsafe characters in file path");
-    buf_deinit((&(run_path_buf)));
     return 1;
     }
+    }
     Arena arena = arena_init(33554432);
+    if ((!is_temp_out)) {
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
     if ((!ends_with_exe(out_file_str))) {
     out_file_str = str_concat((&(arena)), out_file_str, (oc_string){ .ptr = (const uint8_t*)(".exe"), .len = sizeof(".exe") - 1 });
+    }
     }
     }
     oc_string argv0 = cstr_to_string(__OC_AT((argv), (0)));
@@ -8811,7 +8844,6 @@ int main(int argc, char** argv) {
     bool load_ok = load_module_recursive(in_file_str, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, exe_dir, (&(combined_buf)), (&(loader)), (&(arena)));
     if ((!load_ok)) {
     buf_deinit((&(combined_buf)));
-    buf_deinit((&(run_path_buf)));
     arena_deinit((&(arena)));
     return 1;
     }
@@ -8821,19 +8853,36 @@ int main(int argc, char** argv) {
     if (((parser).has_error)) {
     printf("%s\n", "compilation aborted due to parse errors");
     buf_deinit((&(combined_buf)));
-    buf_deinit((&(run_path_buf)));
     arena_deinit((&(arena)));
     return 1;
     }
     bool valid = validate_program(prog);
     if ((!valid)) {
     buf_deinit((&(combined_buf)));
-    buf_deinit((&(run_path_buf)));
     arena_deinit((&(arena)));
     return 1;
     }
+    oc_string tmp_dir = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    bool need_tmp = is_temp_out;
+    if ((!is_native)) {
+    need_tmp = true;
+    }
+    if (need_tmp) {
+    tmp_dir = make_private_tmp_dir((&(arena)), host_is_windows);
+    if ((((tmp_dir).len) == 0)) {
+    printf("%s\n", "error: failed to create a private temporary directory (tried $TMPDIR, $TEMP, /tmp and .)");
+    buf_deinit((&(combined_buf)));
+    arena_deinit((&(arena)));
+    return 1;
+    }
+    }
     if (is_temp_out) {
-    unlink_file(out_file_str);
+    if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
+    out_file_str = str_concat((&(arena)), tmp_dir, (oc_string){ .ptr = (const uint8_t*)("/run.exe"), .len = sizeof("/run.exe") - 1 });
+    }
+    else {
+    out_file_str = str_concat((&(arena)), tmp_dir, (oc_string){ .ptr = (const uint8_t*)("/run"), .len = sizeof("/run") - 1 });
+    }
     }
     if (is_native) {
     bool ok_native = false;
@@ -8846,7 +8895,7 @@ int main(int argc, char** argv) {
     buf_deinit((&(combined_buf)));
     if ((!ok_native)) {
     printf("%s\n", "error: native image emission failed");
-    buf_deinit((&(run_path_buf)));
+    remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     return 1;
     }
@@ -8855,13 +8904,7 @@ int main(int argc, char** argv) {
     CodeBuffer out = buf_init(4194304);
     codegen_program(prog, (&(out)));
     buf_deinit((&(combined_buf)));
-    CodeBuffer stage_path_buf = buf_init(256);
-    buf_append((&(stage_path_buf)), tmp_prefix);
-    buf_append((&(stage_path_buf)), (oc_string){ .ptr = (const uint8_t*)("occ_stage_"), .len = sizeof("occ_stage_") - 1 });
-    append_hash_digits((&(stage_path_buf)), in_file_str, (oc_string){ .ptr = (const uint8_t*)("stage"), .len = sizeof("stage") - 1 });
-    buf_append((&(stage_path_buf)), (oc_string){ .ptr = (const uint8_t*)(".c"), .len = sizeof(".c") - 1 });
-    oc_string stage_c_path = buf_to_string((&(stage_path_buf)));
-    unlink_file(stage_c_path);
+    oc_string stage_c_path = str_concat((&(arena)), tmp_dir, (oc_string){ .ptr = (const uint8_t*)("/stage.c"), .len = sizeof("/stage.c") - 1 });
     oc_string c_code = buf_to_string((&(out)));
     if ((((emit_c_str).len) > 0)) {
     if (is_safe_path(emit_c_str, host_is_windows)) {
@@ -8871,9 +8914,8 @@ int main(int argc, char** argv) {
     bool ok = write_file(stage_c_path, c_code);
     if ((!ok)) {
     printf("%s\n", "error: failed to write temporary C stage file");
-    buf_deinit((&(stage_path_buf)));
     buf_deinit((&(out)));
-    buf_deinit((&(run_path_buf)));
+    remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     return 1;
     }
@@ -8889,14 +8931,10 @@ int main(int argc, char** argv) {
     buf_deinit((&(cmd_buf)));
     buf_deinit((&(out)));
     unlink_file(stage_c_path);
-    buf_deinit((&(stage_path_buf)));
     if ((ret != 0)) {
     printf("%s\n", "error: C compiler failed:");
     __oc_print(cc_cmd);
-    if (is_temp_out) {
-    unlink_file(out_file_str);
-    }
-    buf_deinit((&(run_path_buf)));
+    remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     return 1;
     }
@@ -8928,10 +8966,7 @@ int main(int argc, char** argv) {
     buf_append_u8((&(run_cmd)), 0);
     int32_t raw_ret = system(((uint8_t*)(((run_cmd).buffer))));
     buf_deinit((&(run_cmd)));
-    if (is_temp_out) {
-    unlink_file(out_file_str);
-    }
-    buf_deinit((&(run_path_buf)));
+    remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     int32_t exit_code = raw_ret;
     if ((!host_is_windows)) {
@@ -8950,7 +8985,7 @@ int main(int argc, char** argv) {
     }
     return exit_code;
     }
-    buf_deinit((&(run_path_buf)));
+    remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     return 0;
     return 0;
