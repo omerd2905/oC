@@ -788,6 +788,11 @@ fn main(argc: i32, argv: **u8) -> i32 {
         let mut cmd_buf: CodeBuffer = buf_init(512);
         buf_append(&mut cmd_buf, cc_cmd);
         buf_append(&mut cmd_buf, opt_flag);
+        if out_target == OC_TARGET_WINDOWS_X86_64 {
+            // MinGW ld stamps the link time into the PE header; without it identical input
+            // gives a byte-identical .exe (reproducible builds, stage2 == stage3 by plain hash).
+            buf_append(&mut cmd_buf, " -Wl,--no-insert-timestamp");
+        }
         buf_append(&mut cmd_buf, " ");
         buf_append(&mut cmd_buf, stage_c_path);
         buf_append(&mut cmd_buf, " -o ");

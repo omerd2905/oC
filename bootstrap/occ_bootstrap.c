@@ -9061,6 +9061,9 @@ int main(int argc, char** argv) {
     CodeBuffer cmd_buf = buf_init(512);
     buf_append((&(cmd_buf)), cc_cmd);
     buf_append((&(cmd_buf)), opt_flag);
+    if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
+    buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" -Wl,--no-insert-timestamp"), .len = sizeof(" -Wl,--no-insert-timestamp") - 1 });
+    }
     buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
     buf_append((&(cmd_buf)), stage_c_path);
     buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" -o "), .len = sizeof(" -o ") - 1 });
