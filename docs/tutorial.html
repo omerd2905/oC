@@ -510,7 +510,7 @@
               </div>
             </div>
             <div class="explanation-box">
-              <strong>Architecture:</strong> Both <code>occ -O2</code> and <code>--backend native</code> generate standard Linux x86_64 System V ABI call frames (<code>%rdi</code>, <code>%rsi</code>, <code>%rdx</code>). The empirical benchmark suite executes 78.1M recursive calls in 79 ms, demonstrating exact parity with GCC.
+              <strong>Architecture:</strong> Both <code>occ -O2</code> and <code>--backend native</code> generate standard Linux x86_64 System V ABI call frames (<code>%rdi</code>, <code>%rsi</code>, <code>%rdx</code>). On the recursive <code>fib(38)</code> + Collatz benchmark the C backend takes about 2.6x the time of plain C (197 ms vs 77 ms): overflow checks on <code>+</code> keep <code>gcc</code> from removing one of the two recursive calls.
             </div>
           </div>
         </div>
