@@ -18,6 +18,7 @@ RUNTIME_TRAP=(
   "probe_underflow_usize.oc"
   "probe_div_zero.oc"
   "probe_slice_bounds.oc"
+  "probe_array_bounds.oc"
   "probe_cast_narrow_i8.oc"
   "probe_cast_neg_u64.oc"
 )
