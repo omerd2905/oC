@@ -167,7 +167,7 @@
 
         <h3><code>run &lt;input.oc&gt;</code></h3>
         <p>
-          Compiles the source file to a temporary location (default: <code>/tmp/occ_run_bin</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller. On Windows hosts the binary is launched through <code>cmd.exe</code> as <code>.\name.exe</code>. <code>run</code> refuses an explicit <code>--target</code> for another platform; use <code>build</code> to cross-compile.
+          Compiles the source file to a temporary location (a private directory created with <code>mkdtemp</code> under <code>$TMPDIR</code>, default <code>/tmp</code>), executes the binary immediately, automatically removes the temporary binary upon termination, and propagates the child program's exact exit status code back to the caller. On Windows hosts the binary is launched through <code>cmd.exe</code> as <code>.\name.exe</code>. <code>run</code> refuses an explicit <code>--target</code> for another platform; use <code>build</code> to cross-compile.
         </p>
         <div class="example-card">
           <div class="example-header">
@@ -214,7 +214,7 @@ All 4 suites completed successfully.</code></pre>
             <tr>
               <td><code>-o</code></td>
               <td><code>&lt;path&gt;</code></td>
-              <td><code>a.out</code> / <code>a.exe</code> (build)<br><code>/tmp/occ_run_&lt;hash&gt;</code> (run)</td>
+              <td><code>a.out</code> / <code>a.exe</code> (build)<br><code>$TMPDIR/occ_XXXXXX/run</code> (run; private directory, removed afterwards)</td>
               <td>
                 Specifies the output binary path. The path is verified by <code>is_safe_path()</code> against POSIX shell and <code>cmd.exe</code> metacharacters (<code>;</code>, <code>&amp;</code>, <code>|</code>, <code>`</code>, <code>$</code>, <code>&gt;</code>, <code>&lt;</code>, quotes, <code>%</code>, <code>^</code>, <code>!</code>) to prevent command injection. Backslash is accepted as a path separator on Windows hosts only.
               </td>

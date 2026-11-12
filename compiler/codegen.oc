@@ -812,6 +812,9 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
 
 fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "system") { return true; }
+    if str_eq(fn_name, "getenv") { return true; }
+    if str_eq(fn_name, "sys_mkdtemp") { return true; }
+    if str_eq(fn_name, "sys_rmdir") { return true; }
     if str_eq(fn_name, "exit") { return true; }
     if str_eq(fn_name, "sys_read") { return true; }
     if str_eq(fn_name, "sys_write") { return true; }
@@ -887,6 +890,15 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#else\n");
     buf_append(out, "static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n");
     buf_append(out, "#endif\n");
+    buf_append(out, "#endif\n");
+    // Private temporary directory (compiler driver): created atomically, never an existing path.
+    buf_append(out, "#ifdef _WIN32\n");
+    buf_append(out, "#include <direct.h>\n");
+    buf_append(out, "static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n");
+    buf_append(out, "static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n");
+    buf_append(out, "#else\n");
+    buf_append(out, "static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n");
+    buf_append(out, "static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n");
     buf_append(out, "#endif\n");
     buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
     // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.

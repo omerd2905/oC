@@ -9,6 +9,9 @@ import "compiler/codegen.oc";
 import "compiler/elf.oc";
 
 extern fn system(cmd: *u8) -> i32;
+extern fn getenv(name: *u8) -> *u8;
+extern fn sys_mkdtemp(template: *mut u8) -> i32;
+extern fn sys_rmdir(path: *u8) -> i32;
 
 fn cstr_to_string(cstr: *u8) -> string {
     let mut len: usize = 0;
@@ -157,35 +160,6 @@ fn c_compiler_for(target: i32, host: i32) -> string {
         if target == OC_TARGET_MACOS_AARCH64 { return "cc -arch arm64"; }
     }
     return "";
-}
-
-fn append_hash_digits(buf: *mut CodeBuffer, a: string, b: string) {
-    let mut h: u64 = 5381;
-    let mut i: usize = 0;
-    while i < a.len {
-        h = ((h * 33) ^ a[i].as(u64)) % 1000000000;
-        i = i + 1;
-    }
-    i = 0;
-    while i < b.len {
-        h = ((h * 33) ^ b[i].as(u64)) % 1000000000;
-        i = i + 1;
-    }
-    if h == 0 {
-        buf_append_u8(buf, 48);
-        return;
-    }
-    let mut tmp: [16]u8 = [0];
-    let mut count: usize = 0;
-    while h > 0 {
-        tmp[count] = (48 + (h % 10)).as(u8);
-        h = h / 10;
-        count = count + 1;
-    }
-    while count > 0 {
-        count = count - 1;
-        buf_append_u8(buf, tmp[count]);
-    }
 }
 
 fn load_module_recursive(
@@ -342,13 +316,50 @@ fn load_module_recursive(
     return true;
 }
 
-fn host_tmp_prefix() -> string {
-    // POSIX hosts use /tmp/; hosts without it (native Windows) fall back to hidden files in CWD.
-    if write_file("/tmp/.occ_probe", "") {
-        unlink_file("/tmp/.occ_probe");
-        return "/tmp/";
+fn env_str(name: string) -> string {
+    let p: *u8 = getenv(name.ptr);
+    if p.as(usize) == 0 { return ""; }
+    return cstr_to_string(p);
+}
+
+// Creates a fresh directory only this user can access (mkdtemp, mode 0700) for intermediate
+// files, so no other user can pre-create or swap them (CWE-377 / CWE-367). "" on failure.
+fn make_private_tmp_dir(arena: *mut Arena, allow_backslash: bool) -> string {
+    let mut bases: [4]string = [""];
+    bases[0] = env_str("TMPDIR");
+    bases[1] = env_str("TEMP"); // Windows
+    bases[2] = "/tmp";
+    bases[3] = ".";             // last resort: the current directory
+    let mut i: usize = 0;
+    while i < 4 {
+        // The path ends up on a shell command line, so an unsafe base is skipped, not quoted.
+        if is_safe_path(bases[i], allow_backslash) {
+            let tmpl: string = str_concat(arena, bases[i], "/occ_XXXXXX");
+            let buf: *mut u8 = arena_alloc(arena, tmpl.len + 1);
+            if buf.as(usize) != 0 {
+                let mut k: usize = 0;
+                while k < tmpl.len {
+                    buf[k] = tmpl[k];
+                    k = k + 1;
+                }
+                buf[tmpl.len] = 0;
+                if sys_mkdtemp(buf) == 0 {
+                    return string { ptr: buf.as(*u8), len: tmpl.len };
+                }
+            }
+        }
+        i = i + 1;
     }
-    return ".";
+    return "";
+}
+
+fn remove_private_tmp_dir(arena: *mut Arena, dir: string) {
+    if dir.len == 0 { return; }
+    unlink_file(str_concat(arena, dir, "/stage.c"));
+    unlink_file(str_concat(arena, dir, "/run"));
+    unlink_file(str_concat(arena, dir, "/run.exe"));
+    let mut pbuf: [4096]u8 = [0];
+    sys_rmdir(cstr_path(dir, (&mut pbuf).as(*mut u8)));
 }
 
 fn print_usage() {
@@ -540,36 +551,33 @@ fn main(argc: i32, argv: **u8) -> i32 {
         return 1;
     }
 
-    let tmp_prefix: string = host_tmp_prefix();
+    // `occ run` without -o executes a throwaway binary placed in the private temp directory.
     let mut is_temp_out: bool = false;
-    let mut run_path_buf: CodeBuffer = buf_init(256);
     if is_run {
         if out_file_str.len == 0 {
             is_temp_out = true;
-            buf_append(&mut run_path_buf, tmp_prefix);
-            buf_append(&mut run_path_buf, "occ_run_");
-            append_hash_digits(&mut run_path_buf, in_file_str, "bin");
-            out_file_str = buf_to_string(&mut run_path_buf);
         }
     }
-    if out_file_str.len == 0 {
-        if out_target == OC_TARGET_WINDOWS_X86_64 {
-            out_file_str = "a.exe";
-        } else {
-            out_file_str = "a.out";
+    if !is_temp_out {
+        if out_file_str.len == 0 {
+            if out_target == OC_TARGET_WINDOWS_X86_64 {
+                out_file_str = "a.exe";
+            } else {
+                out_file_str = "a.out";
+            }
         }
-    }
-
-    if !is_safe_path(out_file_str, host_is_windows) {
-        print("error: unsafe characters in file path");
-        buf_deinit(&mut run_path_buf);
-        return 1;
+        if !is_safe_path(out_file_str, host_is_windows) {
+            print("error: unsafe characters in file path");
+            return 1;
+        }
     }
 
     let mut arena: Arena = arena_init(33554432);
-    if out_target == OC_TARGET_WINDOWS_X86_64 {
-        if !ends_with_exe(out_file_str) {
-            out_file_str = str_concat(&mut arena, out_file_str, ".exe");
+    if !is_temp_out {
+        if out_target == OC_TARGET_WINDOWS_X86_64 {
+            if !ends_with_exe(out_file_str) {
+                out_file_str = str_concat(&mut arena, out_file_str, ".exe");
+            }
         }
     }
     let argv0: string = cstr_to_string(argv[0]);
@@ -584,7 +592,6 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let load_ok: bool = load_module_recursive(in_file_str, "", exe_dir, &mut combined_buf, &mut loader, &mut arena);
     if !load_ok {
         buf_deinit(&mut combined_buf);
-        buf_deinit(&mut run_path_buf);
         arena_deinit(&mut arena);
         return 1;
     }
@@ -596,7 +603,6 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if parser.has_error {
         print("compilation aborted due to parse errors");
         buf_deinit(&mut combined_buf);
-        buf_deinit(&mut run_path_buf);
         arena_deinit(&mut arena);
         return 1;
     }
@@ -605,13 +611,29 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let valid: bool = validate_program(prog);
     if !valid {
         buf_deinit(&mut combined_buf);
-        buf_deinit(&mut run_path_buf);
         arena_deinit(&mut arena);
         return 1;
     }
 
+    // Intermediate files (C stage file, `occ run` binary) live in a private directory.
+    let mut tmp_dir: string = "";
+    let mut need_tmp: bool = is_temp_out;
+    if !is_native { need_tmp = true; }
+    if need_tmp {
+        tmp_dir = make_private_tmp_dir(&mut arena, host_is_windows);
+        if tmp_dir.len == 0 {
+            print("error: failed to create a private temporary directory (tried $TMPDIR, $TEMP, /tmp and .)");
+            buf_deinit(&mut combined_buf);
+            arena_deinit(&mut arena);
+            return 1;
+        }
+    }
     if is_temp_out {
-        unlink_file(out_file_str);
+        if out_target == OC_TARGET_WINDOWS_X86_64 {
+            out_file_str = str_concat(&mut arena, tmp_dir, "/run.exe");
+        } else {
+            out_file_str = str_concat(&mut arena, tmp_dir, "/run");
+        }
     }
 
     if is_native {
@@ -624,7 +646,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         buf_deinit(&mut combined_buf);
         if !ok_native {
             print("error: native image emission failed");
-            buf_deinit(&mut run_path_buf);
+            remove_private_tmp_dir(&mut arena, tmp_dir);
             arena_deinit(&mut arena);
             return 1;
         }
@@ -633,14 +655,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         codegen_program(prog, &mut out);
         buf_deinit(&mut combined_buf);
 
-        let mut stage_path_buf: CodeBuffer = buf_init(256);
-        buf_append(&mut stage_path_buf, tmp_prefix);
-        buf_append(&mut stage_path_buf, "occ_stage_");
-        append_hash_digits(&mut stage_path_buf, in_file_str, "stage");
-        buf_append(&mut stage_path_buf, ".c");
-        let stage_c_path: string = buf_to_string(&mut stage_path_buf);
-
-        unlink_file(stage_c_path);
+        let stage_c_path: string = str_concat(&mut arena, tmp_dir, "/stage.c");
         let c_code: string = buf_to_string(&mut out);
         if emit_c_str.len > 0 {
             if is_safe_path(emit_c_str, host_is_windows) {
@@ -650,9 +665,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
         let ok: bool = write_file(stage_c_path, c_code);
         if !ok {
             print("error: failed to write temporary C stage file");
-            buf_deinit(&mut stage_path_buf);
             buf_deinit(&mut out);
-            buf_deinit(&mut run_path_buf);
+            remove_private_tmp_dir(&mut arena, tmp_dir);
             arena_deinit(&mut arena);
             return 1;
         }
@@ -671,15 +685,11 @@ fn main(argc: i32, argv: **u8) -> i32 {
         buf_deinit(&mut cmd_buf);
         buf_deinit(&mut out);
         unlink_file(stage_c_path);
-        buf_deinit(&mut stage_path_buf);
 
         if ret != 0 {
             print("error: C compiler failed:");
             print(cc_cmd);
-            if is_temp_out {
-                unlink_file(out_file_str);
-            }
-            buf_deinit(&mut run_path_buf);
+            remove_private_tmp_dir(&mut arena, tmp_dir);
             arena_deinit(&mut arena);
             return 1;
         }
@@ -712,10 +722,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         let raw_ret: i32 = system(run_cmd.buffer.as(*u8));
         buf_deinit(&mut run_cmd);
 
-        if is_temp_out {
-            unlink_file(out_file_str);
-        }
-        buf_deinit(&mut run_path_buf);
+        remove_private_tmp_dir(&mut arena, tmp_dir);
         arena_deinit(&mut arena);
 
         // POSIX system() returns a wait status; the Windows CRT returns the exit code itself.
@@ -735,7 +742,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         return exit_code;
     }
 
-    buf_deinit(&mut run_path_buf);
+    remove_private_tmp_dir(&mut arena, tmp_dir);
     arena_deinit(&mut arena);
     return 0;
 }
