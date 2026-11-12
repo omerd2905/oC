@@ -21,6 +21,8 @@ COMPILE_REJECT=(
   "probe_indirect_deinit_uaf.oc|use-after-free: variable 'p' used after arena 'a' was deinitialized"
   "probe_indirect_reset_uaf.oc|use-after-free: variable 'p' used after arena 'a' was reset"
   "probe_array_slice_escape.oc|cannot return reference to local stack variable 's'"
+  "probe_struct_wrap_uaf.oc|use-after-free: variable 's' used after arena 'a' was reset"
+  "probe_field_slice_escape.oc|cannot return reference to local stack variable 'm'"
 )
 
 RUNTIME_TRAP=(
