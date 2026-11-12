@@ -119,6 +119,8 @@ static inline uint8_t __oc_index_str(oc_string s, size_t idx) {
     return s.ptr[idx];
 }
 
+#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); } &(a)[_i]; })))
+
 static inline int64_t __oc_div_check(int64_t a, int64_t b) {
     if (b == 0) { fprintf(stderr, "panic: division by zero\n"); exit(1); }
     return a / b;
@@ -549,7 +551,7 @@ int32_t read_int(void) {
     int32_t res = 0;
     size_t i = 0;
     while ((i < ({ __auto_type _v = (bytes); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))) {
-    uint8_t c = ((buf)[i]);
+    uint8_t c = __OC_AT((buf), (i));
     if ((c >= 48)) {
     if ((c <= 57)) {
     res = __OC_ADD(__OC_MUL(res, 10), ({ __auto_type _v = (__OC_SUB(c, 48)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
@@ -567,10 +569,10 @@ uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
     }
     size_t i = 0;
     while ((i < len)) {
-    ((out_buf)[i]) = __oc_index_str(path, i);
+    __OC_AT((out_buf), (i)) = __oc_index_str(path, i);
     i = __OC_ADD(i, 1);
     }
-    ((out_buf)[len]) = 0;
+    __OC_AT((out_buf), (len)) = 0;
     return ((uint8_t*)(out_buf));
 }
 
@@ -644,7 +646,7 @@ uint8_t* arena_alloc(Arena* arena, size_t size) {
 void arena_reset(Arena* arena) {
     size_t i = 0;
     while ((i < ((arena)->offset))) {
-    ((((arena)->buffer))[i]) = 0;
+    __OC_AT((((arena)->buffer)), (i)) = 0;
     i = __OC_ADD(i, 1);
     }
     ((arena)->offset) = 0;
@@ -653,7 +655,7 @@ void arena_reset(Arena* arena) {
 void arena_deinit(Arena* arena) {
     size_t i = 0;
     while ((i < ((arena)->offset))) {
-    ((((arena)->buffer))[i]) = 0;
+    __OC_AT((((arena)->buffer)), (i)) = 0;
     i = __OC_ADD(i, 1);
     }
     sys_munmap(((void*)(((arena)->buffer))), ((arena)->capacity));
@@ -2032,7 +2034,7 @@ int32_t validator_find_var(Validator* v, oc_string name) {
     size_t i = ((v)->vars_count);
     while ((i > 0)) {
     i = __OC_SUB(i, 1);
-    if (str_eq(((((((v)->vars))[i])).name), name)) {
+    if (str_eq(((__OC_AT((((v)->vars)), (i))).name), name)) {
     return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     }
     }
@@ -2043,8 +2045,8 @@ void validator_set_points_to_stack_local(Validator* v, oc_string name) {
     size_t i = ((v)->vars_count);
     while ((i > 0)) {
     i = __OC_SUB(i, 1);
-    if (str_eq(((((((v)->vars))[i])).name), name)) {
-    ((((((v)->vars))[i])).points_to_stack_local) = true;
+    if (str_eq(((__OC_AT((((v)->vars)), (i))).name), name)) {
+    ((__OC_AT((((v)->vars)), (i))).points_to_stack_local) = true;
     return;
     }
     }
@@ -2053,7 +2055,7 @@ void validator_set_points_to_stack_local(Validator* v, oc_string name) {
 bool validator_is_arena_deinit(Validator* v, oc_string name) {
     size_t i = 0;
     while ((i < ((v)->deinit_count))) {
-    if (str_eq(((((v)->deinit_arenas))[i]), name)) {
+    if (str_eq(__OC_AT((((v)->deinit_arenas)), (i)), name)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -2064,8 +2066,8 @@ bool validator_is_arena_deinit(Validator* v, oc_string name) {
 void validator_invalidate_arena(Validator* v, oc_string arena_name) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
-    if (str_eq(((((((v)->vars))[i])).borrowed_from_arena), arena_name)) {
-    ((((((v)->vars))[i])).is_invalidated) = true;
+    if (str_eq(((__OC_AT((((v)->vars)), (i))).borrowed_from_arena), arena_name)) {
+    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = true;
     }
     i = __OC_ADD(i, 1);
     }
@@ -2074,8 +2076,8 @@ void validator_invalidate_arena(Validator* v, oc_string arena_name) {
 void validator_invalidate_var(Validator* v, oc_string var_name) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
-    if (str_eq(((((((v)->vars))[i])).borrowed_from_var), var_name)) {
-    ((((((v)->vars))[i])).is_invalidated) = true;
+    if (str_eq(((__OC_AT((((v)->vars)), (i))).borrowed_from_var), var_name)) {
+    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = true;
     }
     i = __OC_ADD(i, 1);
     }
@@ -2149,7 +2151,7 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     if ((((expr)->tag) == NODE_IDENT)) {
     int32_t idx = validator_find_var(v, ((((expr)->tok)).slice));
     if ((idx >= 0)) {
-    return ((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_arena);
+    return ((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena);
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
@@ -2164,7 +2166,7 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
-    return ((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_arena);
+    return ((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena);
     }
     }
     return get_expr_arena_borrow(v, ((expr)->left));
@@ -2188,7 +2190,7 @@ oc_string contains_stack_ref(Validator* v, AstNode* expr) {
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local)) {
     return id;
     }
     }
@@ -2199,7 +2201,7 @@ oc_string contains_stack_ref(Validator* v, AstNode* expr) {
     oc_string id = ((((expr)->tok)).slice);
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).points_to_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).points_to_stack_local)) {
     return id;
     }
     }
@@ -2329,19 +2331,19 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     int32_t idx = validator_find_var(v, ((((expr)->tok)).slice));
     if ((idx >= 0)) {
     size_t i = ({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
-    if (((((((v)->vars))[i])).is_invalidated)) {
-    if ((((((((((v)->vars))[i])).borrowed_from_var)).len) > 0)) {
-    print_err_ref_invalidated(((((expr)->tok)).slice), ((((((v)->vars))[i])).borrowed_from_var));
+    if (((__OC_AT((((v)->vars)), (i))).is_invalidated)) {
+    if ((((((__OC_AT((((v)->vars)), (i))).borrowed_from_var)).len) > 0)) {
+    print_err_ref_invalidated(((((expr)->tok)).slice), ((__OC_AT((((v)->vars)), (i))).borrowed_from_var));
     ((v)->has_error) = true;
     return false;
     }
-    print_err_uaf_reset(((((expr)->tok)).slice), ((((((v)->vars))[i])).borrowed_from_arena));
+    print_err_uaf_reset(((((expr)->tok)).slice), ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena));
     ((v)->has_error) = true;
     return false;
     }
-    if ((((((((((v)->vars))[i])).borrowed_from_arena)).len) > 0)) {
-    if (validator_is_arena_deinit(v, ((((((v)->vars))[i])).borrowed_from_arena))) {
-    print_err_uaf_deinit(((((expr)->tok)).slice), ((((((v)->vars))[i])).borrowed_from_arena));
+    if ((((((__OC_AT((((v)->vars)), (i))).borrowed_from_arena)).len) > 0)) {
+    if (validator_is_arena_deinit(v, ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena))) {
+    print_err_uaf_deinit(((((expr)->tok)).slice), ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena));
     ((v)->has_error) = true;
     return false;
     }
@@ -2373,14 +2375,14 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if ((((src_name).len) > 0)) {
     int32_t src_idx = validator_find_var(v, src_name);
     if ((src_idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).points_to_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).points_to_stack_local)) {
     is_ptr_arg = true;
     }
-    if ((((((((((v)->vars))[({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_arena)).len) > 0)) {
+    if ((((((__OC_AT((((v)->vars)), (({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena)).len) > 0)) {
     is_ptr_arg = true;
     }
     if (is_ptr_arg) {
-    if ((((((((v)->vars))[({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth) > ((((((v)->vars))[({ __auto_type _v = (tgt_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth))) {
+    if ((((__OC_AT((((v)->vars)), (({ __auto_type _v = (src_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth) > ((__OC_AT((((v)->vars)), (({ __auto_type _v = (tgt_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth))) {
     print_err_borrow_escape(src_name, tgt_name);
     ((v)->has_error) = true;
     return false;
@@ -2491,7 +2493,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     else {
     int32_t rhs_idx = validator_find_var(v, ((((((stmt)->left))->tok)).slice));
     if ((rhs_idx >= 0)) {
-    if (str_eq(((((((v)->vars))[({ __auto_type _v = (rhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
+    if (str_eq(((__OC_AT((((v)->vars)), (({ __auto_type _v = (rhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
     is_arena_copy = true;
     }
     }
@@ -2509,7 +2511,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((src_name).len) > 0)) {
     int32_t idx = validator_find_var(v, src_name);
     if ((idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local)) {
     points_to_local = true;
     }
     }
@@ -2519,7 +2521,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).points_to_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).points_to_stack_local)) {
     points_to_local = true;
     }
     }
@@ -2547,8 +2549,8 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
-    if ((((((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_var)).len) > 0)) {
-    var_source = ((((((v)->vars))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_var);
+    if ((((((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_var)).len) > 0)) {
+    var_source = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_var);
     }
     }
     }
@@ -2558,7 +2560,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     ((v)->has_error) = true;
     return false;
     }
-    ((((v)->vars))[((v)->vars_count)]) = (VarInfo){ .name = ((((stmt)->tok)).slice), .type_name = inferred_type, .scope_depth = ((v)->scope_depth), .is_stack_local = true, .points_to_stack_local = points_to_local, .borrowed_from_arena = arena_source, .borrowed_from_var = var_source, .is_invalidated = false, .is_mut = (((((stmt)->tok)).tag) == TOK_MUT) };
+    __OC_AT((((v)->vars)), (((v)->vars_count))) = (VarInfo){ .name = ((((stmt)->tok)).slice), .type_name = inferred_type, .scope_depth = ((v)->scope_depth), .is_stack_local = true, .points_to_stack_local = points_to_local, .borrowed_from_arena = arena_source, .borrowed_from_var = var_source, .is_invalidated = false, .is_mut = (((((stmt)->tok)).tag) == TOK_MUT) };
     ((v)->vars_count) = __OC_ADD(((v)->vars_count), 1);
     return true;
     }
@@ -2580,7 +2582,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     else {
     int32_t lhs_idx = validator_find_var(v, ((((((stmt)->left))->tok)).slice));
     if ((lhs_idx >= 0)) {
-    if ((!((((((v)->vars))[({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_mut))) {
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_mut))) {
     printf("%s\n", "security error: cannot assign to immutable variable");
     ((v)->has_error) = true;
     return false;
@@ -2588,13 +2590,13 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->tag) == NODE_IDENT)) {
     bool is_arena_assign = false;
-    if (str_eq(((((((v)->vars))[({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
+    if (str_eq(((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
     is_arena_assign = true;
     }
     else {
     int32_t rhs_idx = validator_find_var(v, ((((((stmt)->right))->tok)).slice));
     if ((rhs_idx >= 0)) {
-    if (str_eq(((((((v)->vars))[({ __auto_type _v = (rhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
+    if (str_eq(((__OC_AT((((v)->vars)), (({ __auto_type _v = (rhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name), (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
     is_arena_assign = true;
     }
     }
@@ -2619,14 +2621,14 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     int32_t a_idx = validator_find_var(v, rhs_arena);
     uint32_t arena_depth = ((v)->scope_depth);
     if ((a_idx >= 0)) {
-    arena_depth = ((((((v)->vars))[({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth);
+    arena_depth = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth);
     }
     bool cross_escape = false;
-    if ((((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth) < arena_depth)) {
+    if ((((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth) < arena_depth)) {
     cross_escape = true;
     }
     else {
-    if ((!((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local))) {
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
     cross_escape = true;
     }
     }
@@ -2641,8 +2643,8 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if (is_direct_ident) {
     int32_t lhs_idx = validator_find_var(v, ((((((stmt)->left))->tok)).slice));
     if ((lhs_idx >= 0)) {
-    ((((((v)->vars))[({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_invalidated) = false;
-    ((((((v)->vars))[({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_arena) = rhs_arena;
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_invalidated) = false;
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena) = rhs_arena;
     oc_string new_var_borrow = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->tag) == NODE_ADDRESS_OF)) {
@@ -2652,12 +2654,12 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((val_ident).len) > 0)) {
     int32_t vi = validator_find_var(v, val_ident);
     if ((vi >= 0)) {
-    new_var_borrow = ((((((v)->vars))[({ __auto_type _v = (vi); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_var);
+    new_var_borrow = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (vi); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_var);
     }
     }
     }
     }
-    ((((((v)->vars))[({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).borrowed_from_var) = new_var_borrow;
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_var) = new_var_borrow;
     }
     }
     if ((((src_opt).len) > 0)) {
@@ -2667,12 +2669,12 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     int32_t t_idx = validator_find_var(v, tgt_opt);
     if ((t_idx >= 0)) {
     bool ptr_escape = false;
-    if ((((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth) < ((((((v)->vars))[({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth))) {
+    if ((((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth) < ((__OC_AT((((v)->vars)), (({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth))) {
     ptr_escape = true;
     }
     else {
-    if ((!((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local))) {
-    if (((((((v)->vars))[({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local)) {
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local)) {
     ptr_escape = true;
     }
     }
@@ -2684,7 +2686,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     }
-    if (((((((v)->vars))[({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (s_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local)) {
     if ((((tgt_opt).len) > 0)) {
     validator_set_points_to_stack_local(v, tgt_opt);
     }
@@ -2695,16 +2697,16 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((val_ident).len) > 0)) {
     int32_t val_idx = validator_find_var(v, val_ident);
     if ((val_idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (val_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).points_to_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (val_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).points_to_stack_local)) {
     if ((((tgt_opt).len) > 0)) {
     int32_t t_idx = validator_find_var(v, tgt_opt);
     if ((t_idx >= 0)) {
     bool val_escape = false;
-    if ((((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth) < ((((((v)->vars))[({ __auto_type _v = (val_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).scope_depth))) {
+    if ((((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth) < ((__OC_AT((((v)->vars)), (({ __auto_type _v = (val_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth))) {
     val_escape = true;
     }
     else {
-    if ((!((((((v)->vars))[({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local))) {
+    if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
     val_escape = true;
     }
     }
@@ -2737,7 +2739,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((arena_name).len) > 0)) {
     int32_t a_idx = validator_find_var(v, arena_name);
     if ((a_idx >= 0)) {
-    if (((((((v)->vars))[({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })])).is_stack_local)) {
+    if (((__OC_AT((((v)->vars)), (({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local)) {
     print_err_ret_arena(arena_name);
     ((v)->has_error) = true;
     return false;
@@ -2811,7 +2813,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     ((v)->has_error) = true;
     return false;
     }
-    ((((v)->deinit_arenas))[((v)->deinit_count)]) = a_name;
+    __OC_AT((((v)->deinit_arenas)), (((v)->deinit_count))) = a_name;
     ((v)->deinit_count) = __OC_ADD(((v)->deinit_count), 1);
     }
     }
@@ -2863,7 +2865,7 @@ bool validate_function(AstNode* f) {
     if (starts_with(((p)->type_name), (oc_string){ .ptr = (const uint8_t*)("[]"), .len = sizeof("[]") - 1 })) {
     param_is_local = false;
     }
-    ((((v).vars))[((v).vars_count)]) = (VarInfo){ .name = ((((p)->tok)).slice), .type_name = ((p)->type_name), .scope_depth = 0, .is_stack_local = param_is_local, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = param_is_mut };
+    __OC_AT((((v).vars)), (((v).vars_count))) = (VarInfo){ .name = ((((p)->tok)).slice), .type_name = ((p)->type_name), .scope_depth = 0, .is_stack_local = param_is_local, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = param_is_mut };
     ((v).vars_count) = __OC_ADD(((v).vars_count), 1);
     p = ((p)->next);
     }
@@ -2978,7 +2980,7 @@ CodeBuffer buf_init(size_t capacity) {
 
 void buf_append_u8(CodeBuffer* buf, uint8_t byte) {
     if ((((buf)->len) < ((buf)->capacity))) {
-    ((((buf)->buffer))[((buf)->len)]) = byte;
+    __OC_AT((((buf)->buffer)), (((buf)->len))) = byte;
     ((buf)->len) = __OC_ADD(((buf)->len), 1);
     }
 }
@@ -3139,7 +3141,7 @@ bool is_expr_string(AstNode* expr, CodeBuffer* out) {
     oc_string id = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->str_vars_count))) {
-    if (str_eq(((((out)->str_vars))[i]), id)) {
+    if (str_eq(__OC_AT((((out)->str_vars)), (i)), id)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3150,7 +3152,7 @@ bool is_expr_string(AstNode* expr, CodeBuffer* out) {
     oc_string f = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->str_fields_count))) {
-    if (str_eq(((((out)->str_fields))[i]), f)) {
+    if (str_eq(__OC_AT((((out)->str_fields)), (i)), f)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3161,7 +3163,7 @@ bool is_expr_string(AstNode* expr, CodeBuffer* out) {
     oc_string fn_name = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->str_fns_count))) {
-    if (str_eq(((((out)->str_fns))[i]), fn_name)) {
+    if (str_eq(__OC_AT((((out)->str_fns)), (i)), fn_name)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3188,7 +3190,7 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     oc_string f = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->ptr_fields_count))) {
-    if (str_eq(((((out)->ptr_fields))[i]), f)) {
+    if (str_eq(__OC_AT((((out)->ptr_fields)), (i)), f)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3199,7 +3201,7 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     oc_string fn_name = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->ptr_fns_count))) {
-    if (str_eq(((((out)->ptr_fns))[i]), fn_name)) {
+    if (str_eq(__OC_AT((((out)->ptr_fns)), (i)), fn_name)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3210,7 +3212,7 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     oc_string id = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->ptr_vars_count))) {
-    if (str_eq(((((out)->ptr_vars))[i]), id)) {
+    if (str_eq(__OC_AT((((out)->ptr_vars)), (i)), id)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -3382,11 +3384,11 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(("), .len = sizeof("((") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_AT(("), .len = sizeof("__OC_AT((") - 1 });
     codegen_expr(((expr)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")["), .len = sizeof(")[") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), ("), .len = sizeof("), (") - 1 });
     codegen_expr(((expr)->right), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("])"), .len = sizeof("])") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("))"), .len = sizeof("))") - 1 });
     return;
     }
     if ((((expr)->tag) == NODE_SLICE)) {
@@ -3582,20 +3584,20 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     if ((((stmt)->tag) == NODE_LET)) {
     if ((((out)->var_types_len) < 512)) {
-    ((((out)->var_names))[((out)->var_types_len)]) = ((((stmt)->tok)).slice);
-    ((((out)->var_types))[((out)->var_types_len)]) = ((stmt)->type_name);
+    __OC_AT((((out)->var_names)), (((out)->var_types_len))) = ((((stmt)->tok)).slice);
+    __OC_AT((((out)->var_types)), (((out)->var_types_len))) = ((stmt)->type_name);
     ((out)->var_types_len) = __OC_ADD(((out)->var_types_len), 1);
     }
     if (is_type_ptr(((stmt)->type_name))) {
     if ((((out)->ptr_vars_count) < 512)) {
-    ((((out)->ptr_vars))[((out)->ptr_vars_count)]) = ((((stmt)->tok)).slice);
+    __OC_AT((((out)->ptr_vars)), (((out)->ptr_vars_count))) = ((((stmt)->tok)).slice);
     ((out)->ptr_vars_count) = __OC_ADD(((out)->ptr_vars_count), 1);
     }
     }
     else {
     if (is_type_str(((stmt)->type_name))) {
     if ((((out)->str_vars_count) < 512)) {
-    ((((out)->str_vars))[((out)->str_vars_count)]) = ((((stmt)->tok)).slice);
+    __OC_AT((((out)->str_vars)), (((out)->str_vars_count))) = ((((stmt)->tok)).slice);
     ((out)->str_vars_count) = __OC_ADD(((out)->str_vars_count), 1);
     }
     }
@@ -3603,14 +3605,14 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     if ((((((stmt)->type_name)).len) == 0)) {
     if (is_expr_pointer(((stmt)->left), out)) {
     if ((((out)->ptr_vars_count) < 512)) {
-    ((((out)->ptr_vars))[((out)->ptr_vars_count)]) = ((((stmt)->tok)).slice);
+    __OC_AT((((out)->ptr_vars)), (((out)->ptr_vars_count))) = ((((stmt)->tok)).slice);
     ((out)->ptr_vars_count) = __OC_ADD(((out)->ptr_vars_count), 1);
     }
     }
     else {
     if (is_expr_string(((stmt)->left), out)) {
     if ((((out)->str_vars_count) < 512)) {
-    ((((out)->str_vars))[((out)->str_vars_count)]) = ((((stmt)->tok)).slice);
+    __OC_AT((((out)->str_vars)), (((out)->str_vars_count))) = ((((stmt)->tok)).slice);
     ((out)->str_vars_count) = __OC_ADD(((out)->str_vars_count), 1);
     }
     }
@@ -3910,6 +3912,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return s.ptr[idx];\n"), .len = sizeof("    return s.ptr[idx];\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n"), .len = sizeof("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n"), .len = sizeof("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n"), .len = sizeof("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return a / b;\n"), .len = sizeof("    return a / b;\n") - 1 });
@@ -3924,7 +3927,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n"), .len = sizeof("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n") - 1 });
-    ((((out)->ptr_fields))[0]) = (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
+    __OC_AT((((out)->ptr_fields)), (0)) = (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
     ((out)->ptr_fields_count) = 1;
     AstNode* scan_decl = ((root)->left);
     while ((scan_decl != ((AstNode*)(0)))) {
@@ -3933,14 +3936,14 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((sf != ((AstNode*)(0)))) {
     if (is_type_ptr(((sf)->type_name))) {
     if ((((out)->ptr_fields_count) < 256)) {
-    ((((out)->ptr_fields))[((out)->ptr_fields_count)]) = ((((sf)->tok)).slice);
+    __OC_AT((((out)->ptr_fields)), (((out)->ptr_fields_count))) = ((((sf)->tok)).slice);
     ((out)->ptr_fields_count) = __OC_ADD(((out)->ptr_fields_count), 1);
     }
     }
     else {
     if (is_type_str(((sf)->type_name))) {
     if ((((out)->str_fields_count) < 256)) {
-    ((((out)->str_fields))[((out)->str_fields_count)]) = ((((sf)->tok)).slice);
+    __OC_AT((((out)->str_fields)), (((out)->str_fields_count))) = ((((sf)->tok)).slice);
     ((out)->str_fields_count) = __OC_ADD(((out)->str_fields_count), 1);
     }
     }
@@ -3952,14 +3955,14 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     if ((((scan_decl)->tag) == NODE_FN)) {
     if (is_type_ptr(((scan_decl)->type_name))) {
     if ((((out)->ptr_fns_count) < 256)) {
-    ((((out)->ptr_fns))[((out)->ptr_fns_count)]) = ((((scan_decl)->tok)).slice);
+    __OC_AT((((out)->ptr_fns)), (((out)->ptr_fns_count))) = ((((scan_decl)->tok)).slice);
     ((out)->ptr_fns_count) = __OC_ADD(((out)->ptr_fns_count), 1);
     }
     }
     else {
     if (is_type_str(((scan_decl)->type_name))) {
     if ((((out)->str_fns_count) < 256)) {
-    ((((out)->str_fns))[((out)->str_fns_count)]) = ((((scan_decl)->tok)).slice);
+    __OC_AT((((out)->str_fns)), (((out)->str_fns_count))) = ((((scan_decl)->tok)).slice);
     ((out)->str_fns_count) = __OC_ADD(((out)->str_fns_count), 1);
     }
     }
@@ -4104,20 +4107,20 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     AstNode* p_scan = ((decl)->left);
     while ((p_scan != ((AstNode*)(0)))) {
     if ((((out)->var_types_len) < 512)) {
-    ((((out)->var_names))[((out)->var_types_len)]) = ((((p_scan)->tok)).slice);
-    ((((out)->var_types))[((out)->var_types_len)]) = ((p_scan)->type_name);
+    __OC_AT((((out)->var_names)), (((out)->var_types_len))) = ((((p_scan)->tok)).slice);
+    __OC_AT((((out)->var_types)), (((out)->var_types_len))) = ((p_scan)->type_name);
     ((out)->var_types_len) = __OC_ADD(((out)->var_types_len), 1);
     }
     if (is_type_ptr(((p_scan)->type_name))) {
     if ((((out)->ptr_vars_count) < 512)) {
-    ((((out)->ptr_vars))[((out)->ptr_vars_count)]) = ((((p_scan)->tok)).slice);
+    __OC_AT((((out)->ptr_vars)), (((out)->ptr_vars_count))) = ((((p_scan)->tok)).slice);
     ((out)->ptr_vars_count) = __OC_ADD(((out)->ptr_vars_count), 1);
     }
     }
     else {
     if (is_type_str(((p_scan)->type_name))) {
     if ((((out)->str_vars_count) < 512)) {
-    ((((out)->str_vars))[((out)->str_vars_count)]) = ((((p_scan)->tok)).slice);
+    __OC_AT((((out)->str_vars)), (((out)->str_vars_count))) = ((((p_scan)->tok)).slice);
     ((out)->str_vars_count) = __OC_ADD(((out)->str_vars_count), 1);
     }
     }
@@ -4198,10 +4201,10 @@ void elf_append_u64(CodeBuffer* buf, uint64_t v) {
 }
 
 void elf_patch_u32(CodeBuffer* buf, size_t offset, uint32_t v) {
-    ((((buf)->buffer))[offset]) = ({ __auto_type _v = (__OC_MOD(v, 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
-    ((((buf)->buffer))[__OC_ADD(offset, 1)]) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 256), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
-    ((((buf)->buffer))[__OC_ADD(offset, 2)]) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 65536), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
-    ((((buf)->buffer))[__OC_ADD(offset, 3)]) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 16777216), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    __OC_AT((((buf)->buffer)), (offset)) = ({ __auto_type _v = (__OC_MOD(v, 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    __OC_AT((((buf)->buffer)), (__OC_ADD(offset, 1))) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 256), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    __OC_AT((((buf)->buffer)), (__OC_ADD(offset, 2))) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 65536), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    __OC_AT((((buf)->buffer)), (__OC_ADD(offset, 3))) = ({ __auto_type _v = (__OC_MOD(__OC_DIV(v, 16777216), 256)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
 }
 
 void elf_patch_u64(CodeBuffer* buf, size_t offset, uint64_t v) {
@@ -4244,9 +4247,9 @@ void ng_fail(NativeGen* ng, oc_string msg) {
 
 void ng_add_fixup(NativeGen* ng, size_t code_off, oc_string fn_name, bool is_6byte) {
     if ((((ng)->fixup_count) < 1024)) {
-    ((((ng)->fixup_offsets))[((ng)->fixup_count)]) = code_off;
-    ((((ng)->fixup_names))[((ng)->fixup_count)]) = fn_name;
-    ((((ng)->fixup_is_6byte))[((ng)->fixup_count)]) = is_6byte;
+    __OC_AT((((ng)->fixup_offsets)), (((ng)->fixup_count))) = code_off;
+    __OC_AT((((ng)->fixup_names)), (((ng)->fixup_count))) = fn_name;
+    __OC_AT((((ng)->fixup_is_6byte)), (((ng)->fixup_count))) = is_6byte;
     ((ng)->fixup_count) = __OC_ADD(((ng)->fixup_count), 1);
     }
     else {
@@ -4256,8 +4259,8 @@ void ng_add_fixup(NativeGen* ng, size_t code_off, oc_string fn_name, bool is_6by
 
 void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off) {
     if ((((ng)->data_reloc_count) < 512)) {
-    ((((ng)->data_reloc_code))[((ng)->data_reloc_count)]) = code_off;
-    ((((ng)->data_reloc_data))[((ng)->data_reloc_count)]) = data_off;
+    __OC_AT((((ng)->data_reloc_code)), (((ng)->data_reloc_count))) = code_off;
+    __OC_AT((((ng)->data_reloc_data)), (((ng)->data_reloc_count))) = data_off;
     ((ng)->data_reloc_count) = __OC_ADD(((ng)->data_reloc_count), 1);
     }
     else {
@@ -4267,8 +4270,8 @@ void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off) {
 
 void ng_add_iat_fixup(NativeGen* ng, size_t code_off, size_t slot) {
     if ((((ng)->iat_fix_count) < 16)) {
-    ((((ng)->iat_fix_code))[((ng)->iat_fix_count)]) = code_off;
-    ((((ng)->iat_fix_slot))[((ng)->iat_fix_count)]) = slot;
+    __OC_AT((((ng)->iat_fix_code)), (((ng)->iat_fix_count))) = code_off;
+    __OC_AT((((ng)->iat_fix_slot)), (((ng)->iat_fix_count))) = slot;
     ((ng)->iat_fix_count) = __OC_ADD(((ng)->iat_fix_count), 1);
     }
     else {
@@ -4369,8 +4372,8 @@ int32_t ng_find_var_idx(NativeGen* ng, oc_string name) {
     size_t i = ((ng)->var_count);
     while ((i > 0)) {
     i = __OC_SUB(i, 1);
-    if (((((ng)->var_active))[i])) {
-    if (str_eq(((((ng)->var_names))[i]), name)) {
+    if (__OC_AT((((ng)->var_active)), (i))) {
+    if (str_eq(__OC_AT((((ng)->var_names)), (i)), name)) {
     return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     }
     }
@@ -4381,7 +4384,7 @@ int32_t ng_find_var_idx(NativeGen* ng, oc_string name) {
 int32_t ng_find_var_offset(NativeGen* ng, oc_string name) {
     int32_t idx = ng_find_var_idx(ng, name);
     if ((idx >= 0)) {
-    return ((((ng)->var_offsets))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })]);
+    return __OC_AT((((ng)->var_offsets)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
     }
     return 0;
 }
@@ -4389,7 +4392,7 @@ int32_t ng_find_var_offset(NativeGen* ng, oc_string name) {
 oc_string ng_find_var_type(NativeGen* ng, oc_string name) {
     int32_t idx = ng_find_var_idx(ng, name);
     if ((idx >= 0)) {
-    return ((((ng)->var_types))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })]);
+    return __OC_AT((((ng)->var_types)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
@@ -4397,7 +4400,7 @@ oc_string ng_find_var_type(NativeGen* ng, oc_string name) {
 bool ng_is_var_slice(NativeGen* ng, oc_string name) {
     int32_t idx = ng_find_var_idx(ng, name);
     if ((idx >= 0)) {
-    return ((((ng)->var_is_slice))[({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })]);
+    return __OC_AT((((ng)->var_is_slice)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
     }
     return false;
 }
@@ -4405,8 +4408,8 @@ bool ng_is_var_slice(NativeGen* ng, oc_string name) {
 int32_t ng_find_struct_size(NativeGen* ng, oc_string name) {
     size_t i = 0;
     while ((i < ((ng)->struct_count))) {
-    if (str_eq(((((ng)->struct_names))[i]), name)) {
-    return ((((ng)->struct_sizes))[i]);
+    if (str_eq(__OC_AT((((ng)->struct_names)), (i)), name)) {
+    return __OC_AT((((ng)->struct_sizes)), (i));
     }
     i = __OC_ADD(i, 1);
     }
@@ -4416,17 +4419,17 @@ int32_t ng_find_struct_size(NativeGen* ng, oc_string name) {
 int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name) {
     size_t i = 0;
     while ((i < ((ng)->field_count))) {
-    if (str_eq(((((ng)->field_struct))[i]), s_name)) {
-    if (str_eq(((((ng)->field_names))[i]), f_name)) {
-    return ((((ng)->field_offsets))[i]);
+    if (str_eq(__OC_AT((((ng)->field_struct)), (i)), s_name)) {
+    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
+    return __OC_AT((((ng)->field_offsets)), (i));
     }
     }
     i = __OC_ADD(i, 1);
     }
     i = 0;
     while ((i < ((ng)->field_count))) {
-    if (str_eq(((((ng)->field_names))[i]), f_name)) {
-    return ((((ng)->field_offsets))[i]);
+    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
+    return __OC_AT((((ng)->field_offsets)), (i));
     }
     i = __OC_ADD(i, 1);
     }
@@ -4442,17 +4445,17 @@ oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name) 
     }
     size_t i = 0;
     while ((i < ((ng)->field_count))) {
-    if (str_eq(((((ng)->field_struct))[i]), s_name)) {
-    if (str_eq(((((ng)->field_names))[i]), f_name)) {
-    return ((((ng)->field_types))[i]);
+    if (str_eq(__OC_AT((((ng)->field_struct)), (i)), s_name)) {
+    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
+    return __OC_AT((((ng)->field_types)), (i));
     }
     }
     i = __OC_ADD(i, 1);
     }
     i = 0;
     while ((i < ((ng)->field_count))) {
-    if (str_eq(((((ng)->field_names))[i]), f_name)) {
-    return ((((ng)->field_types))[i]);
+    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
+    return __OC_AT((((ng)->field_types)), (i));
     }
     i = __OC_ADD(i, 1);
     }
@@ -4462,8 +4465,8 @@ oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name) 
 oc_string ng_find_fn_ret_type(NativeGen* ng, oc_string fn_name) {
     size_t i = 0;
     while ((i < ((ng)->fn_count))) {
-    if (str_eq(((((ng)->fn_names))[i]), fn_name)) {
-    return ((((ng)->fn_ret_types))[i]);
+    if (str_eq(__OC_AT((((ng)->fn_names)), (i)), fn_name)) {
+    return __OC_AT((((ng)->fn_ret_types)), (i));
     }
     i = __OC_ADD(i, 1);
     }
@@ -5111,9 +5114,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     int32_t idx = ng_find_var_idx(ng, ((((expr)->tok)).slice));
     if ((idx >= 0)) {
     size_t u_idx = ({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
-    int32_t off = ((((ng)->var_offsets))[u_idx]);
-    oc_string vt = ((((ng)->var_types))[u_idx]);
-    if ((((((ng)->var_arr_len))[u_idx]) > 0)) {
+    int32_t off = __OC_AT((((ng)->var_offsets)), (u_idx));
+    oc_string vt = __OC_AT((((ng)->var_types)), (u_idx));
+    if ((__OC_AT((((ng)->var_arr_len)), (u_idx)) > 0)) {
     ng_emit_disp_lea_rax(code, off);
     return;
     }
@@ -5132,17 +5135,17 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     ng_emit_disp_load_rax(code, off);
-    if (((((ng)->var_is_slice))[u_idx])) {
+    if (__OC_AT((((ng)->var_is_slice)), (u_idx))) {
     ng_emit_disp_load_rdx(code, __OC_SUB(off, 8));
     }
     return;
     }
     size_t ci = 0;
     while ((ci < ((ng)->const_count))) {
-    if (str_eq(((((ng)->const_names))[ci]), ((((expr)->tok)).slice))) {
+    if (str_eq(__OC_AT((((ng)->const_names)), (ci)), ((((expr)->tok)).slice))) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
-    elf_append_u64(code, ((((ng)->const_vals))[ci]));
+    elf_append_u64(code, __OC_AT((((ng)->const_vals)), (ci)));
     return;
     }
     ci = __OC_ADD(ci, 1);
@@ -6015,8 +6018,8 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     if (str_eq(((((stmt)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("break"), .len = sizeof("break") - 1 })) {
     buf_append_u8(code, 233);
     if ((((ng)->break_count) < 128)) {
-    ((((ng)->break_patches))[((ng)->break_count)]) = ((code)->len);
-    ((((ng)->break_depths))[((ng)->break_count)]) = ((ng)->loop_depth);
+    __OC_AT((((ng)->break_patches)), (((ng)->break_count))) = ((code)->len);
+    __OC_AT((((ng)->break_depths)), (((ng)->break_count))) = ((ng)->loop_depth);
     ((ng)->break_count) = __OC_ADD(((ng)->break_count), 1);
     }
     elf_append_u32(code, 0);
@@ -6064,13 +6067,13 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), aligned_bytes);
     int32_t base_off = ((ng)->curr_off);
     if ((((ng)->var_count) < 256)) {
-    ((((ng)->var_names))[((ng)->var_count)]) = ((((stmt)->tok)).slice);
-    ((((ng)->var_offsets))[((ng)->var_count)]) = base_off;
-    ((((ng)->var_is_slice))[((ng)->var_count)]) = false;
-    ((((ng)->var_types))[((ng)->var_count)]) = t_name;
-    ((((ng)->var_active))[((ng)->var_count)]) = true;
-    ((((ng)->var_scope))[((ng)->var_count)]) = ((ng)->scope_depth);
-    ((((ng)->var_arr_len))[((ng)->var_count)]) = arr_len;
+    __OC_AT((((ng)->var_names)), (((ng)->var_count))) = ((((stmt)->tok)).slice);
+    __OC_AT((((ng)->var_offsets)), (((ng)->var_count))) = base_off;
+    __OC_AT((((ng)->var_is_slice)), (((ng)->var_count))) = false;
+    __OC_AT((((ng)->var_types)), (((ng)->var_count))) = t_name;
+    __OC_AT((((ng)->var_active)), (((ng)->var_count))) = true;
+    __OC_AT((((ng)->var_scope)), (((ng)->var_count))) = ((ng)->scope_depth);
+    __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = arr_len;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     }
     buf_append_u8(code, 72);
@@ -6143,13 +6146,13 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), struct_sz);
     int32_t base_off = ((ng)->curr_off);
     if ((((ng)->var_count) < 256)) {
-    ((((ng)->var_names))[((ng)->var_count)]) = ((((stmt)->tok)).slice);
-    ((((ng)->var_offsets))[((ng)->var_count)]) = base_off;
-    ((((ng)->var_is_slice))[((ng)->var_count)]) = false;
-    ((((ng)->var_types))[((ng)->var_count)]) = t_name;
-    ((((ng)->var_active))[((ng)->var_count)]) = true;
-    ((((ng)->var_scope))[((ng)->var_count)]) = ((ng)->scope_depth);
-    ((((ng)->var_arr_len))[((ng)->var_count)]) = 0;
+    __OC_AT((((ng)->var_names)), (((ng)->var_count))) = ((((stmt)->tok)).slice);
+    __OC_AT((((ng)->var_offsets)), (((ng)->var_count))) = base_off;
+    __OC_AT((((ng)->var_is_slice)), (((ng)->var_count))) = false;
+    __OC_AT((((ng)->var_types)), (((ng)->var_count))) = t_name;
+    __OC_AT((((ng)->var_active)), (((ng)->var_count))) = true;
+    __OC_AT((((ng)->var_scope)), (((ng)->var_count))) = ((ng)->scope_depth);
+    __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = 0;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
@@ -6189,13 +6192,13 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
     }
     if ((((ng)->var_count) < 256)) {
-    ((((ng)->var_names))[((ng)->var_count)]) = ((((stmt)->tok)).slice);
-    ((((ng)->var_offsets))[((ng)->var_count)]) = off;
-    ((((ng)->var_is_slice))[((ng)->var_count)]) = is_slice;
-    ((((ng)->var_types))[((ng)->var_count)]) = t_name;
-    ((((ng)->var_active))[((ng)->var_count)]) = true;
-    ((((ng)->var_scope))[((ng)->var_count)]) = ((ng)->scope_depth);
-    ((((ng)->var_arr_len))[((ng)->var_count)]) = 0;
+    __OC_AT((((ng)->var_names)), (((ng)->var_count))) = ((((stmt)->tok)).slice);
+    __OC_AT((((ng)->var_offsets)), (((ng)->var_count))) = off;
+    __OC_AT((((ng)->var_is_slice)), (((ng)->var_count))) = is_slice;
+    __OC_AT((((ng)->var_types)), (((ng)->var_count))) = t_name;
+    __OC_AT((((ng)->var_active)), (((ng)->var_count))) = true;
+    __OC_AT((((ng)->var_scope)), (((ng)->var_count))) = ((ng)->scope_depth);
+    __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = 0;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     }
     ng_emit_disp_store_rax(code, off);
@@ -6347,11 +6350,11 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     elf_patch_i32(code, jz_pos, jz_rel);
     size_t bi = 0;
     while ((bi < ((ng)->break_count))) {
-    if ((((((ng)->break_depths))[bi]) == ((ng)->loop_depth))) {
-    size_t b_pos = ((((ng)->break_patches))[bi]);
+    if ((__OC_AT((((ng)->break_depths)), (bi)) == ((ng)->loop_depth))) {
+    size_t b_pos = __OC_AT((((ng)->break_patches)), (bi));
     int32_t b_rel = ({ __auto_type _v = (__OC_SUB(({ __auto_type _v = (loop_end); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(b_pos, 4)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     elf_patch_i32(code, b_pos, b_rel);
-    ((((ng)->break_depths))[bi]) = (-1);
+    __OC_AT((((ng)->break_depths)), (bi)) = (-1);
     }
     bi = __OC_ADD(bi, 1);
     }
@@ -6368,9 +6371,9 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     size_t vi = 0;
     while ((vi < ((ng)->var_count))) {
-    if (((((ng)->var_active))[vi])) {
-    if ((((((ng)->var_scope))[vi]) == ((ng)->scope_depth))) {
-    ((((ng)->var_active))[vi]) = false;
+    if (__OC_AT((((ng)->var_active)), (vi))) {
+    if ((__OC_AT((((ng)->var_scope)), (vi)) == ((ng)->scope_depth))) {
+    __OC_AT((((ng)->var_active)), (vi)) = false;
     }
     }
     vi = __OC_ADD(vi, 1);
@@ -6570,9 +6573,9 @@ void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off) {
 
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off) {
     if ((((ng)->fn_count) < 256)) {
-    ((((ng)->fn_names))[((ng)->fn_count)]) = name;
-    ((has_offset)[((ng)->fn_count)]) = true;
-    ((((ng)->fn_offsets))[((ng)->fn_count)]) = off;
+    __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = name;
+    __OC_AT((has_offset), (((ng)->fn_count))) = true;
+    __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = off;
     ((ng)->fn_count) = __OC_ADD(((ng)->fn_count), 1);
     }
     else {
@@ -6699,9 +6702,9 @@ void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size
 
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
     oc_string imp_names[3] = {0};
-    ((imp_names)[NG_IMP_EXIT_PROCESS]) = (oc_string){ .ptr = (const uint8_t*)("ExitProcess"), .len = sizeof("ExitProcess") - 1 };
-    ((imp_names)[NG_IMP_GET_STD_HANDLE]) = (oc_string){ .ptr = (const uint8_t*)("GetStdHandle"), .len = sizeof("GetStdHandle") - 1 };
-    ((imp_names)[NG_IMP_WRITE_FILE]) = (oc_string){ .ptr = (const uint8_t*)("WriteFile"), .len = sizeof("WriteFile") - 1 };
+    __OC_AT((imp_names), (NG_IMP_EXIT_PROCESS)) = (oc_string){ .ptr = (const uint8_t*)("ExitProcess"), .len = sizeof("ExitProcess") - 1 };
+    __OC_AT((imp_names), (NG_IMP_GET_STD_HANDLE)) = (oc_string){ .ptr = (const uint8_t*)("GetStdHandle"), .len = sizeof("GetStdHandle") - 1 };
+    __OC_AT((imp_names), (NG_IMP_WRITE_FILE)) = (oc_string){ .ptr = (const uint8_t*)("WriteFile"), .len = sizeof("WriteFile") - 1 };
     oc_string dll_name = (oc_string){ .ptr = (const uint8_t*)("KERNEL32.dll"), .len = sizeof("KERNEL32.dll") - 1 };
     size_t thunk_bytes = __OC_MUL(__OC_ADD(NG_IMP_COUNT, 1), 8);
     size_t iat_off = 0;
@@ -6712,8 +6715,8 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     size_t cur = __OC_ADD(idt_off, idt_bytes);
     size_t k = 0;
     while ((k < NG_IMP_COUNT)) {
-    ((hint_offs)[k]) = cur;
-    cur = pe_align(__OC_ADD(__OC_ADD(__OC_ADD(cur, 2), ((((imp_names)[k])).len)), 1), 2);
+    __OC_AT((hint_offs), (k)) = cur;
+    cur = pe_align(__OC_ADD(__OC_ADD(__OC_ADD(cur, 2), ((__OC_AT((imp_names), (k))).len)), 1), 2);
     k = __OC_ADD(k, 1);
     }
     size_t dll_off = cur;
@@ -6732,20 +6735,20 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     size_t file_size = __OC_ADD(rdata_raw_off, rdata_raw_size);
     size_t fi = 0;
     while ((fi < ((ng)->iat_fix_count))) {
-    size_t pos = ((((ng)->iat_fix_code))[fi]);
-    size_t slot_rva = __OC_ADD(__OC_ADD(rdata_rva, iat_off), __OC_MUL(((((ng)->iat_fix_slot))[fi]), 8));
+    size_t pos = __OC_AT((((ng)->iat_fix_code)), (fi));
+    size_t slot_rva = __OC_ADD(__OC_ADD(rdata_rva, iat_off), __OC_MUL(__OC_AT((((ng)->iat_fix_slot)), (fi)), 8));
     int64_t rel = __OC_SUB(({ __auto_type _v = (slot_rva); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(__OC_ADD(text_rva, pos), 4)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
     elf_patch_i32(code, pos, ({ __auto_type _v = (rel); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
     fi = __OC_ADD(fi, 1);
     }
     size_t ri = 0;
     while ((ri < ((ng)->data_reloc_count))) {
-    size_t c_pos = ((((ng)->data_reloc_code))[ri]);
+    size_t c_pos = __OC_AT((((ng)->data_reloc_code)), (ri));
     bool form_ok = false;
     if ((c_pos >= 2)) {
-    if ((((((code)->buffer))[__OC_SUB(c_pos, 2)]) == 72)) {
-    if ((((((code)->buffer))[__OC_SUB(c_pos, 1)]) >= 184)) {
-    if ((((((code)->buffer))[__OC_SUB(c_pos, 1)]) <= 191)) {
+    if ((__OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 2))) == 72)) {
+    if ((__OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 1))) >= 184)) {
+    if ((__OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 1))) <= 191)) {
     form_ok = true;
     }
     }
@@ -6755,15 +6758,15 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     printf("%s\n", "native codegen error: unexpected data relocation form for PE32+");
     return false;
     }
-    uint8_t reg = __OC_SUB(((((code)->buffer))[__OC_SUB(c_pos, 1)]), 184);
-    size_t target_rva = __OC_ADD(__OC_ADD(rdata_rva, udata_off), ((((ng)->data_reloc_data))[ri]));
+    uint8_t reg = __OC_SUB(__OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 1))), 184);
+    size_t target_rva = __OC_ADD(__OC_ADD(rdata_rva, udata_off), __OC_AT((((ng)->data_reloc_data)), (ri)));
     int64_t rel = __OC_SUB(({ __auto_type _v = (target_rva); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(__OC_ADD(text_rva, c_pos), 5)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
-    ((((code)->buffer))[__OC_SUB(c_pos, 1)]) = 141;
-    ((((code)->buffer))[c_pos]) = __OC_ADD(5, __OC_MUL(reg, 8));
+    __OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 1))) = 141;
+    __OC_AT((((code)->buffer)), (c_pos)) = __OC_ADD(5, __OC_MUL(reg, 8));
     elf_patch_i32(code, __OC_ADD(c_pos, 1), ({ __auto_type _v = (rel); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
-    ((((code)->buffer))[__OC_ADD(c_pos, 5)]) = 15;
-    ((((code)->buffer))[__OC_ADD(c_pos, 6)]) = 31;
-    ((((code)->buffer))[__OC_ADD(c_pos, 7)]) = 0;
+    __OC_AT((((code)->buffer)), (__OC_ADD(c_pos, 5))) = 15;
+    __OC_AT((((code)->buffer)), (__OC_ADD(c_pos, 6))) = 31;
+    __OC_AT((((code)->buffer)), (__OC_ADD(c_pos, 7))) = 0;
     ri = __OC_ADD(ri, 1);
     }
     CodeBuffer pe_buf = buf_init(__OC_ADD(file_size, 1));
@@ -6840,7 +6843,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     pe_append_zeros(pe, __OC_SUB(headers_size, ((pe)->len)));
     size_t p = 0;
     while ((p < ((code)->len))) {
-    buf_append_u8(pe, ((((code)->buffer))[p]));
+    buf_append_u8(pe, __OC_AT((((code)->buffer)), (p)));
     p = __OC_ADD(p, 1);
     }
     pe_append_zeros(pe, __OC_SUB(text_raw_size, ((code)->len)));
@@ -6848,7 +6851,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     while ((t < 2)) {
     k = 0;
     while ((k < NG_IMP_COUNT)) {
-    elf_append_u64(pe, ({ __auto_type _v = (__OC_ADD(rdata_rva, ((hint_offs)[k]))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    elf_append_u64(pe, ({ __auto_type _v = (__OC_ADD(rdata_rva, __OC_AT((hint_offs), (k)))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     k = __OC_ADD(k, 1);
     }
     elf_append_u64(pe, 0);
@@ -6862,9 +6865,9 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     pe_append_zeros(pe, 20);
     k = 0;
     while ((k < NG_IMP_COUNT)) {
-    pe_append_zeros(pe, __OC_SUB(__OC_ADD(rdata_raw_off, ((hint_offs)[k])), ((pe)->len)));
+    pe_append_zeros(pe, __OC_SUB(__OC_ADD(rdata_raw_off, __OC_AT((hint_offs), (k))), ((pe)->len)));
     elf_append_u16(pe, 0);
-    buf_append(pe, ((imp_names)[k]));
+    buf_append(pe, __OC_AT((imp_names), (k)));
     buf_append_u8(pe, 0);
     k = __OC_ADD(k, 1);
     }
@@ -6874,7 +6877,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     pe_append_zeros(pe, __OC_SUB(__OC_ADD(rdata_raw_off, udata_off), ((pe)->len)));
     p = 0;
     while ((p < ((data)->len))) {
-    buf_append_u8(pe, ((((data)->buffer))[p]));
+    buf_append_u8(pe, __OC_AT((((data)->buffer)), (p)));
     p = __OC_ADD(p, 1);
     }
     pe_append_zeros(pe, __OC_SUB(file_size, ((pe)->len)));
@@ -6926,18 +6929,18 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     }
     }
     if ((((ng)->field_count) < 256)) {
-    ((((ng)->field_struct))[((ng)->field_count)]) = s_name;
-    ((((ng)->field_names))[((ng)->field_count)]) = ((((sf)->tok)).slice);
-    ((((ng)->field_offsets))[((ng)->field_count)]) = f_off;
-    ((((ng)->field_types))[((ng)->field_count)]) = ft;
+    __OC_AT((((ng)->field_struct)), (((ng)->field_count))) = s_name;
+    __OC_AT((((ng)->field_names)), (((ng)->field_count))) = ((((sf)->tok)).slice);
+    __OC_AT((((ng)->field_offsets)), (((ng)->field_count))) = f_off;
+    __OC_AT((((ng)->field_types)), (((ng)->field_count))) = ft;
     ((ng)->field_count) = __OC_ADD(((ng)->field_count), 1);
     }
     f_off = __OC_ADD(f_off, f_sz);
     sf = ((sf)->next);
     }
     if ((((ng)->struct_count) < 64)) {
-    ((((ng)->struct_names))[((ng)->struct_count)]) = s_name;
-    ((((ng)->struct_sizes))[((ng)->struct_count)]) = f_off;
+    __OC_AT((((ng)->struct_names)), (((ng)->struct_count))) = s_name;
+    __OC_AT((((ng)->struct_sizes)), (((ng)->struct_count))) = f_off;
     ((ng)->struct_count) = __OC_ADD(((ng)->struct_count), 1);
     }
     }
@@ -6945,8 +6948,8 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     if ((((scan)->tag) == NODE_LET)) {
     if ((((scan)->left) != ((AstNode*)(0)))) {
     if ((((ng)->const_count) < 128)) {
-    ((((ng)->const_names))[((ng)->const_count)]) = ((((scan)->tok)).slice);
-    ((((ng)->const_vals))[((ng)->const_count)]) = parse_u64(((((((scan)->left))->tok)).slice));
+    __OC_AT((((ng)->const_names)), (((ng)->const_count))) = ((((scan)->tok)).slice);
+    __OC_AT((((ng)->const_vals)), (((ng)->const_count))) = parse_u64(((((((scan)->left))->tok)).slice));
     ((ng)->const_count) = __OC_ADD(((ng)->const_count), 1);
     }
     }
@@ -6954,9 +6957,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     else {
     if ((((scan)->tag) == NODE_FN)) {
     if ((((ng)->fn_count) < 256)) {
-    ((((ng)->fn_names))[((ng)->fn_count)]) = ((((scan)->tok)).slice);
-    ((((ng)->fn_offsets))[((ng)->fn_count)]) = 0;
-    ((((ng)->fn_ret_types))[((ng)->fn_count)]) = ((scan)->type_name);
+    __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = ((((scan)->tok)).slice);
+    __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = 0;
+    __OC_AT((((ng)->fn_ret_types)), (((ng)->fn_count))) = ((scan)->type_name);
     ((ng)->fn_count) = __OC_ADD(((ng)->fn_count), 1);
     }
     }
@@ -6995,9 +6998,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     bool found_fn = false;
     size_t fi_idx = 0;
     while ((fi_idx < ((ng)->fn_count))) {
-    if (str_eq(((((ng)->fn_names))[fi_idx]), ((((decl)->tok)).slice))) {
-    ((((ng)->fn_offsets))[fi_idx]) = ((code)->len);
-    ((fn_has_offset)[fi_idx]) = true;
+    if (str_eq(__OC_AT((((ng)->fn_names)), (fi_idx)), ((((decl)->tok)).slice))) {
+    __OC_AT((((ng)->fn_offsets)), (fi_idx)) = ((code)->len);
+    __OC_AT((fn_has_offset), (fi_idx)) = true;
     found_fn = true;
     break;
     }
@@ -7005,10 +7008,10 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     }
     if ((!found_fn)) {
     if ((((ng)->fn_count) < 256)) {
-    ((((ng)->fn_names))[((ng)->fn_count)]) = ((((decl)->tok)).slice);
-    ((((ng)->fn_offsets))[((ng)->fn_count)]) = ((code)->len);
-    ((((ng)->fn_ret_types))[((ng)->fn_count)]) = ((decl)->type_name);
-    ((fn_has_offset)[((ng)->fn_count)]) = true;
+    __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = ((((decl)->tok)).slice);
+    __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = ((code)->len);
+    __OC_AT((((ng)->fn_ret_types)), (((ng)->fn_count))) = ((decl)->type_name);
+    __OC_AT((fn_has_offset), (((ng)->fn_count))) = true;
     ((ng)->fn_count) = __OC_ADD(((ng)->fn_count), 1);
     }
     }
@@ -7022,13 +7025,13 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     if ((((ng)->var_count) < 256)) {
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
     param_bytes = __OC_ADD(param_bytes, 8);
-    ((((ng)->var_names))[((ng)->var_count)]) = ((((p)->tok)).slice);
-    ((((ng)->var_offsets))[((ng)->var_count)]) = ((ng)->curr_off);
-    ((((ng)->var_is_slice))[((ng)->var_count)]) = is_slice;
-    ((((ng)->var_types))[((ng)->var_count)]) = ((p)->type_name);
-    ((((ng)->var_active))[((ng)->var_count)]) = true;
-    ((((ng)->var_scope))[((ng)->var_count)]) = 0;
-    ((((ng)->var_arr_len))[((ng)->var_count)]) = 0;
+    __OC_AT((((ng)->var_names)), (((ng)->var_count))) = ((((p)->tok)).slice);
+    __OC_AT((((ng)->var_offsets)), (((ng)->var_count))) = ((ng)->curr_off);
+    __OC_AT((((ng)->var_is_slice)), (((ng)->var_count))) = is_slice;
+    __OC_AT((((ng)->var_types)), (((ng)->var_count))) = ((p)->type_name);
+    __OC_AT((((ng)->var_active)), (((ng)->var_count))) = true;
+    __OC_AT((((ng)->var_scope)), (((ng)->var_count))) = 0;
+    __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = 0;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     if (is_slice) {
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
@@ -7066,10 +7069,10 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     size_t reg_idx = 0;
     size_t p_var_idx = 0;
     while ((p != ((AstNode*)(0)))) {
-    int32_t off = ((((ng)->var_offsets))[p_var_idx]);
+    int32_t off = __OC_AT((((ng)->var_offsets)), (p_var_idx));
     ng_emit_store_param_reg(code, reg_idx, off);
     reg_idx = __OC_ADD(reg_idx, 1);
-    if (((((ng)->var_is_slice))[p_var_idx])) {
+    if (__OC_AT((((ng)->var_is_slice)), (p_var_idx))) {
     ng_emit_store_param_reg(code, reg_idx, __OC_SUB(off, 8));
     reg_idx = __OC_ADD(reg_idx, 1);
     }
@@ -7267,19 +7270,19 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
     oc_string traps[4] = {0};
-    ((traps)[0]) = (oc_string){ .ptr = (const uint8_t*)("__trap_null_deref"), .len = sizeof("__trap_null_deref") - 1 };
-    ((traps)[1]) = (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 };
-    ((traps)[2]) = (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 };
-    ((traps)[3]) = (oc_string){ .ptr = (const uint8_t*)("__trap_div_zero"), .len = sizeof("__trap_div_zero") - 1 };
+    __OC_AT((traps), (0)) = (oc_string){ .ptr = (const uint8_t*)("__trap_null_deref"), .len = sizeof("__trap_null_deref") - 1 };
+    __OC_AT((traps), (1)) = (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 };
+    __OC_AT((traps), (2)) = (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 };
+    __OC_AT((traps), (3)) = (oc_string){ .ptr = (const uint8_t*)("__trap_div_zero"), .len = sizeof("__trap_div_zero") - 1 };
     oc_string trap_msgs[4] = {0};
-    ((trap_msgs)[0]) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\n"), .len = sizeof("panic: null pointer dereference\n") - 1 };
-    ((trap_msgs)[1]) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\n"), .len = sizeof("panic: slice index out of bounds\n") - 1 };
-    ((trap_msgs)[2]) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\n"), .len = sizeof("panic: integer overflow\n") - 1 };
-    ((trap_msgs)[3]) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\n"), .len = sizeof("panic: division by zero\n") - 1 };
+    __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\n"), .len = sizeof("panic: null pointer dereference\n") - 1 };
+    __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\n"), .len = sizeof("panic: slice index out of bounds\n") - 1 };
+    __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\n"), .len = sizeof("panic: integer overflow\n") - 1 };
+    __OC_AT((trap_msgs), (3)) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\n"), .len = sizeof("panic: division by zero\n") - 1 };
     size_t ti = 0;
     while ((ti < 4)) {
-    ng_define_helper(ng, has_offset, ((traps)[ti]), ((code)->len));
-    oc_string tmsg = ((trap_msgs)[ti]);
+    ng_define_helper(ng, has_offset, __OC_AT((traps), (ti)), ((code)->len));
+    oc_string tmsg = __OC_AT((trap_msgs), (ti));
     size_t t_data_off = ((data)->len);
     size_t tk = 0;
     while ((tk < ((tmsg).len))) {
@@ -7331,16 +7334,16 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     }
     size_t fi = 0;
     while ((fi < ((ng)->fixup_count))) {
-    size_t f_off = ((((ng)->fixup_offsets))[fi]);
-    oc_string f_name = ((((ng)->fixup_names))[fi]);
-    bool is_6 = ((((ng)->fixup_is_6byte))[fi]);
+    size_t f_off = __OC_AT((((ng)->fixup_offsets)), (fi));
+    oc_string f_name = __OC_AT((((ng)->fixup_names)), (fi));
+    bool is_6 = __OC_AT((((ng)->fixup_is_6byte)), (fi));
     size_t target_off = 0;
     bool found = false;
     size_t k = 0;
     while ((k < ((ng)->fn_count))) {
-    if (((fn_has_offset)[k])) {
-    if (str_eq(((((ng)->fn_names))[k]), f_name)) {
-    target_off = ((((ng)->fn_offsets))[k]);
+    if (__OC_AT((fn_has_offset), (k))) {
+    if (str_eq(__OC_AT((((ng)->fn_names)), (k)), f_name)) {
+    target_off = __OC_AT((((ng)->fn_offsets)), (k));
     found = true;
     break;
     }
@@ -7410,8 +7413,8 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     uint64_t data_base_vaddr = __OC_ADD(4194304, 256);
     size_t ri = 0;
     while ((ri < ((ng)->data_reloc_count))) {
-    size_t c_pos = ((((ng)->data_reloc_code))[ri]);
-    size_t d_off = ((((ng)->data_reloc_data))[ri]);
+    size_t c_pos = __OC_AT((((ng)->data_reloc_code)), (ri));
+    size_t d_off = __OC_AT((((ng)->data_reloc_data)), (ri));
     uint64_t target_vaddr = __OC_ADD(data_base_vaddr, ({ __auto_type _v = (d_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     elf_patch_u64(code, c_pos, target_vaddr);
     ri = __OC_ADD(ri, 1);
@@ -7476,7 +7479,7 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     }
     p = 0;
     while ((p < ((data)->len))) {
-    buf_append_u8(elf, ((((data)->buffer))[p]));
+    buf_append_u8(elf, __OC_AT((((data)->buffer)), (p)));
     p = __OC_ADD(p, 1);
     }
     size_t pad_to_code = __OC_SUB(code_file_off, rodata_end_off);
@@ -7487,7 +7490,7 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     }
     p = 0;
     while ((p < ((code)->len))) {
-    buf_append_u8(elf, ((((code)->buffer))[p]));
+    buf_append_u8(elf, __OC_AT((((code)->buffer)), (p)));
     p = __OC_ADD(p, 1);
     }
     oc_string elf_str = buf_to_string(elf);
@@ -7498,7 +7501,7 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
 
 oc_string cstr_to_string(uint8_t* cstr) {
     size_t len = 0;
-    while ((((cstr)[len]) != 0)) {
+    while ((__OC_AT((cstr), (len)) != 0)) {
     len = __OC_ADD(len, 1);
     }
     return (oc_string){ .ptr = cstr, .len = len };
@@ -7594,7 +7597,7 @@ oc_string arena_dup_str(Arena* arena, oc_string s) {
     uint8_t* buf = arena_alloc(arena, ((s).len));
     size_t i = 0;
     while ((i < ((s).len))) {
-    ((buf)[i]) = __oc_index_str(s, i);
+    __OC_AT((buf), (i)) = __oc_index_str(s, i);
     i = __OC_ADD(i, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
@@ -7608,12 +7611,12 @@ oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
     uint8_t* buf = arena_alloc(arena, total);
     size_t i = 0;
     while ((i < ((a).len))) {
-    ((buf)[i]) = __oc_index_str(a, i);
+    __OC_AT((buf), (i)) = __oc_index_str(a, i);
     i = __OC_ADD(i, 1);
     }
     size_t j = 0;
     while ((j < ((b).len))) {
-    ((buf)[__OC_ADD(((a).len), j)]) = __oc_index_str(b, j);
+    __OC_AT((buf), (__OC_ADD(((a).len), j))) = __oc_index_str(b, j);
     j = __OC_ADD(j, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
@@ -7751,20 +7754,20 @@ void append_hash_digits(CodeBuffer* buf, oc_string a, oc_string b) {
     uint8_t tmp[16] = {0};
     size_t count = 0;
     while ((h > 0)) {
-    ((tmp)[count]) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(h, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    __OC_AT((tmp), (count)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(h, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
     h = __OC_DIV(h, 10);
     count = __OC_ADD(count, 1);
     }
     while ((count > 0)) {
     count = __OC_SUB(count, 1);
-    buf_append_u8(buf, ((tmp)[count]));
+    buf_append_u8(buf, __OC_AT((tmp), (count)));
     }
 }
 
 bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir, CodeBuffer* out, ModuleLoader* loader, Arena* arena) {
     size_t i = 0;
     while ((i < ((loader)->visited_count))) {
-    if (str_eq(((((loader)->visited))[i]), path)) {
+    if (str_eq(__OC_AT((((loader)->visited)), (i)), path)) {
     return true;
     }
     i = __OC_ADD(i, 1);
@@ -7825,18 +7828,18 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     }
     i = 0;
     while ((i < ((loader)->visited_count))) {
-    if (str_eq(((((loader)->visited))[i]), resolved_path)) {
+    if (str_eq(__OC_AT((((loader)->visited)), (i)), resolved_path)) {
     return true;
     }
     i = __OC_ADD(i, 1);
     }
     if ((((loader)->visited_count) < 128)) {
-    ((((loader)->visited))[((loader)->visited_count)]) = arena_dup_str(arena, path);
+    __OC_AT((((loader)->visited)), (((loader)->visited_count))) = arena_dup_str(arena, path);
     ((loader)->visited_count) = __OC_ADD(((loader)->visited_count), 1);
     }
     if ((!str_eq(resolved_path, path))) {
     if ((((loader)->visited_count) < 128)) {
-    ((((loader)->visited))[((loader)->visited_count)]) = arena_dup_str(arena, resolved_path);
+    __OC_AT((((loader)->visited)), (((loader)->visited_count))) = arena_dup_str(arena, resolved_path);
     ((loader)->visited_count) = __OC_ADD(((loader)->visited_count), 1);
     }
     }
@@ -7965,7 +7968,7 @@ int main(int argc, char** argv) {
     bool target_explicit = false;
     int32_t i = 1;
     if ((i < argc)) {
-    oc_string first = cstr_to_string(((argv)[i]));
+    oc_string first = cstr_to_string(__OC_AT((argv), (i)));
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("version"), .len = sizeof("version") - 1 })) {
     printf("%s\n", "oC 1.0.1");
     return 0;
@@ -8001,24 +8004,24 @@ int main(int argc, char** argv) {
     }
     }
     while ((i < argc)) {
-    oc_string arg = cstr_to_string(((argv)[i]));
+    oc_string arg = cstr_to_string(__OC_AT((argv), (i)));
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("-o"), .len = sizeof("-o") - 1 })) {
     if ((__OC_ADD(i, 1) < argc)) {
-    out_file_str = cstr_to_string(((argv)[__OC_ADD(i, 1)]));
+    out_file_str = cstr_to_string(__OC_AT((argv), (__OC_ADD(i, 1))));
     i = __OC_ADD(i, 1);
     }
     }
     else {
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--emit-c"), .len = sizeof("--emit-c") - 1 })) {
     if ((__OC_ADD(i, 1) < argc)) {
-    emit_c_str = cstr_to_string(((argv)[__OC_ADD(i, 1)]));
+    emit_c_str = cstr_to_string(__OC_AT((argv), (__OC_ADD(i, 1))));
     i = __OC_ADD(i, 1);
     }
     }
     else {
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--backend"), .len = sizeof("--backend") - 1 })) {
     if ((__OC_ADD(i, 1) < argc)) {
-    oc_string backend_name = cstr_to_string(((argv)[__OC_ADD(i, 1)]));
+    oc_string backend_name = cstr_to_string(__OC_AT((argv), (__OC_ADD(i, 1))));
     if (str_eq(backend_name, (oc_string){ .ptr = (const uint8_t*)("native"), .len = sizeof("native") - 1 })) {
     is_native = true;
     }
@@ -8028,7 +8031,7 @@ int main(int argc, char** argv) {
     else {
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--target"), .len = sizeof("--target") - 1 })) {
     if ((__OC_ADD(i, 1) < argc)) {
-    target_name = cstr_to_string(((argv)[__OC_ADD(i, 1)]));
+    target_name = cstr_to_string(__OC_AT((argv), (__OC_ADD(i, 1))));
     target_explicit = true;
     i = __OC_ADD(i, 1);
     }
@@ -8141,7 +8144,7 @@ int main(int argc, char** argv) {
     out_file_str = str_concat((&(arena)), out_file_str, (oc_string){ .ptr = (const uint8_t*)(".exe"), .len = sizeof(".exe") - 1 });
     }
     }
-    oc_string argv0 = cstr_to_string(((argv)[0]));
+    oc_string argv0 = cstr_to_string(__OC_AT((argv), (0)));
     oc_string exe_dir = dir_of_path((&(arena)), argv0);
     ModuleLoader loader = (ModuleLoader){ .visited = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .visited_count = 0 };
     CodeBuffer combined_buf = buf_init(4194304);
