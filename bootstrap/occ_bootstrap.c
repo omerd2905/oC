@@ -5448,6 +5448,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     size_t data_off = ((data)->len);
     size_t emitted_len = ng_append_unescaped_str(data, raw);
+    buf_append_u8(data, 0);
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
     size_t patch_off = ((code)->len);
