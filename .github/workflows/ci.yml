@@ -94,7 +94,7 @@ jobs:
         run: |
           ./bin/occ.exe build examples/hello.oc -o build/hello_native --backend native --target windows-x86_64
           test "$(./build/hello_native.exe)" = "Hello World!"
-          for p in overflow_i32 overflow_u8 underflow_usize div_zero slice_bounds array_bounds array_slice_bounds cast_narrow_i8 cast_neg_u64; do
+          for p in overflow_i32 overflow_u8 overflow_mul_u64 overflow_mul_i32 underflow_usize div_zero slice_bounds array_bounds array_slice_bounds cast_narrow_i8 cast_neg_u64; do
             ./bin/occ.exe build "tests/probes/probe_$p.oc" -o build/trap --backend native
             if ./build/trap.exe; then
               echo "probe_$p.oc exited 0 without trapping"

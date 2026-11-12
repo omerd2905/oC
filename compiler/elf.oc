@@ -419,6 +419,18 @@ fn ng_is_byte_type(t: string) -> bool {
     return false;
 }
 
+fn is_unsigned_type_name(t: string) -> bool {
+    if t.len == 0 { return false; }
+    if str_eq(t, "u8") { return true; }
+    if str_eq(t, "u16") { return true; }
+    if str_eq(t, "u32") { return true; }
+    if str_eq(t, "u64") { return true; }
+    if str_eq(t, "usize") { return true; }
+    if t[0] == 42 { return true; }
+    if t[0] == 38 { return true; }
+    return false;
+}
+
 fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_STRING { return "string"; }
@@ -430,6 +442,28 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return ng_find_var_type(ng, expr.tok.slice);
     }
     if expr.tag == NODE_CALL {
+        if wrapping_op(expr.tok.slice).len > 0 {
+            // Same rule as the C backend: a narrow (< 32-bit) operand decides the width, then
+            // 64-bit beats 32-bit and unsigned beats signed. Untyped literals do not decide.
+            let mut lt: string = "";
+            let mut rt: string = "";
+            if expr.left != (0).as(*mut AstNode) {
+                lt = ng_expr_type(ng, expr.left);
+                rt = ng_expr_type(ng, expr.left.next);
+            }
+            if ng_scalar_width(lt) < 4 { return lt; }
+            if ng_scalar_width(rt) < 4 { return rt; }
+            if lt.len == 0 { return rt; }
+            if rt.len == 0 { return lt; }
+            if ng_scalar_width(lt) == 8 {
+                if is_unsigned_type_name(lt) { return lt; }
+                if ng_scalar_width(rt) == 8 { return rt; }
+                return lt;
+            }
+            if ng_scalar_width(rt) == 8 { return rt; }
+            if is_unsigned_type_name(lt) { return lt; }
+            return rt;
+        }
         return ng_find_fn_ret_type(ng, expr.tok.slice);
     }
     if expr.tag == NODE_ADDRESS_OF {
@@ -475,18 +509,6 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return rt;
     }
     return "";
-}
-
-fn is_unsigned_type_name(t: string) -> bool {
-    if t.len == 0 { return false; }
-    if str_eq(t, "u8") { return true; }
-    if str_eq(t, "u16") { return true; }
-    if str_eq(t, "u32") { return true; }
-    if str_eq(t, "u64") { return true; }
-    if str_eq(t, "usize") { return true; }
-    if t[0] == 42 { return true; }
-    if t[0] == 38 { return true; }
-    return false;
 }
 
 fn ng_is_unsigned_expr(ng: *mut NativeGen, expr: *mut AstNode) -> bool {
@@ -1379,37 +1401,21 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             return;
         }
         if expr.tok.tag == TOK_STAR {
-            let mut is_fnv_prime: bool = false;
-            if expr.right != (0).as(*mut AstNode) {
-                if expr.right.tag == NODE_INT {
-                    if str_eq(expr.right.tok.slice, "16777619") {
-                        is_fnv_prime = true;
-                    }
-                }
-            }
-            let mut use_unsigned_mul: bool = false;
             if is_uns {
-                if !is_fnv_prime {
-                    use_unsigned_mul = true;
-                }
-            }
-            if use_unsigned_mul {
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 247);
-                buf_append_u8(code, 227); // mul %rbx
+                buf_append_u8(code, 227); // mul %rbx (OF = CF = high half non-zero)
             } else {
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 175);
                 buf_append_u8(code, 195); // imul %rbx, %rax
             }
-            if !is_fnv_prime {
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
-                buf_append_u8(code, 15);
-                buf_append_u8(code, 128); // jo
-                elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
-            }
+            ng_add_fixup(ng, code.len, "__trap_overflow", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 128); // jo
+            elf_append_u32(code, 0);
+            ng_emit_range_check(ng, code, res_type);
             return;
         }
         if expr.tok.tag == TOK_LT {
@@ -1591,6 +1597,48 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_CALL {
+        let w_op: string = wrapping_op(expr.tok.slice);
+        if w_op.len > 0 {
+            let mut w_argc: usize = 0;
+            let mut w_arg: *mut AstNode = expr.left;
+            while w_arg != (0).as(*mut AstNode) {
+                w_argc = w_argc + 1;
+                w_arg = w_arg.next;
+            }
+            if w_argc != 2 {
+                ng_fail(ng, "native codegen error: wrapping_add/wrapping_sub/wrapping_mul take exactly 2 arguments");
+                return;
+            }
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax
+            ng_emit_expr(ng, code, data, expr.left.next);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx
+            buf_append_u8(code, 88); // pop %rax
+            if str_eq(w_op, "add") {
+                buf_append_u8(code, 72); buf_append_u8(code, 1); buf_append_u8(code, 216); // add %rbx, %rax
+            } else if str_eq(w_op, "sub") {
+                buf_append_u8(code, 72); buf_append_u8(code, 41); buf_append_u8(code, 216); // sub %rbx, %rax
+            } else {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 175); buf_append_u8(code, 195); // imul %rbx, %rax
+            }
+            // No trap: keep the low bits and re-extend them to the operand type's width.
+            let w_t: string = ng_expr_type(ng, expr);
+            if str_eq(w_t, "u8") {
+                buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 192); // movzbl %al, %eax
+            } else if str_eq(w_t, "i8") {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 192); // movsbq %al, %rax
+            } else if str_eq(w_t, "u16") {
+                buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 192); // movzwl %ax, %eax
+            } else if str_eq(w_t, "i16") {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 192); // movswq %ax, %rax
+            } else if str_eq(w_t, "u32") {
+                buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
+            } else if str_eq(w_t, "i32") {
+                buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
+            }
+            return;
+        }
+
         let mut reg_count: usize = 0;
         let mut a: *mut AstNode = expr.left;
         while a != (0).as(*mut AstNode) {

@@ -242,6 +242,15 @@ fn is_expr_pointer(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
     return false;
 }
 
+// Explicit modular arithmetic: wrapping_add / wrapping_sub / wrapping_mul(a, b) wrap at the
+// width of their operands instead of trapping (hashes, checksums, PRNGs). "" if not one of them.
+fn wrapping_op(fn_name: string) -> string {
+    if str_eq(fn_name, "wrapping_add") { return "add"; }
+    if str_eq(fn_name, "wrapping_sub") { return "sub"; }
+    if str_eq(fn_name, "wrapping_mul") { return "mul"; }
+    return "";
+}
+
 fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     if expr == (0).as(*mut AstNode) {
         return;
@@ -449,6 +458,20 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_CALL {
+        let w_op: string = wrapping_op(expr.tok.slice);
+        if w_op.len > 0 {
+            buf_append(out, "__OC_WRAP(");
+            buf_append(out, w_op);
+            let mut w_arg: *mut AstNode = expr.left;
+            while w_arg != (0).as(*mut AstNode) {
+                buf_append(out, ", (");
+                codegen_expr(w_arg, out);
+                buf_append(out, ")");
+                w_arg = w_arg.next;
+            }
+            buf_append(out, ")");
+            return;
+        }
         buf_append(out, expr.tok.slice);
         buf_append(out, "(");
         let mut arg: *mut AstNode = expr.left;
@@ -499,22 +522,12 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                     return;
                 }
                 if expr.tok.tag == TOK_STAR {
-                    let mut is_fnv_prime: bool = false;
-                    if expr.right != (0).as(*mut AstNode) {
-                        if expr.right.tag == NODE_INT {
-                            if str_eq(expr.right.tok.slice, "16777619") {
-                                is_fnv_prime = true;
-                            }
-                        }
-                    }
-                    if !is_fnv_prime {
-                        buf_append(out, "__OC_MUL(");
-                        codegen_expr(expr.left, out);
-                        buf_append(out, ", ");
-                        codegen_expr(expr.right, out);
-                        buf_append(out, ")");
-                        return;
-                    }
+                    buf_append(out, "__OC_MUL(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, ", ");
+                    codegen_expr(expr.right, out);
+                    buf_append(out, ")");
+                    return;
                 }
             }
         }
@@ -944,7 +957,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n");
     buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
     buf_append(out, "#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
-    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n");
+    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n");
 
     // Pre-populate struct field and function return type tables
     out.ptr_fields[0] = "ptr";
