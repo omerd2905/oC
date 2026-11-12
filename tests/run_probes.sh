@@ -76,6 +76,28 @@ for ex in "$ROOT"/examples/*.oc; do
   done
 done
 
+echo "=== Backend Parity: C and Native Output Must Match ==="
+for t in "$ROOT"/tests/parity/*.oc; do
+  base="$(basename "$t")"
+  TOTAL=$((TOTAL + 1))
+  for backend in c native; do
+    "$OCC" build "$t" -o "/tmp/oc_parity_$backend" --backend "$backend" >/dev/null
+    set +e
+    "/tmp/oc_parity_$backend" >"/tmp/oc_parity_$backend.out" 2>&1
+    echo "exit $?" >>"/tmp/oc_parity_$backend.out"
+    set -e
+  done
+  if cmp -s /tmp/oc_parity_c.out /tmp/oc_parity_native.out; then
+    echo "  [PASS] $base (identical output on both backends)"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $base: C and native output differ:"
+    diff /tmp/oc_parity_c.out /tmp/oc_parity_native.out || true
+    exit 1
+  fi
+  rm -f /tmp/oc_parity_c /tmp/oc_parity_native /tmp/oc_parity_c.out /tmp/oc_parity_native.out
+done
+
 echo "=== [4/4] Cross-Target PE32+ Verification (--backend native --target windows-x86_64) ==="
 PE_OUT=/tmp/oc_pe_bin
 pe_check() {

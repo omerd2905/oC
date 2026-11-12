@@ -369,6 +369,7 @@ struct NativeGen {
     oc_string field_names[256];
     int32_t field_offsets[256];
     oc_string field_types[256];
+    bool field_packed[256];
     size_t field_count;
     oc_string const_names[128];
     uint64_t const_vals[128];
@@ -494,9 +495,13 @@ int32_t ng_find_var_idx(NativeGen* ng, oc_string name);
 int32_t ng_find_var_offset(NativeGen* ng, oc_string name);
 oc_string ng_find_var_type(NativeGen* ng, oc_string name);
 bool ng_is_var_slice(NativeGen* ng, oc_string name);
+int32_t ng_struct_raw_size(NativeGen* ng, oc_string name);
 int32_t ng_find_struct_size(NativeGen* ng, oc_string name);
+int32_t ng_find_field_idx(NativeGen* ng, oc_string s_name, oc_string f_name);
 int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name);
 oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name);
+int32_t ng_scalar_width(oc_string t);
+int32_t ng_field_width(NativeGen* ng, oc_string s_name, oc_string f_name);
 oc_string ng_find_fn_ret_type(NativeGen* ng, oc_string fn_name);
 oc_string ng_strip_ptr_type(oc_string t);
 size_t ng_parse_array_len(oc_string t);
@@ -518,6 +523,8 @@ void ng_emit_disp_load_r8(CodeBuffer* code, int32_t off);
 void ng_emit_disp_lea_rax(CodeBuffer* code, int32_t off);
 size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw);
 void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t);
+void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width);
+void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
@@ -4524,7 +4531,7 @@ bool ng_is_var_slice(NativeGen* ng, oc_string name) {
     return false;
 }
 
-int32_t ng_find_struct_size(NativeGen* ng, oc_string name) {
+int32_t ng_struct_raw_size(NativeGen* ng, oc_string name) {
     size_t i = 0;
     while ((i < ((ng)->struct_count))) {
     if (str_eq(__OC_AT((((ng)->struct_names)), (i)), name)) {
@@ -4535,12 +4542,16 @@ int32_t ng_find_struct_size(NativeGen* ng, oc_string name) {
     return 0;
 }
 
-int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name) {
+int32_t ng_find_struct_size(NativeGen* ng, oc_string name) {
+    return __OC_MUL(__OC_DIV(__OC_ADD(ng_struct_raw_size(ng, name), 7), 8), 8);
+}
+
+int32_t ng_find_field_idx(NativeGen* ng, oc_string s_name, oc_string f_name) {
     size_t i = 0;
     while ((i < ((ng)->field_count))) {
     if (str_eq(__OC_AT((((ng)->field_struct)), (i)), s_name)) {
     if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
-    return __OC_AT((((ng)->field_offsets)), (i));
+    return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     }
     }
     i = __OC_ADD(i, 1);
@@ -4548,11 +4559,19 @@ int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name) 
     i = 0;
     while ((i < ((ng)->field_count))) {
     if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
-    return __OC_AT((((ng)->field_offsets)), (i));
+    return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     }
     i = __OC_ADD(i, 1);
     }
+    return (-1);
+}
+
+int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name) {
+    int32_t idx = ng_find_field_idx(ng, s_name, f_name);
+    if ((idx < 0)) {
     return 0;
+    }
+    return __OC_AT((((ng)->field_offsets)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
 }
 
 oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name) {
@@ -4562,23 +4581,51 @@ oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name) 
     if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("*u8"), .len = sizeof("*u8") - 1 };
     }
-    size_t i = 0;
-    while ((i < ((ng)->field_count))) {
-    if (str_eq(__OC_AT((((ng)->field_struct)), (i)), s_name)) {
-    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
-    return __OC_AT((((ng)->field_types)), (i));
-    }
-    }
-    i = __OC_ADD(i, 1);
-    }
-    i = 0;
-    while ((i < ((ng)->field_count))) {
-    if (str_eq(__OC_AT((((ng)->field_names)), (i)), f_name)) {
-    return __OC_AT((((ng)->field_types)), (i));
-    }
-    i = __OC_ADD(i, 1);
-    }
+    int32_t idx = ng_find_field_idx(ng, s_name, f_name);
+    if ((idx < 0)) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return __OC_AT((((ng)->field_types)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
+}
+
+int32_t ng_scalar_width(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return 1;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return 1;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    return 1;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    return 2;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return 2;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    return 4;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return 4;
+    }
+    return 8;
+}
+
+int32_t ng_field_width(NativeGen* ng, oc_string s_name, oc_string f_name) {
+    int32_t idx = ng_find_field_idx(ng, s_name, f_name);
+    if ((idx < 0)) {
+    return 8;
+    }
+    int32_t w = ng_scalar_width(__OC_AT((((ng)->field_types)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))));
+    if (__OC_AT((((ng)->field_packed)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))) {
+    return w;
+    }
+    if ((w == 1)) {
+    return 1;
+    }
+    return 8;
 }
 
 oc_string ng_find_fn_ret_type(NativeGen* ng, oc_string fn_name) {
@@ -5074,6 +5121,90 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t) {
     }
 }
 
+void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width) {
+    bool is_signed = false;
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    is_signed = true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    is_signed = true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    is_signed = true;
+    }
+    if ((width == 1)) {
+    if (is_signed) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 190);
+    buf_append_u8(code, 0);
+    }
+    else {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 182);
+    buf_append_u8(code, 0);
+    }
+    }
+    else {
+    if ((width == 2)) {
+    if (is_signed) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 191);
+    buf_append_u8(code, 0);
+    }
+    else {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 183);
+    buf_append_u8(code, 0);
+    }
+    }
+    else {
+    if ((width == 4)) {
+    if (is_signed) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 99);
+    buf_append_u8(code, 0);
+    }
+    else {
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 0);
+    }
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 0);
+    }
+    }
+    }
+}
+
+void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width) {
+    if ((width == 1)) {
+    buf_append_u8(code, 136);
+    buf_append_u8(code, 1);
+    }
+    else {
+    if ((width == 2)) {
+    buf_append_u8(code, 102);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 1);
+    }
+    else {
+    if ((width == 4)) {
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 1);
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 1);
+    }
+    }
+    }
+}
+
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return;
@@ -5323,14 +5454,16 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
+    int32_t f_w = ng_field_width(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     ng_emit_expr(ng, code, data, ((f)->left));
     if ((f_off >= 0)) {
-    if ((f_off < 32)) {
+    if ((__OC_ADD(f_off, f_w) <= 32)) {
     buf_append_u8(code, 72);
-    buf_append_u8(code, 137);
-    buf_append_u8(code, 68);
+    buf_append_u8(code, 141);
+    buf_append_u8(code, 76);
     buf_append_u8(code, 36);
     buf_append_u8(code, ({ __auto_type _v = (f_off); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; }));
+    ng_emit_store_at_rcx(code, f_w);
     }
     }
     f = ((f)->next);
@@ -5365,22 +5498,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 0);
     return;
     }
-    if (ng_is_byte_type(ft)) {
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 182);
-    buf_append_u8(code, 0);
-    return;
-    }
-    if (str_eq(ft, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 190);
-    buf_append_u8(code, 0);
-    return;
-    }
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 139);
-    buf_append_u8(code, 0);
+    ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, ((((expr)->tok)).slice)));
     return;
     }
     if ((((expr)->tag) == NODE_CAST)) {
@@ -6281,9 +6399,16 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
     oc_string f_type = ng_find_field_type(ng, t_name, ((((f)->tok)).slice));
     ng_emit_expr(ng, code, data, ((f)->left));
-    ng_emit_disp_store_rax(code, __OC_ADD(base_off, f_off));
     if (str_eq(f_type, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    ng_emit_disp_store_rax(code, __OC_ADD(base_off, f_off));
     ng_emit_disp_store_rdx(code, __OC_ADD(__OC_ADD(base_off, f_off), 8));
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 141);
+    buf_append_u8(code, 141);
+    elf_append_i32(code, __OC_ADD(base_off, f_off));
+    ng_emit_store_at_rcx(code, ng_field_width(ng, t_name, ((((f)->tok)).slice)));
     }
     f = ((f)->next);
     }
@@ -6377,19 +6502,17 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     return;
     }
     buf_append_u8(code, 88);
-    bool is_1byte = ng_is_byte_type(lhs_t);
-    if (str_eq(lhs_t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
-    is_1byte = true;
-    }
-    if (is_1byte) {
-    buf_append_u8(code, 136);
-    buf_append_u8(code, 1);
+    int32_t width = 8;
+    if ((((((stmt)->left))->tag) == NODE_FIELD_ACCESS)) {
+    oc_string base_t = ng_strip_ptr_type(ng_expr_type(ng, ((((stmt)->left))->left)));
+    width = ng_field_width(ng, base_t, ((((((stmt)->left))->tok)).slice));
     }
     else {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 137);
-    buf_append_u8(code, 1);
+    if ((ng_scalar_width(lhs_t) == 1)) {
+    width = 1;
     }
+    }
+    ng_emit_store_at_rcx(code, width);
     return;
     }
     return;
@@ -7016,18 +7139,22 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     CodeBuffer data_buf = buf_init(65536);
     CodeBuffer* code = (&(code_buf));
     CodeBuffer* data = (&(data_buf));
-    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_count = 0, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
+    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_packed = { false }, .field_count = 0, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
     NativeGen* ng = (&(ng_state));
     bool is_win = (target == OC_TARGET_WINDOWS_X86_64);
     AstNode* scan = ((root)->left);
     while ((scan != ((AstNode*)(0)))) {
     if ((((scan)->tag) == NODE_STRUCT_DECL)) {
     oc_string s_name = ((((scan)->tok)).slice);
+    bool is_packed = str_eq(((scan)->type_name), (oc_string){ .ptr = (const uint8_t*)("packed"), .len = sizeof("packed") - 1 });
     int32_t f_off = 0;
     AstNode* sf = ((scan)->left);
     while ((sf != ((AstNode*)(0)))) {
     oc_string ft = ((sf)->type_name);
     int32_t f_sz = 8;
+    if (is_packed) {
+    f_sz = ng_scalar_width(ft);
+    }
     if (str_eq(ft, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
     f_sz = 16;
     }
@@ -7037,7 +7164,17 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     size_t alen = ng_parse_array_len(ft);
     oc_string ael = ng_parse_array_elem(ft);
     int32_t astr = ng_type_stride(ael);
-    f_sz = __OC_MUL(__OC_DIV(__OC_ADD(__OC_MUL(({ __auto_type _v = (alen); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }), astr), 7), 8), 8);
+    f_sz = __OC_MUL(({ __auto_type _v = (alen); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }), astr);
+    if ((!is_packed)) {
+    f_sz = __OC_MUL(__OC_DIV(__OC_ADD(f_sz, 7), 8), 8);
+    }
+    }
+    else {
+    if (is_packed) {
+    int32_t raw_sz = ng_struct_raw_size(ng, ft);
+    if ((raw_sz > 0)) {
+    f_sz = raw_sz;
+    }
     }
     else {
     int32_t sub_sz = ng_find_struct_size(ng, ft);
@@ -7047,11 +7184,13 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     }
     }
     }
+    }
     if ((((ng)->field_count) < 256)) {
     __OC_AT((((ng)->field_struct)), (((ng)->field_count))) = s_name;
     __OC_AT((((ng)->field_names)), (((ng)->field_count))) = ((((sf)->tok)).slice);
     __OC_AT((((ng)->field_offsets)), (((ng)->field_count))) = f_off;
     __OC_AT((((ng)->field_types)), (((ng)->field_count))) = ft;
+    __OC_AT((((ng)->field_packed)), (((ng)->field_count))) = is_packed;
     ((ng)->field_count) = __OC_ADD(((ng)->field_count), 1);
     }
     f_off = __OC_ADD(f_off, f_sz);
