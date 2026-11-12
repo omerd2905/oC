@@ -27,6 +27,9 @@ jobs:
           printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
           test "$(occ run t.oc)" = "std ok"
 
+      - name: Every example in docs/*.html and README.md builds (or is rejected as documented)
+        run: python3 tests/check_docs.py
+
       - name: Verify W^X ELF64 segments on --backend native
         run: |
           ./bin/occ build examples/oc_tripwire.oc -o /tmp/oc_tripwire --backend native
