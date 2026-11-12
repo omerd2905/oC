@@ -101,6 +101,12 @@ static inline int32_t sys_host_target(void) { return 1; }
 static inline int32_t sys_host_target(void) { return 0; }
 #endif
 
+#ifdef _WIN32
+#define __OC_STDOUT_BUF _IONBF
+#else
+#define __OC_STDOUT_BUF _IOLBF
+#endif
+
 typedef struct {
     const uint8_t* ptr;
     size_t len;
@@ -4261,6 +4267,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 3; }\n"), .len = sizeof("#elif defined(__APPLE__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 3; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n"), .len = sizeof("#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n"), .len = sizeof("#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n#define __OC_STDOUT_BUF _IONBF\n#else\n#define __OC_STDOUT_BUF _IOLBF\n#endif\n\n"), .len = sizeof("#ifdef _WIN32\n#define __OC_STDOUT_BUF _IONBF\n#else\n#define __OC_STDOUT_BUF _IOLBF\n#endif\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct {\n"), .len = sizeof("typedef struct {\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t* ptr;\n"), .len = sizeof("    const uint8_t* ptr;\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    size_t len;\n"), .len = sizeof("    size_t len;\n") - 1 });
@@ -4519,6 +4526,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(int argc, char** argv) {\n"), .len = sizeof("int main(int argc, char** argv) {\n") - 1 });
     }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\n"), .len = sizeof("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\n") - 1 });
     AstNode* body_block = ((decl)->right);
     if ((body_block != ((AstNode*)(0)))) {
     AstNode* stmt = ((body_block)->left);
@@ -8883,6 +8891,7 @@ int32_t handle_self_cmd(bool is_install, oc_string argv0) {
 }
 
 int main(int argc, char** argv) {
+    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);
     if ((argc < 2)) {
     print_usage();
     return 0;

@@ -1,0 +1,13 @@
+// print() and raw sys_write() share stdout: their output must appear in program order even
+// when stdout is a pipe or a file, and nothing printed before sys_exit() may be lost.
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn sys_exit(code: i32);
+
+fn main() {
+    print("one");
+    sys_write(1, "two\n".ptr, 4);
+    print(3);
+    sys_write(1, "four\n".ptr, 5);
+    print("five");
+    sys_exit(0);
+}
