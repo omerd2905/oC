@@ -104,7 +104,7 @@
 |          |                                                                        |
 |          v                                                                        |
 |  [EscapeValidator] -> Active defense: stack-escape, UAF, cross-arena borrow check|
-|          |            (Zero runtime cost: 0.00 ns overhead)                       |
+|          |            (Compile time only: no runtime checks)                      |
 |          +------------------------------------+                                   |
 |          |                                    |                                   |
 |          v                                    v                                   |
@@ -459,7 +459,7 @@ $ cmp /tmp/occ_stage2 /tmp/occ_stage3
             <div class="code-pane">
               <div class="pane-label"><span>SOURCE</span></div>
               <pre><code>// examples/bad_stack_escape.oc
-fn leak_stack() *mut i32 {
+fn leak_stack() -&gt; *mut i32 {
     let mut local: i32 = 42;
     return &amp;mut local; // Illegal stack address escape
 }</code></pre>
@@ -495,7 +495,7 @@ error: use-after-free: variable 'ptr' used after arena 'a' was reset
 [occ terminated with exit code 1]</code></pre>
             </div>
           </div>
-          <div class="explanation-box"><strong>Prevention:</strong> CWE-416 (Use After Free) is eliminated statically at compile time with 0.00 ns runtime cost.</div>
+          <div class="explanation-box"><strong>Prevention:</strong> CWE-416 (Use After Free) is rejected statically at compile time; no runtime check is involved.</div>
         </div>
       </section>
 
@@ -507,7 +507,7 @@ error: use-after-free: variable 'ptr' used after arena 'a' was reset
           <li><a href="tutorial.html">oC Tutorial</a> — Step-by-step introduction to oC systems programming</li>
           <li><a href="syntax.html">OC-LANG(7)</a> — Complete oC language syntax, grammar, types, and operator precedence</li>
           <li><a href="stdlib.html">OC-STD(3) &amp; SYSCALLS(2)</a> — Standard library API reference and Linux syscall ABI</li>
-          <li><a href="security.html">OC-SECURITY(7)</a> — 17-CWE active defense elimination matrix</li>
+          <li><a href="security.html">OC-SECURITY(7)</a> — CWE coverage matrix</li>
           <li><a href="https://github.com/omerd2905/oC" target="_blank" rel="noopener">GitHub Repository</a> — Source code, issue tracker, and showcase benchmarks</li>
         </ul>
       </section>

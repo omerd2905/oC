@@ -139,9 +139,9 @@
                   <span>OC-SECURITY(7) Matrix</span>
                   <span>→</span>
                 </a>
-                <p>Deep dive into the 17 CWE vulnerability classes neutralized by oC, active defense IoB tripwires, and the 13 automated exploit regression tests.</p>
+                <p>Deep dive into the CWE weakness classes oC addresses, active defense IoB tripwires, and the 13 automated exploit regression tests.</p>
               </div>
-              <div class="card-footer">17 CWEs Neutralized • Active Defense</div>
+              <div class="card-footer">CWE Coverage • Active Defense</div>
             </div>
 
             <div class="card">
@@ -170,7 +170,7 @@
           </p>
           <ul>
             <li><strong>Zero General-Purpose Heap:</strong> All dynamic memory allocations are serviced by explicit kernel-backed regional bump arenas (<code>sys_mmap</code>). Zero inline chunk headers exist to be corrupted.</li>
-            <li><strong>Compile-Time EscapeValidator:</strong> Temporal memory safety (UAF, double-free, dangling stack pointers) is validated statically at compile time with 0.00 ns runtime overhead.</li>
+            <li><strong>Compile-Time EscapeValidator:</strong> Temporal memory safety (UAF, double-free, dangling stack pointers) is validated statically at compile time, so it adds no runtime checks.</li>
             <li><strong>Hardware &amp; Runtime Trap Enforcement:</strong> Both backends enforce arithmetic overflow/underflow checks, division-by-zero checks, signed/unsigned narrowing cast range checks, null-pointer dereference traps, and spatial slice/array bounds verification.</li>
             <li><strong>Dual Codegen Backends:</strong> The default backend (<code>--backend c</code>) emits C11 IR with <code>__builtin_*_overflow</code> / trap checks and invokes system <code>cc</code>/<code>gcc</code> for <code>-O1/-O2/-O3</code> vectorization; <code>--backend native</code> emits standalone static Linux <code>x86_64</code> ELF64 binaries (&lt;5.0 KB) with strict W^X segment permissions (<code>PF_R</code> <code>.rodata</code>, <code>PF_R|PF_X</code> <code>.text</code>, <code>PF_R|PF_W</code> <code>PT_GNU_STACK</code>) and zero external toolchain or <code>libc</code> dependencies.</li>
           </ul>
@@ -197,7 +197,7 @@
                 <pre><code><span class="kw">import</span> <span class="str">"std/io.oc"</span>;
 <span class="kw">import</span> <span class="str">"std/mem.oc"</span>;
 
-<span class="kw">fn</span> <span class="fn">main</span>() <span class="ty">i32</span> {
+<span class="kw">fn</span> <span class="fn">main</span>() -&gt; <span class="ty">i32</span> {
     <span class="cm">// 1. Allocate a 64 KB kernel-backed arena via direct sys_mmap</span>
     <span class="kw">let mut</span> <span class="ty">arena</span>: <span class="ty">Arena</span> = <span class="fn">arena_init</span>(<span class="num">65536</span>);
 

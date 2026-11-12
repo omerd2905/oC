@@ -13,7 +13,7 @@ Online documentation and language specification: [https://omerd2905.github.io/oC
 ```oc
 import "std/mem.oc";
 
-fn main() i32 {
+fn main() -> i32 {
     // 1. Regional arena allocated directly from the OS kernel
     let mut arena: Arena = arena_init(4096);
 

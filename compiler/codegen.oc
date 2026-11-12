@@ -257,7 +257,14 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_INT {
-        buf_append(out, expr.tok.slice);
+        // `_` digit separators (1_000, 0b0010_1010) are oC syntax; C does not accept them.
+        let mut di: usize = 0;
+        while di < expr.tok.slice.len {
+            if expr.tok.slice[di] != 95 {
+                buf_append_u8(out, expr.tok.slice[di]);
+            }
+            di = di + 1;
+        }
         return;
     }
 
