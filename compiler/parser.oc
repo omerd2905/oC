@@ -977,6 +977,17 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     }
     if expr.tag == NODE_CAST { return get_expr_arena_borrow(v, expr.left); }
     if expr.tag == NODE_SLICE { return get_expr_arena_borrow(v, expr.left); }
+    if expr.tag == NODE_STRUCT_INIT {
+        // A struct literal that stores an arena pointer (e.g. string { ptr: p, len: n })
+        // borrows from that arena just like the pointer does.
+        let mut f: *mut AstNode = expr.left;
+        while f != (0).as(*mut AstNode) {
+            let wrapped: string = get_expr_arena_borrow(v, f.left);
+            if wrapped.len > 0 { return wrapped; }
+            f = f.next;
+        }
+        return "";
+    }
     if expr.tag == NODE_ADDRESS_OF {
         let id: string = get_ident_name(expr.left);
         if id.len > 0 {
