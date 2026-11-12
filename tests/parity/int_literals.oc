@@ -1,0 +1,6 @@
+fn main() {
+    let a: u32 = 0b0010_1010;
+    let b: u64 = 1_000_000;
+    print(a);
+    print(b + 1);
+}

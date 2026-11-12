@@ -1,0 +1,10 @@
+import "std/mem.oc";
+
+fn my_deinit(a: *mut Arena) { arena_deinit(a); }
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_alloc(&mut a, 16);
+    my_deinit(&mut a);
+    p[0] = 1; // use-after-free: the arena was unmapped inside my_deinit
+}

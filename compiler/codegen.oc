@@ -242,13 +242,29 @@ fn is_expr_pointer(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
     return false;
 }
 
+// Explicit modular arithmetic: wrapping_add / wrapping_sub / wrapping_mul(a, b) wrap at the
+// width of their operands instead of trapping (hashes, checksums, PRNGs). "" if not one of them.
+fn wrapping_op(fn_name: string) -> string {
+    if str_eq(fn_name, "wrapping_add") { return "add"; }
+    if str_eq(fn_name, "wrapping_sub") { return "sub"; }
+    if str_eq(fn_name, "wrapping_mul") { return "mul"; }
+    return "";
+}
+
 fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     if expr == (0).as(*mut AstNode) {
         return;
     }
 
     if expr.tag == NODE_INT {
-        buf_append(out, expr.tok.slice);
+        // `_` digit separators (1_000, 0b0010_1010) are oC syntax; C does not accept them.
+        let mut di: usize = 0;
+        while di < expr.tok.slice.len {
+            if expr.tok.slice[di] != 95 {
+                buf_append_u8(out, expr.tok.slice[di]);
+            }
+            di = di + 1;
+        }
         return;
     }
 
@@ -360,41 +376,42 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, ")");
             return;
         }
-        buf_append(out, "((");
+        // __OC_AT bounds-checks fixed-size arrays ([N]T) against N; raw pointers stay unchecked.
+        buf_append(out, "__OC_AT((");
         codegen_expr(expr.left, out);
-        buf_append(out, ")[");
+        buf_append(out, "), (");
         codegen_expr(expr.right, out);
-        buf_append(out, "])");
+        buf_append(out, "))");
         return;
     }
 
     if expr.tag == NODE_SLICE {
-        buf_append(out, "__oc_slice_str(");
-        codegen_expr(expr.left, out);
-        buf_append(out, ", ");
+        // A string is sliced as is; a fixed-size array is first viewed as { ptr: &a[0], len: N }.
+        let is_str: bool = is_expr_string(expr.left, out);
         let mut has_start: bool = false;
+        let mut has_end: bool = false;
         if expr.right != (0).as(*mut AstNode) {
-            if expr.right.left != (0).as(*mut AstNode) {
-                has_start = true;
-            }
+            if expr.right.left != (0).as(*mut AstNode) { has_start = true; }
+            if expr.right.right != (0).as(*mut AstNode) { has_end = true; }
         }
+        buf_append(out, "__oc_slice_str(");
+        if !is_str { buf_append(out, "__OC_ARR("); }
+        codegen_expr(expr.left, out);
+        if !is_str { buf_append(out, ")"); }
+        buf_append(out, ", ");
         if has_start {
             codegen_expr(expr.right.left, out);
         } else {
             buf_append(out, "0");
         }
         buf_append(out, ", ");
-        let mut has_end: bool = false;
-        if expr.right != (0).as(*mut AstNode) {
-            if expr.right.right != (0).as(*mut AstNode) {
-                has_end = true;
-            }
-        }
         if has_end {
             codegen_expr(expr.right.right, out);
         } else {
             buf_append(out, "((");
+            if !is_str { buf_append(out, "__OC_ARR("); }
             codegen_expr(expr.left, out);
+            if !is_str { buf_append(out, ")"); }
             buf_append(out, ").len)");
         }
         buf_append(out, ")");
@@ -448,6 +465,20 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_CALL {
+        let w_op: string = wrapping_op(expr.tok.slice);
+        if w_op.len > 0 {
+            buf_append(out, "__OC_WRAP(");
+            buf_append(out, w_op);
+            let mut w_arg: *mut AstNode = expr.left;
+            while w_arg != (0).as(*mut AstNode) {
+                buf_append(out, ", (");
+                codegen_expr(w_arg, out);
+                buf_append(out, ")");
+                w_arg = w_arg.next;
+            }
+            buf_append(out, ")");
+            return;
+        }
         buf_append(out, expr.tok.slice);
         buf_append(out, "(");
         let mut arg: *mut AstNode = expr.left;
@@ -498,22 +529,12 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                     return;
                 }
                 if expr.tok.tag == TOK_STAR {
-                    let mut is_fnv_prime: bool = false;
-                    if expr.right != (0).as(*mut AstNode) {
-                        if expr.right.tag == NODE_INT {
-                            if str_eq(expr.right.tok.slice, "16777619") {
-                                is_fnv_prime = true;
-                            }
-                        }
-                    }
-                    if !is_fnv_prime {
-                        buf_append(out, "__OC_MUL(");
-                        codegen_expr(expr.left, out);
-                        buf_append(out, ", ");
-                        codegen_expr(expr.right, out);
-                        buf_append(out, ")");
-                        return;
-                    }
+                    buf_append(out, "__OC_MUL(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, ", ");
+                    codegen_expr(expr.right, out);
+                    buf_append(out, ")");
+                    return;
                 }
             }
         }
@@ -528,6 +549,43 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 }
 
+fn is_comparison_tok(tag: u32) -> bool {
+    if tag == TOK_EQEQ { return true; }
+    if tag == TOK_NEQ { return true; }
+    if tag == TOK_LT { return true; }
+    if tag == TOK_LTE { return true; }
+    if tag == TOK_GT { return true; }
+    if tag == TOK_GTE { return true; }
+    return false;
+}
+
+// Expressions that are bool in oC but plain `int` in C (literals before C23, comparisons, `!x`).
+fn is_bool_expr(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_BOOL { return true; }
+    if expr.tag == NODE_UNARY { return expr.tok.tag == TOK_BANG; }
+    if expr.tag == NODE_BINARY { return is_comparison_tok(expr.tok.tag); }
+    return false;
+}
+
+// Declared type of the innermost visible local or parameter named `name` ("" if unknown).
+fn cg_var_type(out: *mut CodeBuffer, name: string) -> string {
+    let mut i: usize = out.var_types_len;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(out.var_names[i], name) { return out.var_types[i]; }
+    }
+    return "";
+}
+
+fn is_u8_array_type(t: string) -> bool {
+    if t.len < 4 { return false; }
+    if t[0] != 91 { return false; }           // '['
+    if t[t.len - 3] != 93 { return false; }   // ']'
+    if t[t.len - 2] != 117 { return false; }  // 'u'
+    return t[t.len - 1] == 56;                // '8'
+}
+
 fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
     let arg: *mut AstNode = node.left;
     if arg != (0).as(*mut AstNode) {
@@ -537,9 +595,26 @@ fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, ");\n");
             return;
         }
+        if arg.tag == NODE_IDENT {
+            if is_u8_array_type(cg_var_type(out, arg.tok.slice)) {
+                // A [N]u8 prints as text up to the first NUL, and never past its N bytes.
+                buf_append(out, "    printf(\"%.*s\\n\", (int)sizeof(");
+                buf_append(out, arg.tok.slice);
+                buf_append(out, "), (const char*)");
+                buf_append(out, arg.tok.slice);
+                buf_append(out, ");\n");
+                return;
+            }
+        }
     }
     buf_append(out, "    __oc_print(");
-    codegen_expr(arg, out);
+    if is_bool_expr(arg) {
+        buf_append(out, "(bool)(");
+        codegen_expr(arg, out);
+        buf_append(out, ")");
+    } else {
+        codegen_expr(arg, out);
+    }
     buf_append(out, ");\n");
 }
 
@@ -673,6 +748,9 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
         return;
     }
 
+    // Locals declared inside a block go out of scope with it (keeps cg_var_type exact).
+    let scope_mark: usize = out.var_types_len;
+
     if stmt.tag == NODE_IF {
         buf_append(out, "    if (");
         codegen_expr(stmt.left, out);
@@ -684,6 +762,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 s = s.next;
             }
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         if stmt.right != (0).as(*mut AstNode) {
             if stmt.right.next != (0).as(*mut AstNode) {
@@ -697,6 +776,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                         es = es.next;
                     }
                 }
+                out.var_types_len = scope_mark;
                 buf_append(out, "    }\n");
             }
         }
@@ -714,6 +794,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 s = s.next;
             }
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         return;
     }
@@ -725,6 +806,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
             codegen_stmt(s, out);
             s = s.next;
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         return;
     }
@@ -737,6 +819,10 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
 
 fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "system") { return true; }
+    if str_eq(fn_name, "getenv") { return true; }
+    if str_eq(fn_name, "sys_mkdtemp") { return true; }
+    if str_eq(fn_name, "sys_rmdir") { return true; }
+    if str_eq(fn_name, "sys_exe_path") { return true; }
     if str_eq(fn_name, "exit") { return true; }
     if str_eq(fn_name, "sys_read") { return true; }
     if str_eq(fn_name, "sys_write") { return true; }
@@ -813,6 +899,27 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n");
     buf_append(out, "#endif\n");
     buf_append(out, "#endif\n");
+    // Private temporary directory (compiler driver): created atomically, never an existing path.
+    buf_append(out, "#ifdef _WIN32\n");
+    buf_append(out, "#include <direct.h>\n");
+    buf_append(out, "static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n");
+    buf_append(out, "static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n");
+    buf_append(out, "#else\n");
+    buf_append(out, "static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n");
+    buf_append(out, "static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n");
+    buf_append(out, "#endif\n");
+    // Absolute path of the running executable with symlinks resolved (compiler driver: locating
+    // std/ next to the install). Returns its length, or -1 where the host offers no way to ask.
+    buf_append(out, "#if defined(_WIN32)\n");
+    buf_append(out, "__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n");
+    buf_append(out, "#elif defined(__APPLE__)\n");
+    buf_append(out, "#include <limits.h>\n");
+    buf_append(out, "#include <mach-o/dyld.h>\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n");
+    buf_append(out, "#else\n");
+    buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n");
+    buf_append(out, "#endif\n");
     buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
     // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.
     buf_append(out, "#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n");
@@ -841,6 +948,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    const uint8_t*: __oc_print_const_u8_ptr, \\\n");
     buf_append(out, "    oc_string: __oc_print_oc_string, \\\n");
     buf_append(out, "    bool: __oc_print_bool, \\\n");
+    buf_append(out, "    signed char: __oc_print_i64, \\\n");
+    buf_append(out, "    short: __oc_print_i64, \\\n");
     buf_append(out, "    int: __oc_print_i64, \\\n");
     buf_append(out, "    long: __oc_print_i64, \\\n");
     buf_append(out, "    long long: __oc_print_i64, \\\n");
@@ -852,10 +961,18 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n");
     buf_append(out, "}\n\n");
 
+    // View of a fixed-size array as a slice. A raw pointer has no length, so slicing one is a
+    // C compile error (void initializer) instead of an unbounded slice.
+    buf_append(out, "#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n");
+
     buf_append(out, "static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n");
     buf_append(out, "    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n");
     buf_append(out, "    return s.ptr[idx];\n");
     buf_append(out, "}\n\n");
+
+    // Array vs pointer is decided by the C type, so struct fields and shadowed names are covered too.
+    // "+ 0" keeps -Wsizeof-pointer-div quiet in the branch that is discarded for pointers.
+    buf_append(out, "#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n");
 
     buf_append(out, "static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n");
     buf_append(out, "    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n");
@@ -872,7 +989,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n");
     buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
     buf_append(out, "#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
-    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n");
+    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n");
 
     // Pre-populate struct field and function return type tables
     out.ptr_fields[0] = "ptr";

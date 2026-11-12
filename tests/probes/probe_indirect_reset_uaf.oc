@@ -1,0 +1,15 @@
+import "std/mem.oc";
+
+fn recycle(a: *mut Arena) { arena_reset(a); }
+fn recycle_twice(count: i32, a: *mut Arena) -> i32 {
+    recycle(a);
+    return count + 1;
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_alloc(&mut a, 16);
+    let n: i32 = recycle_twice(0, &mut a);
+    p[0] = 1; // use-after-free: reset reached through two calls, inside an expression
+    print(n);
+}

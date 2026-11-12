@@ -1,0 +1,29 @@
+// Slicing a fixed-size array yields { ptr: &buf[a], len: b - a }, checked against a <= b <= N.
+struct Msg { id: u32, body: [8]u8, }
+
+fn count(s: string) -> usize { return s.len; }
+
+fn main() {
+    let mut buf: [8]u8 = [72, 105, 33, 79, 75, 0, 0, 0];
+    let s: string = buf[0..3];
+    print(s);               // Hi!
+    print(s.len);           // 3
+    print(buf[3..5]);       // OK
+    print(count(buf[..]));  // 8
+    print(count(buf[5..])); // 3
+    print(count(buf[..2])); // 2
+    print(count(buf[8..8]));// 0
+
+    // a slice aliases the array: writes through the array are visible
+    buf[0] = 104;
+    print(s);               // hi!
+    print(s[1]);            // 105
+
+    // slices of slices, and arrays inside structs
+    let t: string = s[1..];
+    print(t);               // i!
+    let mut m: Msg = Msg { id: 1, body: [0] };
+    m.body[0] = 111;
+    m.body[1] = 67;
+    print(m.body[0..2]);    // oC
+}
