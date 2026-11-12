@@ -1,0 +1,13 @@
+// String literals are followed by a NUL byte that is not counted in `len`, so `s.ptr` can be
+// handed to C functions and syscalls that expect a C string.
+fn main() {
+    let a: string = "abc";
+    let b: string = "xyz";
+    let pa: *u8 = a.ptr;
+    let pb: *u8 = b.ptr;
+    print(a.len);   // 3
+    print(pa[3]);   // 0
+    print(pb[3]);   // 0
+    print(a);       // abc
+    print(b);       // xyz
+}

@@ -898,6 +898,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         }
         let data_off: usize = data.len;
         let emitted_len: usize = ng_append_unescaped_str(data, raw);
+        buf_append_u8(data, 0); // NUL terminator (not counted in len): literals are valid C strings
 
         buf_append_u8(code, 72);
         buf_append_u8(code, 184);
