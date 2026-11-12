@@ -103,6 +103,8 @@ static inline void __oc_print_i64(int64_t i) { printf("%lld\n", (long long)i); }
     const uint8_t*: __oc_print_const_u8_ptr, \
     oc_string: __oc_print_oc_string, \
     bool: __oc_print_bool, \
+    signed char: __oc_print_i64, \
+    short: __oc_print_i64, \
     int: __oc_print_i64, \
     long: __oc_print_i64, \
     long long: __oc_print_i64, \
@@ -473,6 +475,10 @@ bool is_type_str(oc_string t);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
 bool is_expr_pointer(AstNode* expr, CodeBuffer* out);
 void codegen_expr(AstNode* expr, CodeBuffer* out);
+bool is_comparison_tok(uint32_t tag);
+bool is_bool_expr(AstNode* expr);
+oc_string cg_var_type(CodeBuffer* out, oc_string name);
+bool is_u8_array_type(oc_string t);
 void codegen_print(AstNode* node, CodeBuffer* out);
 void codegen_stmt(AstNode* stmt, CodeBuffer* out);
 bool is_builtin_c_fn(oc_string fn_name);
@@ -528,6 +534,7 @@ void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
+void ng_emit_print_lit(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string raw);
 void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* stmt);
 int32_t calc_locals_bytes_stmt(NativeGen* ng, AstNode* stmt);
 void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off);
@@ -3675,6 +3682,71 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
 }
 
+bool is_comparison_tok(uint32_t tag) {
+    if ((tag == TOK_EQEQ)) {
+    return true;
+    }
+    if ((tag == TOK_NEQ)) {
+    return true;
+    }
+    if ((tag == TOK_LT)) {
+    return true;
+    }
+    if ((tag == TOK_LTE)) {
+    return true;
+    }
+    if ((tag == TOK_GT)) {
+    return true;
+    }
+    if ((tag == TOK_GTE)) {
+    return true;
+    }
+    return false;
+}
+
+bool is_bool_expr(AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((expr)->tag) == NODE_BOOL)) {
+    return true;
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    return (((((expr)->tok)).tag) == TOK_BANG);
+    }
+    if ((((expr)->tag) == NODE_BINARY)) {
+    return is_comparison_tok(((((expr)->tok)).tag));
+    }
+    return false;
+}
+
+oc_string cg_var_type(CodeBuffer* out, oc_string name) {
+    size_t i = ((out)->var_types_len);
+    while ((i > 0)) {
+    i = __OC_SUB(i, 1);
+    if (str_eq(__OC_AT((((out)->var_names)), (i)), name)) {
+    return __OC_AT((((out)->var_types)), (i));
+    }
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool is_u8_array_type(oc_string t) {
+    if ((((t).len) < 4)) {
+    return false;
+    }
+    if ((__oc_index_str(t, 0) != 91)) {
+    return false;
+    }
+    if ((__oc_index_str(t, __OC_SUB(((t).len), 3)) != 93)) {
+    return false;
+    }
+    if ((__oc_index_str(t, __OC_SUB(((t).len), 2)) != 117)) {
+    return false;
+    }
+    return (__oc_index_str(t, __OC_SUB(((t).len), 1)) == 56);
+}
+
 void codegen_print(AstNode* node, CodeBuffer* out) {
     AstNode* arg = ((node)->left);
     if ((arg != ((AstNode*)(0)))) {
@@ -3684,9 +3756,26 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
     return;
     }
+    if ((((arg)->tag) == NODE_IDENT)) {
+    if (is_u8_array_type(cg_var_type(out, ((((arg)->tok)).slice)))) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\"%.*s\\n\", (int)sizeof("), .len = sizeof("    printf(\"%.*s\\n\", (int)sizeof(") - 1 });
+    buf_append(out, ((((arg)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), (const char*)"), .len = sizeof("), (const char*)") - 1 });
+    buf_append(out, ((((arg)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
+    return;
+    }
+    }
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    __oc_print("), .len = sizeof("    __oc_print(") - 1 });
+    if (is_bool_expr(arg)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(bool)("), .len = sizeof("(bool)(") - 1 });
     codegen_expr(arg, out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    }
+    else {
+    codegen_expr(arg, out);
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
 }
 
@@ -3838,6 +3927,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
     return;
     }
+    size_t scope_mark = ((out)->var_types_len);
     if ((((stmt)->tag) == NODE_IF)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if ("), .len = sizeof("    if (") - 1 });
     codegen_expr(((stmt)->left), out);
@@ -3849,6 +3939,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     s = ((s)->next);
     }
     }
+    ((out)->var_types_len) = scope_mark;
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->next) != ((AstNode*)(0)))) {
@@ -3863,6 +3954,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     es = ((es)->next);
     }
     }
+    ((out)->var_types_len) = scope_mark;
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
     }
     }
@@ -3879,6 +3971,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     s = ((s)->next);
     }
     }
+    ((out)->var_types_len) = scope_mark;
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
     return;
     }
@@ -3889,6 +3982,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     codegen_stmt(s, out);
     s = ((s)->next);
     }
+    ((out)->var_types_len) = scope_mark;
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
     return;
     }
@@ -4025,6 +4119,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t*: __oc_print_const_u8_ptr, \\\n"), .len = sizeof("    const uint8_t*: __oc_print_const_u8_ptr, \\\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    oc_string: __oc_print_oc_string, \\\n"), .len = sizeof("    oc_string: __oc_print_oc_string, \\\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    bool: __oc_print_bool, \\\n"), .len = sizeof("    bool: __oc_print_bool, \\\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    signed char: __oc_print_i64, \\\n"), .len = sizeof("    signed char: __oc_print_i64, \\\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    short: __oc_print_i64, \\\n"), .len = sizeof("    short: __oc_print_i64, \\\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    int: __oc_print_i64, \\\n"), .len = sizeof("    int: __oc_print_i64, \\\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long: __oc_print_i64, \\\n"), .len = sizeof("    long: __oc_print_i64, \\\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long long: __oc_print_i64, \\\n"), .len = sizeof("    long long: __oc_print_i64, \\\n") - 1 });
@@ -4813,6 +4909,9 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     return ng_expr_type(ng, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_BINARY)) {
+    if (is_comparison_tok(((((expr)->tok)).tag))) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
     oc_string lt = ng_expr_type(ng, ((expr)->left));
     oc_string rt = ng_expr_type(ng, ((expr)->right));
     if ((((lt).len) > 0)) {
@@ -6247,6 +6346,39 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
 }
 
+void ng_emit_print_lit(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string raw) {
+    size_t data_off = ((data)->len);
+    size_t emitted_len = ng_append_unescaped_str(data, raw);
+    buf_append_u8(data, 10);
+    bool is_win = (((ng)->target) == OC_TARGET_WINDOWS_X86_64);
+    if ((!is_win)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 192);
+    elf_append_u32(code, 1);
+    }
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 199);
+    elf_append_u32(code, 1);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 190);
+    size_t patch_pos = ((code)->len);
+    elf_append_u64(code, 0);
+    ng_add_data_reloc(ng, patch_pos, data_off);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 194);
+    elf_append_u32(code, ({ __auto_type _v = (__OC_ADD(emitted_len, 1)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    if (is_win) {
+    ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("__win_write"), .len = sizeof("__win_write") - 1 });
+    }
+    else {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 5);
+    }
+}
+
 void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* stmt) {
     if ((stmt == ((AstNode*)(0)))) {
     return;
@@ -6633,36 +6765,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     raw = __oc_slice_str(raw, 1, __OC_SUB(((raw).len), 1));
     }
     }
-    size_t data_off = ((data)->len);
-    size_t emitted_len = ng_append_unescaped_str(data, raw);
-    buf_append_u8(data, 10);
-    bool is_win = (((ng)->target) == OC_TARGET_WINDOWS_X86_64);
-    if ((!is_win)) {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 199);
-    buf_append_u8(code, 192);
-    elf_append_u32(code, 1);
-    }
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 199);
-    buf_append_u8(code, 199);
-    elf_append_u32(code, 1);
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 190);
-    size_t patch_pos = ((code)->len);
-    elf_append_u64(code, 0);
-    ng_add_data_reloc(ng, patch_pos, data_off);
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 199);
-    buf_append_u8(code, 194);
-    elf_append_u32(code, ({ __auto_type _v = (__OC_ADD(emitted_len, 1)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
-    if (is_win) {
-    ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("__win_write"), .len = sizeof("__win_write") - 1 });
-    }
-    else {
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 5);
-    }
+    ng_emit_print_lit(ng, code, data, raw);
     return;
     }
     else {
@@ -6681,6 +6784,51 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     else {
     oc_string arg_t = ng_expr_type(ng, arg);
+    if (str_eq(arg_t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    ng_emit_expr(ng, code, data, arg);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 133);
+    buf_append_u8(code, 192);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 132);
+    size_t jz_pos = ((code)->len);
+    elf_append_u32(code, 0);
+    ng_emit_print_lit(ng, code, data, (oc_string){ .ptr = (const uint8_t*)("true"), .len = sizeof("true") - 1 });
+    buf_append_u8(code, 233);
+    size_t jmp_pos = ((code)->len);
+    elf_append_u32(code, 0);
+    elf_patch_i32(code, jz_pos, ({ __auto_type _v = (__OC_SUB(({ __auto_type _v = (((code)->len)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(jz_pos, 4)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    ng_emit_print_lit(ng, code, data, (oc_string){ .ptr = (const uint8_t*)("false"), .len = sizeof("false") - 1 });
+    elf_patch_i32(code, jmp_pos, ({ __auto_type _v = (__OC_SUB(({ __auto_type _v = (((code)->len)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(jmp_pos, 4)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    return;
+    }
+    if (is_u8_array_type(arg_t)) {
+    ng_emit_lvalue_addr(ng, code, data, arg);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 49);
+    buf_append_u8(code, 246);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 129);
+    buf_append_u8(code, 254);
+    elf_append_u32(code, ({ __auto_type _v = (ng_parse_array_len(arg_t)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    buf_append_u8(code, 115);
+    buf_append_u8(code, 11);
+    buf_append_u8(code, 128);
+    buf_append_u8(code, 60);
+    buf_append_u8(code, 55);
+    buf_append_u8(code, 0);
+    buf_append_u8(code, 116);
+    buf_append_u8(code, 5);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 255);
+    buf_append_u8(code, 198);
+    buf_append_u8(code, 235);
+    buf_append_u8(code, 236);
+    ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("__print_slice"), .len = sizeof("__print_slice") - 1 });
+    return;
+    }
     ng_emit_expr(ng, code, data, arg);
     buf_append_u8(code, 72);
     buf_append_u8(code, 137);

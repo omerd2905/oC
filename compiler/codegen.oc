@@ -529,6 +529,43 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 }
 
+fn is_comparison_tok(tag: u32) -> bool {
+    if tag == TOK_EQEQ { return true; }
+    if tag == TOK_NEQ { return true; }
+    if tag == TOK_LT { return true; }
+    if tag == TOK_LTE { return true; }
+    if tag == TOK_GT { return true; }
+    if tag == TOK_GTE { return true; }
+    return false;
+}
+
+// Expressions that are bool in oC but plain `int` in C (literals before C23, comparisons, `!x`).
+fn is_bool_expr(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_BOOL { return true; }
+    if expr.tag == NODE_UNARY { return expr.tok.tag == TOK_BANG; }
+    if expr.tag == NODE_BINARY { return is_comparison_tok(expr.tok.tag); }
+    return false;
+}
+
+// Declared type of the innermost visible local or parameter named `name` ("" if unknown).
+fn cg_var_type(out: *mut CodeBuffer, name: string) -> string {
+    let mut i: usize = out.var_types_len;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(out.var_names[i], name) { return out.var_types[i]; }
+    }
+    return "";
+}
+
+fn is_u8_array_type(t: string) -> bool {
+    if t.len < 4 { return false; }
+    if t[0] != 91 { return false; }           // '['
+    if t[t.len - 3] != 93 { return false; }   // ']'
+    if t[t.len - 2] != 117 { return false; }  // 'u'
+    return t[t.len - 1] == 56;                // '8'
+}
+
 fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
     let arg: *mut AstNode = node.left;
     if arg != (0).as(*mut AstNode) {
@@ -538,9 +575,26 @@ fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, ");\n");
             return;
         }
+        if arg.tag == NODE_IDENT {
+            if is_u8_array_type(cg_var_type(out, arg.tok.slice)) {
+                // A [N]u8 prints as text up to the first NUL, and never past its N bytes.
+                buf_append(out, "    printf(\"%.*s\\n\", (int)sizeof(");
+                buf_append(out, arg.tok.slice);
+                buf_append(out, "), (const char*)");
+                buf_append(out, arg.tok.slice);
+                buf_append(out, ");\n");
+                return;
+            }
+        }
     }
     buf_append(out, "    __oc_print(");
-    codegen_expr(arg, out);
+    if is_bool_expr(arg) {
+        buf_append(out, "(bool)(");
+        codegen_expr(arg, out);
+        buf_append(out, ")");
+    } else {
+        codegen_expr(arg, out);
+    }
     buf_append(out, ");\n");
 }
 
@@ -674,6 +728,9 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
         return;
     }
 
+    // Locals declared inside a block go out of scope with it (keeps cg_var_type exact).
+    let scope_mark: usize = out.var_types_len;
+
     if stmt.tag == NODE_IF {
         buf_append(out, "    if (");
         codegen_expr(stmt.left, out);
@@ -685,6 +742,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 s = s.next;
             }
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         if stmt.right != (0).as(*mut AstNode) {
             if stmt.right.next != (0).as(*mut AstNode) {
@@ -698,6 +756,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                         es = es.next;
                     }
                 }
+                out.var_types_len = scope_mark;
                 buf_append(out, "    }\n");
             }
         }
@@ -715,6 +774,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 s = s.next;
             }
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         return;
     }
@@ -726,6 +786,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
             codegen_stmt(s, out);
             s = s.next;
         }
+        out.var_types_len = scope_mark;
         buf_append(out, "    }\n");
         return;
     }
@@ -842,6 +903,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    const uint8_t*: __oc_print_const_u8_ptr, \\\n");
     buf_append(out, "    oc_string: __oc_print_oc_string, \\\n");
     buf_append(out, "    bool: __oc_print_bool, \\\n");
+    buf_append(out, "    signed char: __oc_print_i64, \\\n");
+    buf_append(out, "    short: __oc_print_i64, \\\n");
     buf_append(out, "    int: __oc_print_i64, \\\n");
     buf_append(out, "    long: __oc_print_i64, \\\n");
     buf_append(out, "    long long: __oc_print_i64, \\\n");
