@@ -1,0 +1,47 @@
+// wrapping_add / wrapping_sub / wrapping_mul wrap at the width of their operands instead of
+// trapping. They are the explicit opt-in for hashes, checksums and PRNGs; `+ - *` always trap.
+fn fnv1a_32(s: string) -> u32 {
+    let mut h: u32 = 2166136261;
+    let mut i: usize = 0;
+    while i < s.len {
+        h = wrapping_mul(h ^ s[i].as(u32), 16777619);
+        i = i + 1;
+    }
+    return h;
+}
+
+fn fnv1a_64(s: string) -> u64 {
+    let mut h: u64 = 14695981039346656037;
+    let mut i: usize = 0;
+    while i < s.len {
+        h = wrapping_mul(h ^ s[i].as(u64), 1099511628211);
+        i = i + 1;
+    }
+    return h;
+}
+
+fn main() {
+    print(fnv1a_32("hello"));   // 1335831723
+    print(fnv1a_64("hello"));   // 11831194018420276491
+
+    // 64-bit LCG step (needs both a wrapping multiply and a wrapping add)
+    let mut x: u64 = 42;
+    x = wrapping_add(wrapping_mul(x, 6364136223846793005), 1442695040888963407);
+    x = wrapping_add(wrapping_mul(x, 6364136223846793005), 1442695040888963407);
+    print(x);                   // 4159066171780167020
+
+    let a: u8 = 250;
+    let b: u8 = 10;
+    print(wrapping_add(a, b));  // 4
+    print(wrapping_sub(b, a));  // 16
+    print(wrapping_mul(a, b));  // 196
+
+    let m: i32 = 2147483647;
+    print(wrapping_add(m, 1));  // -2147483648
+    let n: i16 = -32768;
+    print(wrapping_sub(n, 1));  // 32767
+    let z: u64 = 0;
+    print(wrapping_sub(z, 1));  // 18446744073709551615
+    let big: i64 = 9223372036854775807;
+    print(wrapping_mul(big, 2));// -2
+}

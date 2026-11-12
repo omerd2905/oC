@@ -93,6 +93,7 @@ struct NativeGen {
     field_names: [256]string,
     field_offsets: [256]i32,
     field_types: [256]string,
+    field_packed: [256]bool,
     field_count: usize,
 
     const_names: [128]string,
@@ -107,16 +108,40 @@ struct NativeGen {
 
     target: i32,
     has_error: bool,
-    iat_fix_code: [16]usize,
-    iat_fix_slot: [16]usize,
+    iat_fix_code: [64]usize,
+    iat_fix_slot: [64]usize,
     iat_fix_count: usize,
 }
 
-// KERNEL32.dll imports used by the windows-x86_64 runtime helpers (IAT slot indices).
+// KERNEL32.dll imports of every windows-x86_64 image (IAT slot indices). The first three are
+// used by the built-in print/trap helpers; all of them can be called from oC as win32_<Name>
+// (std/sys/windows.oc builds the sys_* runtime on them).
 let NG_IMP_EXIT_PROCESS: usize = 0;
 let NG_IMP_GET_STD_HANDLE: usize = 1;
 let NG_IMP_WRITE_FILE: usize = 2;
-let NG_IMP_COUNT: usize = 3;
+let NG_IMP_COUNT: usize = 9;
+
+fn ng_imp_name(slot: usize) -> string {
+    if slot == 0 { return "ExitProcess"; }
+    if slot == 1 { return "GetStdHandle"; }
+    if slot == 2 { return "WriteFile"; }
+    if slot == 3 { return "ReadFile"; }
+    if slot == 4 { return "CreateFileA"; }
+    if slot == 5 { return "CloseHandle"; }
+    if slot == 6 { return "DeleteFileA"; }
+    if slot == 7 { return "VirtualAlloc"; }
+    return "VirtualFree";
+}
+
+// IAT slot of a KERNEL32 import by name, -1 if this image does not import it.
+fn ng_imp_slot(name: string) -> i32 {
+    let mut k: usize = 0;
+    while k < NG_IMP_COUNT {
+        if str_eq(ng_imp_name(k), name) { return k.as(i32); }
+        k = k + 1;
+    }
+    return -1;
+}
 
 fn ng_fail(ng: *mut NativeGen, msg: string) {
     if !ng.has_error {
@@ -147,12 +172,12 @@ fn ng_add_data_reloc(ng: *mut NativeGen, code_off: usize, data_off: usize) {
 }
 
 fn ng_add_iat_fixup(ng: *mut NativeGen, code_off: usize, slot: usize) {
-    if ng.iat_fix_count < 16 {
+    if ng.iat_fix_count < 64 {
         ng.iat_fix_code[ng.iat_fix_count] = code_off;
         ng.iat_fix_slot[ng.iat_fix_count] = slot;
         ng.iat_fix_count = ng.iat_fix_count + 1;
     } else {
-        ng_fail(ng, "native codegen error: import fixup table full (16)");
+        ng_fail(ng, "native codegen error: import fixup table full (64)");
     }
 }
 
@@ -265,7 +290,8 @@ fn ng_is_var_slice(ng: *mut NativeGen, name: string) -> bool {
     return false;
 }
 
-fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
+// Exact byte size of a struct; packed structs need not be a multiple of 8.
+fn ng_struct_raw_size(ng: *mut NativeGen, name: string) -> i32 {
     let mut i: usize = 0;
     while i < ng.struct_count {
         if str_eq(ng.struct_names[i], name) {
@@ -276,12 +302,19 @@ fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
     return 0;
 }
 
-fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+// Size of the stack slot / register group holding a struct by value (whole 8-byte words).
+fn ng_find_struct_size(ng: *mut NativeGen, name: string) -> i32 {
+    return ((ng_struct_raw_size(ng, name) + 7) / 8) * 8;
+}
+
+// Index of field `f_name` of struct `s_name`; falls back to any struct with that field name
+// when the base type could not be inferred. -1 if unknown.
+fn ng_find_field_idx(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
     let mut i: usize = 0;
     while i < ng.field_count {
         if str_eq(ng.field_struct[i], s_name) {
             if str_eq(ng.field_names[i], f_name) {
-                return ng.field_offsets[i];
+                return i.as(i32);
             }
         }
         i = i + 1;
@@ -289,33 +322,48 @@ fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i
     i = 0;
     while i < ng.field_count {
         if str_eq(ng.field_names[i], f_name) {
-            return ng.field_offsets[i];
+            return i.as(i32);
         }
         i = i + 1;
     }
-    return 0;
+    return -1;
+}
+
+fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return 0; }
+    return ng.field_offsets[idx.as(usize)];
 }
 
 fn ng_find_field_type(ng: *mut NativeGen, s_name: string, f_name: string) -> string {
     if str_eq(f_name, "len") { return "usize"; }
     if str_eq(f_name, "ptr") { return "*u8"; }
-    let mut i: usize = 0;
-    while i < ng.field_count {
-        if str_eq(ng.field_struct[i], s_name) {
-            if str_eq(ng.field_names[i], f_name) {
-                return ng.field_types[i];
-            }
-        }
-        i = i + 1;
-    }
-    i = 0;
-    while i < ng.field_count {
-        if str_eq(ng.field_names[i], f_name) {
-            return ng.field_types[i];
-        }
-        i = i + 1;
-    }
-    return "";
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return ""; }
+    return ng.field_types[idx.as(usize)];
+}
+
+// Natural width of a scalar type in memory: 1, 2, 4 or 8 bytes.
+fn ng_scalar_width(t: string) -> i32 {
+    if str_eq(t, "u8") { return 1; }
+    if str_eq(t, "i8") { return 1; }
+    if str_eq(t, "bool") { return 1; }
+    if str_eq(t, "u16") { return 2; }
+    if str_eq(t, "i16") { return 2; }
+    if str_eq(t, "u32") { return 4; }
+    if str_eq(t, "i32") { return 4; }
+    return 8;
+}
+
+// Bytes read/written when accessing a scalar struct field. Packed structs use the C layout
+// (exact widths, no padding); other structs keep one 8-byte slot per field (bytes stay 1 wide).
+fn ng_field_width(ng: *mut NativeGen, s_name: string, f_name: string) -> i32 {
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx < 0 { return 8; }
+    let w: i32 = ng_scalar_width(ng.field_types[idx.as(usize)]);
+    if ng.field_packed[idx.as(usize)] { return w; }
+    if w == 1 { return 1; }
+    return 8;
 }
 
 fn ng_find_fn_ret_type(ng: *mut NativeGen, fn_name: string) -> string {
@@ -395,6 +443,18 @@ fn ng_is_byte_type(t: string) -> bool {
     return false;
 }
 
+fn is_unsigned_type_name(t: string) -> bool {
+    if t.len == 0 { return false; }
+    if str_eq(t, "u8") { return true; }
+    if str_eq(t, "u16") { return true; }
+    if str_eq(t, "u32") { return true; }
+    if str_eq(t, "u64") { return true; }
+    if str_eq(t, "usize") { return true; }
+    if t[0] == 42 { return true; }
+    if t[0] == 38 { return true; }
+    return false;
+}
+
 fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_STRING { return "string"; }
@@ -406,6 +466,28 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return ng_find_var_type(ng, expr.tok.slice);
     }
     if expr.tag == NODE_CALL {
+        if wrapping_op(expr.tok.slice).len > 0 {
+            // Same rule as the C backend: a narrow (< 32-bit) operand decides the width, then
+            // 64-bit beats 32-bit and unsigned beats signed. Untyped literals do not decide.
+            let mut lt: string = "";
+            let mut rt: string = "";
+            if expr.left != (0).as(*mut AstNode) {
+                lt = ng_expr_type(ng, expr.left);
+                rt = ng_expr_type(ng, expr.left.next);
+            }
+            if ng_scalar_width(lt) < 4 { return lt; }
+            if ng_scalar_width(rt) < 4 { return rt; }
+            if lt.len == 0 { return rt; }
+            if rt.len == 0 { return lt; }
+            if ng_scalar_width(lt) == 8 {
+                if is_unsigned_type_name(lt) { return lt; }
+                if ng_scalar_width(rt) == 8 { return rt; }
+                return lt;
+            }
+            if ng_scalar_width(rt) == 8 { return rt; }
+            if is_unsigned_type_name(lt) { return lt; }
+            return rt;
+        }
         return ng_find_fn_ret_type(ng, expr.tok.slice);
     }
     if expr.tag == NODE_ADDRESS_OF {
@@ -444,24 +526,13 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return ng_expr_type(ng, expr.left);
     }
     if expr.tag == NODE_BINARY {
+        if is_comparison_tok(expr.tok.tag) { return "bool"; }
         let lt: string = ng_expr_type(ng, expr.left);
         let rt: string = ng_expr_type(ng, expr.right);
         if lt.len > 0 { return lt; }
         return rt;
     }
     return "";
-}
-
-fn is_unsigned_type_name(t: string) -> bool {
-    if t.len == 0 { return false; }
-    if str_eq(t, "u8") { return true; }
-    if str_eq(t, "u16") { return true; }
-    if str_eq(t, "u32") { return true; }
-    if str_eq(t, "u64") { return true; }
-    if str_eq(t, "usize") { return true; }
-    if t[0] == 42 { return true; }
-    if t[0] == 38 { return true; }
-    return false;
 }
 
 fn ng_is_unsigned_expr(ng: *mut NativeGen, expr: *mut AstNode) -> bool {
@@ -601,13 +672,14 @@ fn ng_append_unescaped_str(data: *mut CodeBuffer, raw: string) -> usize {
     return emitted;
 }
 
-fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
+// Traps to `trap` unless the value in %rax fits type `t`.
+fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string, trap: string) {
     if t.len == 0 { return; }
     if str_eq(t, "u8") {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 255);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -617,7 +689,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 65535);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -630,7 +702,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 135); // ja
         elf_append_u32(code, 0);
@@ -640,14 +712,14 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_i32(code, -128);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 127);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
@@ -657,14 +729,14 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_i32(code, -32768);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
         buf_append_u8(code, 72);
         buf_append_u8(code, 61);
         elf_append_u32(code, 32767);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
@@ -678,7 +750,7 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 140); // jl
         elf_append_u32(code, 0);
@@ -688,11 +760,85 @@ fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string) {
         buf_append_u8(code, 72);
         buf_append_u8(code, 57);
         buf_append_u8(code, 200);
-        ng_add_fixup(ng, code.len, "__trap_overflow", true);
+        ng_add_fixup(ng, code.len, trap, true);
         buf_append_u8(code, 15);
         buf_append_u8(code, 143); // jg
         elf_append_u32(code, 0);
         return;
+    }
+}
+
+// %rax = value of scalar type `t` stored in `width` bytes at (%rax), sign- or zero-extended.
+fn ng_emit_load_at_rax(code: *mut CodeBuffer, t: string, width: i32) {
+    let mut is_signed: bool = false;
+    if str_eq(t, "i8") { is_signed = true; }
+    if str_eq(t, "i16") { is_signed = true; }
+    if str_eq(t, "i32") { is_signed = true; }
+    if width == 1 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 0); // movsbq (%rax), %rax
+        } else {
+            buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 0); // movzbl (%rax), %eax
+        }
+    } else if width == 2 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 0); // movswq (%rax), %rax
+        } else {
+            buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 0); // movzwl (%rax), %eax
+        }
+    } else if width == 4 {
+        if is_signed {
+            buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 0); // movslq (%rax), %rax
+        } else {
+            buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %eax
+        }
+    } else {
+        buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %rax
+    }
+}
+
+// Register words a value of type `t` travels in: 2 for a string (ptr, len), one per 8 bytes
+// for a struct, otherwise 1. Word k lives in %rax, %rdx, %rcx, %r8 respectively.
+fn ng_value_words(ng: *mut NativeGen, t: string) -> i32 {
+    if str_eq(t, "string") { return 2; }
+    let s_sz: i32 = ng_find_struct_size(ng, t);
+    if s_sz > 8 { return s_sz / 8; }
+    return 1;
+}
+
+// %rax, %rdx, %rcx, %r8 = the struct `s_name` stored at (%rax), one register per 8 bytes: the
+// form in which struct values are copied, passed and returned. Returns false for a type that
+// is not a struct of 9..32 bytes, in which case nothing is emitted.
+fn ng_emit_load_struct_at_rax(ng: *mut NativeGen, code: *mut CodeBuffer, s_name: string) -> bool {
+    let size: i32 = ng_find_struct_size(ng, s_name);
+    if size <= 8 { return false; }
+    if size > 32 {
+        ng_fail(ng, "native codegen error: a struct larger than 32 bytes cannot be read by value; use a pointer to it");
+    } else if size != ng_struct_raw_size(ng, s_name) {
+        // Reading whole words would run past the end of the object.
+        ng_fail(ng, "native codegen error: a packed struct whose size is not a multiple of 8 cannot be read by value; use a pointer to it");
+    }
+    buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 80); buf_append_u8(code, 8); // mov 8(%rax), %rdx
+    if size >= 24 {
+        buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 72); buf_append_u8(code, 16); // mov 16(%rax), %rcx
+    }
+    if size >= 32 {
+        buf_append_u8(code, 76); buf_append_u8(code, 139); buf_append_u8(code, 64); buf_append_u8(code, 24); // mov 24(%rax), %r8
+    }
+    buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %rax
+    return true;
+}
+
+// Stores the low `width` bytes of %rax at (%rcx).
+fn ng_emit_store_at_rcx(code: *mut CodeBuffer, width: i32) {
+    if width == 1 {
+        buf_append_u8(code, 136); buf_append_u8(code, 1); // mov %al, (%rcx)
+    } else if width == 2 {
+        buf_append_u8(code, 102); buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %ax, (%rcx)
+    } else if width == 4 {
+        buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %eax, (%rcx)
+    } else {
+        buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 1); // mov %rax, (%rcx)
     }
 }
 
@@ -831,6 +977,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         }
         let data_off: usize = data.len;
         let emitted_len: usize = ng_append_unescaped_str(data, raw);
+        buf_append_u8(data, 0); // NUL terminator (not counted in len): literals are valid C strings
 
         buf_append_u8(code, 72);
         buf_append_u8(code, 184);
@@ -920,14 +1067,27 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
             let f_off: i32 = ng_find_field_offset(ng, expr.tok.slice, f.tok.slice);
+            let f_w: i32 = ng_field_width(ng, expr.tok.slice, f.tok.slice);
             ng_emit_expr(ng, code, data, f.left);
-            if f_off >= 0 {
-                if f_off < 32 {
-                    buf_append_u8(code, 72);
-                    buf_append_u8(code, 137);
-                    buf_append_u8(code, 68);
-                    buf_append_u8(code, 36);
-                    buf_append_u8(code, f_off.as(u8));
+            let f_words: i32 = ng_value_words(ng, ng_find_field_type(ng, expr.tok.slice, f.tok.slice));
+            if f_words > 1 {
+                if f_off + (f_words * 8) <= 32 {
+                    let mut w: i32 = 0;
+                    while w < f_words {
+                        // mov %rax / %rdx / %rcx / %r8, (f_off + 8w)(%rsp)
+                        if w == 3 { buf_append_u8(code, 76); } else { buf_append_u8(code, 72); }
+                        buf_append_u8(code, 137);
+                        if w == 1 { buf_append_u8(code, 84); } else if w == 2 { buf_append_u8(code, 76); } else { buf_append_u8(code, 68); }
+                        buf_append_u8(code, 36);
+                        buf_append_u8(code, (f_off + (w * 8)).as(u8));
+                        w = w + 1;
+                    }
+                }
+            } else if f_off >= 0 {
+                if f_off + f_w <= 32 {
+                    buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 76);
+                    buf_append_u8(code, 36); buf_append_u8(code, f_off.as(u8)); // lea f_off(%rsp), %rcx
+                    ng_emit_store_at_rcx(code, f_w);
                 }
             }
             f = f.next;
@@ -957,17 +1117,8 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0);
             return;
         }
-        if ng_is_byte_type(ft) {
-            buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 0);
-            return;
-        }
-        if str_eq(ft, "i8") {
-            buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 0);
-            return;
-        }
-        buf_append_u8(code, 72);
-        buf_append_u8(code, 139);
-        buf_append_u8(code, 0);
+        if ng_emit_load_struct_at_rax(ng, code, ft) { return; }
+        ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, expr.tok.slice));
         return;
     }
 
@@ -984,16 +1135,18 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             if src[0] == 38 { return; }
         }
         let src_uns: bool = ng_is_unsigned_expr(ng, expr.left);
+        let mut cast_trap: string = "__trap_cast_signed";
+        if is_unsigned_type_name(dst) { cast_trap = "__trap_cast_unsigned"; }
         if str_eq(dst, "u8") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         if str_eq(dst, "u16") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         if str_eq(dst, "u32") {
-            ng_emit_range_check(ng, code, dst);
+            ng_emit_range_check(ng, code, dst, cast_trap);
             return;
         }
         let mut is_u64_dst: bool = false;
@@ -1004,7 +1157,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 133);
                 buf_append_u8(code, 192);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 136); // js
                 elf_append_u32(code, 0);
@@ -1026,12 +1179,12 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 57);
                 buf_append_u8(code, 200);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 135); // ja
                 elf_append_u32(code, 0);
             } else {
-                ng_emit_range_check(ng, code, dst);
+                ng_emit_range_check(ng, code, dst, cast_trap);
             }
             return;
         }
@@ -1040,7 +1193,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 133);
                 buf_append_u8(code, 192);
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                ng_add_fixup(ng, code.len, cast_trap, true);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 136); // js
                 elf_append_u32(code, 0);
@@ -1155,6 +1308,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         buf_append_u8(code, 15);
         buf_append_u8(code, 132);
         elf_append_u32(code, 0);
+        if ng_emit_load_struct_at_rax(ng, code, elem_t) { return; }
         if ng_is_byte_type(elem_t) {
             buf_append_u8(code, 15);
             buf_append_u8(code, 182);
@@ -1175,7 +1329,22 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_SLICE {
-        ng_emit_expr(ng, code, data, expr.left);
+        let base_t: string = ng_expr_type(ng, expr.left);
+        let mut is_array: bool = false;
+        if base_t.len > 0 {
+            if base_t[0] == 91 { is_array = true; }
+            if base_t[0] == 42 { ng_fail(ng, "native codegen error: cannot slice a raw pointer (it has no length)"); }
+            if base_t[0] == 38 { ng_fail(ng, "native codegen error: cannot slice a raw pointer (it has no length)"); }
+        }
+        if is_array {
+            // Fixed-size array: slice { ptr: &a[0], len: N bytes }
+            let arr_bytes: usize = ng_parse_array_len(base_t) * ng_type_stride(ng_parse_array_elem(base_t)).as(usize);
+            ng_emit_lvalue_addr(ng, code, data, expr.left);
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); // mov $len, %rdx
+            elf_append_u32(code, arr_bytes.as(u32));
+        } else {
+            ng_emit_expr(ng, code, data, expr.left);
+        }
         buf_append_u8(code, 80); // push %rax
         buf_append_u8(code, 82); // push %rdx
 
@@ -1285,7 +1454,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     buf_append_u8(code, 128); // jo
                 }
                 elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
+                ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             }
             return;
         }
@@ -1302,42 +1471,26 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     buf_append_u8(code, 128); // jo
                 }
                 elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
+                ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             }
             return;
         }
         if expr.tok.tag == TOK_STAR {
-            let mut is_fnv_prime: bool = false;
-            if expr.right != (0).as(*mut AstNode) {
-                if expr.right.tag == NODE_INT {
-                    if str_eq(expr.right.tok.slice, "16777619") {
-                        is_fnv_prime = true;
-                    }
-                }
-            }
-            let mut use_unsigned_mul: bool = false;
             if is_uns {
-                if !is_fnv_prime {
-                    use_unsigned_mul = true;
-                }
-            }
-            if use_unsigned_mul {
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 247);
-                buf_append_u8(code, 227); // mul %rbx
+                buf_append_u8(code, 227); // mul %rbx (OF = CF = high half non-zero)
             } else {
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 175);
                 buf_append_u8(code, 195); // imul %rbx, %rax
             }
-            if !is_fnv_prime {
-                ng_add_fixup(ng, code.len, "__trap_overflow", true);
-                buf_append_u8(code, 15);
-                buf_append_u8(code, 128); // jo
-                elf_append_u32(code, 0);
-                ng_emit_range_check(ng, code, res_type);
-            }
+            ng_add_fixup(ng, code.len, "__trap_overflow", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 128); // jo
+            elf_append_u32(code, 0);
+            ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             return;
         }
         if expr.tok.tag == TOK_LT {
@@ -1519,19 +1672,83 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_CALL {
+        let w_op: string = wrapping_op(expr.tok.slice);
+        if w_op.len > 0 {
+            let mut w_argc: usize = 0;
+            let mut w_arg: *mut AstNode = expr.left;
+            while w_arg != (0).as(*mut AstNode) {
+                w_argc = w_argc + 1;
+                w_arg = w_arg.next;
+            }
+            if w_argc != 2 {
+                ng_fail(ng, "native codegen error: wrapping_add/wrapping_sub/wrapping_mul take exactly 2 arguments");
+                return;
+            }
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax
+            ng_emit_expr(ng, code, data, expr.left.next);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx
+            buf_append_u8(code, 88); // pop %rax
+            if str_eq(w_op, "add") {
+                buf_append_u8(code, 72); buf_append_u8(code, 1); buf_append_u8(code, 216); // add %rbx, %rax
+            } else if str_eq(w_op, "sub") {
+                buf_append_u8(code, 72); buf_append_u8(code, 41); buf_append_u8(code, 216); // sub %rbx, %rax
+            } else {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 175); buf_append_u8(code, 195); // imul %rbx, %rax
+            }
+            // No trap: keep the low bits and re-extend them to the operand type's width.
+            let w_t: string = ng_expr_type(ng, expr);
+            if str_eq(w_t, "u8") {
+                buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 192); // movzbl %al, %eax
+            } else if str_eq(w_t, "i8") {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 192); // movsbq %al, %rax
+            } else if str_eq(w_t, "u16") {
+                buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 192); // movzwl %ax, %eax
+            } else if str_eq(w_t, "i16") {
+                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 192); // movswq %ax, %rax
+            } else if str_eq(w_t, "u32") {
+                buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
+            } else if str_eq(w_t, "i32") {
+                buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
+            }
+            return;
+        }
+
         let mut reg_count: usize = 0;
         let mut a: *mut AstNode = expr.left;
         while a != (0).as(*mut AstNode) {
             ng_emit_expr(ng, code, data, a);
+            let a_sz: i32 = ng_find_struct_size(ng, ng_expr_type(ng, a));
             if ng_is_expr_slice(ng, a) {
                 buf_append_u8(code, 80); // push %rax (ptr)
                 buf_append_u8(code, 82); // push %rdx (len)
                 reg_count = reg_count + 2;
+            } else if a_sz > 8 {
+                // Struct by value: its words are in %rax, %rdx, %rcx, %r8 (up to 32 bytes).
+                let mut whole_value: bool = a.tag == NODE_IDENT;
+                if a.tag == NODE_STRUCT_INIT { whole_value = true; }
+                if a.tag == NODE_CALL { whole_value = true; }
+                if a.tag == NODE_FIELD_ACCESS { whole_value = true; }
+                if a.tag == NODE_DEREF { whole_value = true; }
+                if a_sz > 32 {
+                    ng_fail(ng, "native codegen error: a struct argument larger than 32 bytes cannot be passed by value; pass a pointer");
+                } else if !whole_value {
+                    ng_fail(ng, "native codegen error: a struct passed by value must be a variable, a field, a dereference, a struct literal or a call result");
+                }
+                buf_append_u8(code, 80); // push %rax (word 0)
+                buf_append_u8(code, 82); // push %rdx (word 1)
+                if a_sz >= 24 { buf_append_u8(code, 81); } // push %rcx (word 2)
+                if a_sz >= 32 { buf_append_u8(code, 65); buf_append_u8(code, 80); } // push %r8 (word 3)
+                reg_count = reg_count + (a_sz / 8).as(usize);
             } else {
                 buf_append_u8(code, 80); // push %rax
                 reg_count = reg_count + 1;
             }
             a = a.next;
+        }
+        if reg_count > 6 {
+            // There are six argument registers; anything beyond them used to be dropped silently.
+            ng_fail(ng, "native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)");
         }
 
         let mut idx: usize = reg_count;
@@ -1580,27 +1797,57 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
         if is_sys {
             if ng.target == OC_TARGET_WINDOWS_X86_64 {
-                // Linux syscall numbers are meaningless on Windows: map what the kernel32 runtime covers, reject the rest.
+                // Linux syscall numbers are meaningless on Windows. sys_exit maps to the built-in
+                // ExitProcess helper; every other sys_* is an ordinary oC function there, defined
+                // in std/sys/windows.oc, and is called like any other function below.
                 if sys_nr == 60 {
                     ng_emit_call(ng, code, "__win_exit");
                     return;
                 }
+            } else {
+                buf_append_u8(code, 73);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 202); // mov %rcx, %r10
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 199);
+                buf_append_u8(code, 192);
+                elf_append_u32(code, sys_nr);
+                buf_append_u8(code, 15);
+                buf_append_u8(code, 5); // syscall
+                return;
+            }
+        }
+
+        // win32_<Name>(...): call the KERNEL32 import <Name> through the Win64 ABI thunk.
+        let mut is_win32: bool = false;
+        if fn_name.len > 6 {
+            if str_eq(fn_name[0..6], "win32_") { is_win32 = true; }
+        }
+        if is_win32 {
+            let slot: i32 = ng_imp_slot(fn_name[6..fn_name.len]);
+            if ng.target != OC_TARGET_WINDOWS_X86_64 {
+                ng_fail(ng, "native codegen error: win32_* imports exist only on target windows-x86_64");
+                return;
+            }
+            if slot < 0 {
                 if !ng.has_error {
-                    print("native codegen error: syscall intrinsic unavailable on target windows-x86_64 (use --backend c):");
+                    print("native codegen error: not a KERNEL32 import known to the PE emitter:");
                     print(fn_name);
                 }
                 ng.has_error = true;
                 return;
             }
-            buf_append_u8(code, 73);
-            buf_append_u8(code, 137);
-            buf_append_u8(code, 202); // mov %rcx, %r10
-            buf_append_u8(code, 72);
-            buf_append_u8(code, 199);
-            buf_append_u8(code, 192);
-            elf_append_u32(code, sys_nr);
-            buf_append_u8(code, 15);
-            buf_append_u8(code, 5); // syscall
+            buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 5); // lea slot(%rip), %rax
+            ng_add_iat_fixup(ng, code.len, slot.as(usize));
+            elf_append_u32(code, 0);
+            ng_emit_call(ng, code, "__win_call");
+            // A 32-bit result (BOOL, DWORD) leaves the upper half of %rax undefined.
+            let ret_t: string = ng_find_fn_ret_type(ng, fn_name);
+            if str_eq(ret_t, "i32") {
+                buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
+            } else if str_eq(ret_t, "u32") {
+                buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
+            }
             return;
         }
 
@@ -1608,6 +1855,44 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         buf_append_u8(code, 232); // call rel32
         elf_append_u32(code, 0);
         return;
+    }
+}
+
+// Writes the literal text `raw` (escapes still encoded) plus a newline to stdout.
+fn ng_emit_print_lit(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, raw: string) {
+    let data_off: usize = data.len;
+    let emitted_len: usize = ng_append_unescaped_str(data, raw);
+    buf_append_u8(data, 10); // '\n'
+
+    let is_win: bool = ng.target == OC_TARGET_WINDOWS_X86_64;
+    if !is_win {
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 199);
+        buf_append_u8(code, 192);
+        elf_append_u32(code, 1);
+    }
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 199);
+    elf_append_u32(code, 1);
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 190);
+    let patch_pos: usize = code.len;
+    elf_append_u64(code, 0);
+    ng_add_data_reloc(ng, patch_pos, data_off);
+
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 194);
+    elf_append_u32(code, (emitted_len + 1).as(u32));
+
+    if is_win {
+        ng_emit_call(ng, code, "__win_write");
+    } else {
+        buf_append_u8(code, 15);
+        buf_append_u8(code, 5);
     }
 }
 
@@ -1755,9 +2040,16 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                         let f_off: i32 = ng_find_field_offset(ng, t_name, f.tok.slice);
                         let f_type: string = ng_find_field_type(ng, t_name, f.tok.slice);
                         ng_emit_expr(ng, code, data, f.left);
-                        ng_emit_disp_store_rax(code, base_off + f_off);
-                        if str_eq(f_type, "string") {
+                        let f_words: i32 = ng_value_words(ng, f_type);
+                        if f_words > 1 {
+                            ng_emit_disp_store_rax(code, base_off + f_off);
                             ng_emit_disp_store_rdx(code, base_off + f_off + 8);
+                            if f_words >= 3 { ng_emit_disp_store_rcx(code, base_off + f_off + 16); }
+                            if f_words >= 4 { ng_emit_disp_store_r8(code, base_off + f_off + 24); }
+                        } else {
+                            buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 141);
+                            elf_append_i32(code, base_off + f_off); // lea off(%rbp), %rcx
+                            ng_emit_store_at_rcx(code, ng_field_width(ng, t_name, f.tok.slice));
                         }
                         f = f.next;
                     }
@@ -1774,7 +2066,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
         // Scalar or slice local variable
         ng_emit_expr(ng, code, data, stmt.left);
-        ng_emit_range_check(ng, code, t_name);
+        ng_emit_range_check(ng, code, t_name, "__trap_overflow");
 
         ng.curr_off = ng.curr_off - 8;
         let off: i32 = ng.curr_off;
@@ -1812,7 +2104,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     if s_sz >= 32 { ng_emit_disp_store_r8(code, off + 24); }
                     return;
                 }
-                ng_emit_range_check(ng, code, vt);
+                ng_emit_range_check(ng, code, vt, "__trap_overflow");
                 ng_emit_disp_store_rax(code, off);
                 if ng_is_var_slice(ng, stmt.left.tok.slice) {
                     ng_emit_disp_store_rdx(code, off - 8);
@@ -1821,16 +2113,32 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             let lhs_t: string = ng_expr_type(ng, stmt.left);
             ng_emit_expr(ng, code, data, stmt.right);
-            ng_emit_range_check(ng, code, lhs_t);
+            let lhs_words: i32 = ng_value_words(ng, lhs_t);
+            if lhs_words > 2 {
+                // 3- or 4-word struct: park the words on the stack while the address is computed.
+                if lhs_words == 4 { buf_append_u8(code, 65); buf_append_u8(code, 80); } // push %r8
+                buf_append_u8(code, 81); // push %rcx
+                buf_append_u8(code, 82); // push %rdx
+                buf_append_u8(code, 80); // push %rax
+                ng_emit_lvalue_addr(ng, code, data, stmt.left);
+                let mut w: i32 = 0;
+                while w < lhs_words {
+                    buf_append_u8(code, 90); // pop %rdx
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 80); buf_append_u8(code, (w * 8).as(u8)); // mov %rdx, 8w(%rax)
+                    w = w + 1;
+                }
+                return;
+            }
+            ng_emit_range_check(ng, code, lhs_t, "__trap_overflow");
             buf_append_u8(code, 80); // push %rax (value)
-            if str_eq(lhs_t, "string") {
-                buf_append_u8(code, 82); // push %rdx (len)
+            if lhs_words == 2 {
+                buf_append_u8(code, 82); // push %rdx (second word: string len or struct word 1)
             }
             ng_emit_lvalue_addr(ng, code, data, stmt.left);
             buf_append_u8(code, 72);
             buf_append_u8(code, 137);
             buf_append_u8(code, 193); // mov %rax, %rcx
-            if str_eq(lhs_t, "string") {
+            if lhs_words == 2 {
                 buf_append_u8(code, 90); // pop %rdx
                 buf_append_u8(code, 88); // pop %rax
                 buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 1);
@@ -1838,16 +2146,14 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             }
             buf_append_u8(code, 88); // pop %rax
-            let mut is_1byte: bool = ng_is_byte_type(lhs_t);
-            if str_eq(lhs_t, "i8") { is_1byte = true; }
-            if is_1byte {
-                buf_append_u8(code, 136);
-                buf_append_u8(code, 1); // mov %al, (%rcx)
-            } else {
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 137);
-                buf_append_u8(code, 1); // mov %rax, (%rcx)
+            let mut width: i32 = 8;
+            if stmt.left.tag == NODE_FIELD_ACCESS {
+                let base_t: string = ng_strip_ptr_type(ng_expr_type(ng, stmt.left.left));
+                width = ng_field_width(ng, base_t, stmt.left.tok.slice);
+            } else if ng_scalar_width(lhs_t) == 1 {
+                width = 1;
             }
+            ng_emit_store_at_rcx(code, width);
             return;
         }
         return;
@@ -1981,40 +2287,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                         raw = raw[1..raw.len - 1];
                     }
                 }
-                let data_off: usize = data.len;
-                let emitted_len: usize = ng_append_unescaped_str(data, raw);
-                buf_append_u8(data, 10); // '\n'
-
-                let is_win: bool = ng.target == OC_TARGET_WINDOWS_X86_64;
-                if !is_win {
-                    buf_append_u8(code, 72);
-                    buf_append_u8(code, 199);
-                    buf_append_u8(code, 192);
-                    elf_append_u32(code, 1);
-                }
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 199);
-                buf_append_u8(code, 199);
-                elf_append_u32(code, 1);
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 190);
-                let patch_pos: usize = code.len;
-                elf_append_u64(code, 0);
-                ng_add_data_reloc(ng, patch_pos, data_off);
-
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 199);
-                buf_append_u8(code, 194);
-                elf_append_u32(code, (emitted_len + 1).as(u32));
-
-                if is_win {
-                    ng_emit_call(ng, code, "__win_write");
-                } else {
-                    buf_append_u8(code, 15);
-                    buf_append_u8(code, 5);
-                }
+                ng_emit_print_lit(ng, code, data, raw);
                 return;
             } else if ng_is_expr_slice(ng, arg) {
                 ng_emit_expr(ng, code, data, arg);
@@ -2030,6 +2303,36 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             } else {
                 let arg_t: string = ng_expr_type(ng, arg);
+                if str_eq(arg_t, "bool") {
+                    ng_emit_expr(ng, code, data, arg);
+                    buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 192); // test %rax, %rax
+                    buf_append_u8(code, 15); buf_append_u8(code, 132); // jz print_false
+                    let jz_pos: usize = code.len;
+                    elf_append_u32(code, 0);
+                    ng_emit_print_lit(ng, code, data, "true");
+                    buf_append_u8(code, 233); // jmp done
+                    let jmp_pos: usize = code.len;
+                    elf_append_u32(code, 0);
+                    elf_patch_i32(code, jz_pos, (code.len.as(i64) - (jz_pos + 4).as(i64)).as(i32));
+                    ng_emit_print_lit(ng, code, data, "false");
+                    elf_patch_i32(code, jmp_pos, (code.len.as(i64) - (jmp_pos + 4).as(i64)).as(i32));
+                    return;
+                }
+                if is_u8_array_type(arg_t) {
+                    // A [N]u8 prints as text up to the first NUL, and never past its N bytes.
+                    ng_emit_lvalue_addr(ng, code, data, arg);
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 199); // mov %rax, %rdi
+                    buf_append_u8(code, 49); buf_append_u8(code, 246);                           // xor %esi, %esi
+                    buf_append_u8(code, 72); buf_append_u8(code, 129); buf_append_u8(code, 254); // scan: cmp $N, %rsi
+                    elf_append_u32(code, ng_parse_array_len(arg_t).as(u32));
+                    buf_append_u8(code, 115); buf_append_u8(code, 11);                           // jae done
+                    buf_append_u8(code, 128); buf_append_u8(code, 60); buf_append_u8(code, 55); buf_append_u8(code, 0); // cmpb $0, (%rdi,%rsi)
+                    buf_append_u8(code, 116); buf_append_u8(code, 5);                            // je done
+                    buf_append_u8(code, 72); buf_append_u8(code, 255); buf_append_u8(code, 198); // inc %rsi
+                    buf_append_u8(code, 235); buf_append_u8(code, 236);                          // jmp scan
+                    ng_emit_call(ng, code, "__print_slice");                                     // done: (%rdi = ptr, %rsi = len)
+                    return;
+                }
                 ng_emit_expr(ng, code, data, arg);
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 137);
@@ -2182,6 +2485,25 @@ fn ng_emit_win_runtime(ng: *mut NativeGen, code: *mut CodeBuffer, has_offset: *m
     buf_append_u8(code, 93);                                                        // pop %rbp
     buf_append_u8(code, 195);                                                       // ret
 
+    // __win_call(%rax = &IAT slot; args in %rdi, %rsi, %rdx, %rcx, %r8, %r9): calls a KERNEL32
+    // import with up to six oC arguments, passing 0 as a seventh. Returns the callee's %rax.
+    ng_define_helper(ng, has_offset, "__win_call", code.len);
+    buf_append_u8(code, 85);                                                        // push %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 229);    // mov %rsp, %rbp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 64);  // sub $64, %rsp (shadow space + 3 stack args)
+    buf_append_u8(code, 76); buf_append_u8(code, 137); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 32); // mov %r8, 32(%rsp)  (arg 5)
+    buf_append_u8(code, 76); buf_append_u8(code, 137); buf_append_u8(code, 76); buf_append_u8(code, 36); buf_append_u8(code, 40); // mov %r9, 40(%rsp)  (arg 6)
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 68); buf_append_u8(code, 36); buf_append_u8(code, 48); elf_append_u32(code, 0); // movq $0, 48(%rsp) (arg 7)
+    buf_append_u8(code, 73); buf_append_u8(code, 137); buf_append_u8(code, 201);    // mov %rcx, %r9  (arg 4)
+    buf_append_u8(code, 73); buf_append_u8(code, 137); buf_append_u8(code, 208);    // mov %rdx, %r8  (arg 3)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 242);    // mov %rsi, %rdx (arg 2)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 249);    // mov %rdi, %rcx (arg 1)
+    buf_append_u8(code, 255); buf_append_u8(code, 16);                              // call *(%rax)
+    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 236);    // mov %rbp, %rsp
+    buf_append_u8(code, 93);                                                        // pop %rbp
+    buf_append_u8(code, 195);                                                       // ret
+
     // __win_exit(code = %rdi): never returns
     ng_define_helper(ng, has_offset, "__win_exit", code.len);
     buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 228); buf_append_u8(code, 240); // and $-16, %rsp
@@ -2228,10 +2550,6 @@ fn pe_append_section_header(pe: *mut CodeBuffer, name: string, vsize: usize, rva
 // No section is ever writable; the loader temporarily unprotects the IAT (data directory 12)
 // while binding imports. Code is position independent, so ASLR needs no .reloc section.
 fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {
-    let mut imp_names: [3]string = [""];
-    imp_names[NG_IMP_EXIT_PROCESS] = "ExitProcess";
-    imp_names[NG_IMP_GET_STD_HANDLE] = "GetStdHandle";
-    imp_names[NG_IMP_WRITE_FILE] = "WriteFile";
     let dll_name: string = "KERNEL32.dll";
 
     // .rdata layout: IAT | import lookup table | import descriptors | hint/name entries | DLL name | user data
@@ -2240,12 +2558,12 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     let ilt_off: usize = iat_off + thunk_bytes;
     let idt_off: usize = ilt_off + thunk_bytes;
     let idt_bytes: usize = 2 * 20;
-    let mut hint_offs: [3]usize = [0];
+    let mut hint_offs: [9]usize = [0]; // NG_IMP_COUNT entries
     let mut cur: usize = idt_off + idt_bytes;
     let mut k: usize = 0;
     while k < NG_IMP_COUNT {
         hint_offs[k] = cur;
-        cur = pe_align(cur + 2 + imp_names[k].len + 1, 2);
+        cur = pe_align(cur + 2 + ng_imp_name(k).len + 1, 2);
         k = k + 1;
     }
     let dll_off: usize = cur;
@@ -2410,7 +2728,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     while k < NG_IMP_COUNT {
         pe_append_zeros(pe, rdata_raw_off + hint_offs[k] - pe.len);
         elf_append_u16(pe, 0); // Hint
-        buf_append(pe, imp_names[k]);
+        buf_append(pe, ng_imp_name(k));
         buf_append_u8(pe, 0);
         k = k + 1;
     }
@@ -2472,6 +2790,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
         field_names: [""],
         field_offsets: [0],
         field_types: [""],
+        field_packed: [false],
         field_count: 0,
         const_names: [""],
         const_vals: [0],
@@ -2495,11 +2814,14 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
     while scan != (0).as(*mut AstNode) {
         if scan.tag == NODE_STRUCT_DECL {
             let s_name: string = scan.tok.slice;
+            // Packed structs follow the C layout: exact field widths, no padding.
+            let is_packed: bool = str_eq(scan.type_name, "packed");
             let mut f_off: i32 = 0;
             let mut sf: *mut AstNode = scan.left;
             while sf != (0).as(*mut AstNode) {
                 let ft: string = sf.type_name;
                 let mut f_sz: i32 = 8;
+                if is_packed { f_sz = ng_scalar_width(ft); }
                 if str_eq(ft, "string") {
                     f_sz = 16;
                 } else if ft.len > 0 {
@@ -2507,7 +2829,11 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                         let alen: usize = ng_parse_array_len(ft);
                         let ael: string = ng_parse_array_elem(ft);
                         let astr: i32 = ng_type_stride(ael);
-                        f_sz = (((alen.as(i32)) * astr + 7) / 8) * 8;
+                        f_sz = (alen.as(i32)) * astr;
+                        if !is_packed { f_sz = ((f_sz + 7) / 8) * 8; }
+                    } else if is_packed {
+                        let raw_sz: i32 = ng_struct_raw_size(ng, ft);
+                        if raw_sz > 0 { f_sz = raw_sz; }
                     } else {
                         let sub_sz: i32 = ng_find_struct_size(ng, ft);
                         if sub_sz > 0 { f_sz = sub_sz; }
@@ -2518,6 +2844,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                     ng.field_names[ng.field_count] = sf.tok.slice;
                     ng.field_offsets[ng.field_count] = f_off;
                     ng.field_types[ng.field_count] = ft;
+                    ng.field_packed[ng.field_count] = is_packed;
                     ng.field_count = ng.field_count + 1;
                 }
                 f_off = f_off + f_sz;
@@ -2623,6 +2950,13 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                             ng.curr_off = ng.curr_off - 8;
                             param_bytes = param_bytes + 8;
                         }
+                        // A struct parameter owns its full size; its base is the lowest address.
+                        let p_sz: i32 = ng_find_struct_size(ng, p.type_name);
+                        if p_sz > 8 {
+                            ng.curr_off = ng.curr_off - (p_sz - 8);
+                            param_bytes = param_bytes + (p_sz - 8);
+                            ng.var_offsets[ng.var_count - 1] = ng.curr_off;
+                        }
                     }
                     p = p.next;
                 }
@@ -2666,8 +3000,17 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                         ng_emit_store_param_reg(code, reg_idx, off - 8);
                         reg_idx = reg_idx + 1;
                     }
+                    let mut p_word: i32 = 8;
+                    while p_word < ng_find_struct_size(ng, ng.var_types[p_var_idx]) {
+                        ng_emit_store_param_reg(code, reg_idx, off + p_word);
+                        reg_idx = reg_idx + 1;
+                        p_word = p_word + 8;
+                    }
                     p_var_idx = p_var_idx + 1;
                     p = p.next;
+                }
+                if reg_idx > 6 {
+                    ng_fail(ng, "native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)");
                 }
 
                 if body_block != (0).as(*mut AstNode) {
@@ -2794,18 +3137,23 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
     buf_append_u8(code, 195);
 
     // Trap functions
-    let mut traps: [4]string = [""];
+    // Same panic texts as the C backend, so a trap reads the same whichever backend built it.
+    let mut traps: [6]string = [""];
     traps[0] = "__trap_null_deref";
     traps[1] = "__trap_slice_bounds";
     traps[2] = "__trap_overflow";
     traps[3] = "__trap_div_zero";
-    let mut trap_msgs: [4]string = [""];
+    traps[4] = "__trap_cast_signed";
+    traps[5] = "__trap_cast_unsigned";
+    let mut trap_msgs: [6]string = [""];
     trap_msgs[0] = "panic: null pointer dereference\n";
     trap_msgs[1] = "panic: slice index out of bounds\n";
     trap_msgs[2] = "panic: integer overflow\n";
     trap_msgs[3] = "panic: division by zero\n";
+    trap_msgs[4] = "panic: invalid signed cast\n";
+    trap_msgs[5] = "panic: invalid unsigned cast\n";
     let mut ti: usize = 0;
-    while ti < 4 {
+    while ti < 6 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;

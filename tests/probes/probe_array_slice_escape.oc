@@ -1,0 +1,9 @@
+fn dangling() -> string {
+    let mut buf: [8]u8 = [72, 105, 33, 0, 0, 0, 0, 0];
+    let s: string = buf[0..3];
+    return s; // slice of a local array must not outlive the frame
+}
+
+fn main() {
+    print(dangling());
+}

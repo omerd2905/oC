@@ -6,7 +6,7 @@ cd "$DIR"
 
 echo "=========================================================="
 echo "          oC Systems Programming Language Showcase        "
-echo "  100% C Speed • Zero Allocator Exploit Surface • < 5KB ELF "
+echo "  Checked Arithmetic • Regional Arenas • < 5KB Static ELF   "
 echo "=========================================================="
 echo ""
 
@@ -14,7 +14,8 @@ echo ""
 echo "[1/4] Toolchain Verification (100% Self-Hosted oC)..."
 OCC="./bin/occ"
 mkdir -p bin bootstrap
-if [ ! -x "$OCC" ]; then
+# bin/occ is not committed: build it when it is missing or cannot run on this machine.
+if ! "$OCC" --version >/dev/null 2>&1; then
     if [ -f "bootstrap/occ_bootstrap.c" ]; then
         echo "  Bootstrapping bin/occ from portable bootstrap/occ_bootstrap.c..."
         cc -O2 bootstrap/occ_bootstrap.c -o "$OCC"
@@ -56,14 +57,19 @@ echo "[4/4] Active Memory Safety: Rejecting Exploit PoCs & Running Dual-Backend 
 EXPLOITS=(examples/bad_stack_escape.oc examples/exploits/*.oc)
 PASSED=0
 for f in "${EXPLOITS[@]}"; do
-    if ! "$OCC" run "$f" >/dev/null 2>&1; then
-        PASSED=$((PASSED + 1))
-    else
+    if out="$("$OCC" build "$f" -o /tmp/oc_exploit_bin 2>&1)"; then
         echo "✘ Safety check failed: $f unexpectedly compiled!"
         exit 1
+    elif grep -q "C compiler failed\|failed to read file" <<<"$out"; then
+        # A broken toolchain or a missing file is not a rejection by the validator.
+        echo "✘ Safety check failed: $f was not rejected by the validator:"
+        echo "$out"
+        exit 1
+    else
+        PASSED=$((PASSED + 1))
     fi
 done
-echo "✔ $PASSED/${#EXPLOITS[@]} exploit PoCs rejected at compile time with 0.00ns runtime overhead!"
+echo "✔ $PASSED/${#EXPLOITS[@]} exploit PoCs rejected at compile time!"
 ./tests/run_probes.sh
 echo ""
 

@@ -1,5 +1,7 @@
 zig-out/
 occ_self
 *.tmp.c
+# The compiler binary is built from bootstrap/occ_bootstrap.c (run `make`), never committed.
+bin/occ
 bin/occ.exe
-build/
+bin/occ.exe.old
