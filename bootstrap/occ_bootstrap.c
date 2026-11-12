@@ -2307,6 +2307,17 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     if ((((expr)->tag) == NODE_SLICE)) {
     return get_expr_arena_borrow(v, ((expr)->left));
     }
+    if ((((expr)->tag) == NODE_STRUCT_INIT)) {
+    AstNode* f = ((expr)->left);
+    while ((f != ((AstNode*)(0)))) {
+    oc_string wrapped = get_expr_arena_borrow(v, ((f)->left));
+    if ((((wrapped).len) > 0)) {
+    return wrapped;
+    }
+    f = ((f)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
     oc_string id = get_ident_name(((expr)->left));
     if ((((id).len) > 0)) {
