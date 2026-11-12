@@ -928,6 +928,9 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n");
     buf_append(out, "#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n");
 
+    // The Windows CRT has no line buffering (_IOLBF behaves as fully buffered there).
+    buf_append(out, "#ifdef _WIN32\n#define __OC_STDOUT_BUF _IONBF\n#else\n#define __OC_STDOUT_BUF _IOLBF\n#endif\n\n");
+
     buf_append(out, "typedef struct {\n");
     buf_append(out, "    const uint8_t* ptr;\n");
     buf_append(out, "    size_t len;\n");
@@ -1184,6 +1187,9 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                 } else {
                     buf_append(out, "int main(int argc, char** argv) {\n");
                 }
+                // print() goes through stdio while sys_write(), child processes and _exit() do
+                // not: flush stdout per line so output keeps program order and is never lost.
+                buf_append(out, "    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\n");
 
                 let body_block: *mut AstNode = decl.right;
                 if body_block != (0).as(*mut AstNode) {
