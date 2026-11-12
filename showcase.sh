@@ -6,7 +6,7 @@ cd "$DIR"
 
 echo "=========================================================="
 echo "          oC Systems Programming Language Showcase        "
-echo "  100% C Speed • Zero Allocator Exploit Surface • < 5KB ELF "
+echo "  Checked Arithmetic • Regional Arenas • < 5KB Static ELF   "
 echo "=========================================================="
 echo ""
 

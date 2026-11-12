@@ -161,14 +161,23 @@ This runs:
 
 ## Performance Characteristics
 
-Measurements on Linux x86_64 comparing oC against GCC 9.x/13.x at `-O2`:
+Measured 2026-11-12 with `benchmarks/run_benchmarks.sh`: Intel(R) Xeon(R) Processor @ 2.30GHz, Linux x86_64, gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0. Best of 5 runs, wall-clock time; all three binaries of a row print the same checksum.
 
-| Workload | oC | Native C (`-O2`) | Notes |
-|:---|:---:|:---:|:---|
-| **12.8M allocations + reset scrub** | 43 ms | 320 ms | Regional bump arena (`sys_mmap`) vs per-object `malloc` + `memset` + `free` |
-| **25M wire packet parsing + FNV-1a** | 88 ms | 98 ms | Checked fat slices vs raw unchecked pointers |
-| **78.1M recursive calls (`fib(38)`)** | 85 ms (`-O2`)<br>738 ms (`native`) | 78 ms | Near parity on C backend with overflow checks enabled; native backend uses single-pass register assignment |
-| **Static binary size** | ~4.8 KB | 16 KB (dynamic)<br>~850 KB (static glibc) | Direct static ELF with raw system call instructions |
+| Workload | C (`gcc -O2`) | oC, C backend (`-O2`) | oC, native backend | What is compared |
+|:---|---:|---:|---:|:---|
+| 12.8M allocations + scrub on release | 289 ms | 45 ms | 3330 ms | Different allocators: oC bump arena (`sys_mmap`, one reset) vs C per-object `malloc` + `memset` + `free` |
+| 25M wire frames parsed + FNV-1a | 96 ms | 109 ms | 355 ms | Same algorithm: bounds-checked fat slices vs unchecked C pointers |
+| `fib(38)` (78.1M calls) + 200K Collatz chains | 77 ms | 197 ms | 394 ms | Same algorithm: overflow-checked arithmetic vs wrapping C arithmetic |
+| Hello-world binary size | 15960 B | 15960 B | 4539 B | Dynamically linked (libc) for the first two; the native backend emits a static ELF with no libc |
+
+How to read it:
+
+- **Checked arithmetic has a real cost on call-heavy code.** In the `fib` row the C backend is about 2.5x slower than plain C. Without overflow checks, `gcc -O2` reassociates `fib(n-1) + fib(n-2)` and turns one of the two recursive calls into a loop. With a checked `+` it cannot, because an overflow in an intermediate sum would have to trap at the same point, so the full double recursion stays.
+- **The allocation row compares allocation strategies, not code generation.** A bump arena that is scrubbed and reset once is much cheaper than one `malloc` + `memset` + `free` per object; C code using an arena would be just as fast.
+- **Bounds-checked slices cost roughly 10-15%** on the packet-parsing workload.
+- **The native backend is a single-pass code generator with no optimizer.** It is 2-4x slower than the C backend on these loops, and far slower when the hot loop is the byte-by-byte arena scrub, which `gcc -O2` turns into a `memset`. Use it for small, dependency-free binaries, and the C backend for speed.
+
+Timings depend on the machine and the compiler version: run `./benchmarks/run_benchmarks.sh` to reproduce them. The script prints this table.
 
 ---
 
