@@ -1,0 +1,6 @@
+fn main() {
+    let mut buf: [8]u8 = [72, 105, 33, 0, 0, 0, 0, 0];
+    let end: usize = 9;
+    let s: string = buf[2..end]; // one past the array: must trap
+    print(s);
+}

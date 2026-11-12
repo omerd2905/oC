@@ -1232,7 +1232,22 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_SLICE {
-        ng_emit_expr(ng, code, data, expr.left);
+        let base_t: string = ng_expr_type(ng, expr.left);
+        let mut is_array: bool = false;
+        if base_t.len > 0 {
+            if base_t[0] == 91 { is_array = true; }
+            if base_t[0] == 42 { ng_fail(ng, "native codegen error: cannot slice a raw pointer (it has no length)"); }
+            if base_t[0] == 38 { ng_fail(ng, "native codegen error: cannot slice a raw pointer (it has no length)"); }
+        }
+        if is_array {
+            // Fixed-size array: slice { ptr: &a[0], len: N bytes }
+            let arr_bytes: usize = ng_parse_array_len(base_t) * ng_type_stride(ng_parse_array_elem(base_t)).as(usize);
+            ng_emit_lvalue_addr(ng, code, data, expr.left);
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); // mov $len, %rdx
+            elf_append_u32(code, arr_bytes.as(u32));
+        } else {
+            ng_emit_expr(ng, code, data, expr.left);
+        }
         buf_append_u8(code, 80); // push %rax
         buf_append_u8(code, 82); // push %rdx
 
