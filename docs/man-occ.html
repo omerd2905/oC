@@ -311,9 +311,9 @@ All 4 suites completed successfully.</code></pre>
           <li><strong>Headers:</strong> <code>MZ</code> DOS header (<code>e_lfanew = 0x40</code>), <code>PE\0\0</code>, COFF <code>Machine = 0x8664</code>, 2 sections, <code>Characteristics = 0x0022</code> (executable, large-address-aware), <code>TimeDateStamp = 0</code> for reproducible output.</li>
           <li><strong>Optional header:</strong> PE32+ (<code>0x020B</code>), entry RVA <code>0x1000</code>, <code>ImageBase = 0x140000000</code>, console subsystem (<code>3</code>), <code>DllCharacteristics = 0x8160</code> (HIGH_ENTROPY_VA, DYNAMIC_BASE/ASLR, NX_COMPAT, TERMINAL_SERVER_AWARE). The 1 MiB stack is fully committed, so frames larger than 4 KiB need no <code>__chkstk</code> probes.</li>
           <li><strong><code>.text</code></strong> at RVA <code>0x1000</code>, <code>0x60000020</code> (code, read, execute). <strong><code>.rdata</code></strong> on the next page (<code>0x2000</code> for programs under 4 KiB of code), <code>0x40000040</code> (read-only data): IAT, import descriptors and string literals. No section is writable; the loader unprotects the IAT (data directory 12) only while binding.</li>
-          <li><strong>Imports:</strong> <code>KERNEL32.dll!ExitProcess</code>, <code>WriteFile</code> and <code>GetStdHandle</code> (needed to obtain the console handle for <code>WriteFile</code>). Runtime helpers bridge oC's internal register convention to the Win64 ABI (shadow space, 16-byte aligned <code>%rsp</code>).</li>
+          <li><strong>Imports:</strong> <code>KERNEL32.dll!ExitProcess</code>, <code>GetStdHandle</code>, <code>WriteFile</code>, <code>ReadFile</code>, <code>CreateFileA</code>, <code>CloseHandle</code>, <code>DeleteFileA</code>, <code>VirtualAlloc</code> and <code>VirtualFree</code>. Runtime helpers bridge oC's internal register convention to the Win64 ABI (shadow space, 16-byte aligned <code>%rsp</code>).</li>
           <li><strong>Position independence:</strong> string literals are addressed <code>%rip</code>-relative, so ASLR relocates the image without a <code>.reloc</code> section.</li>
-          <li><strong>Limits:</strong> Linux-only intrinsics (<code>sys_mmap</code>, <code>sys_open</code>, sockets, ...) are rejected at compile time; see <a href="stdlib.html#std-os">OC-OS(3)</a>. <code>tests/check_pe.py</code> validates the headers and W^X flags.</li>
+          <li><strong>Runtime:</strong> arenas and file I/O work natively: the <code>sys_*</code> intrinsics are implemented on <code>KERNEL32</code> by <code>std/sys/windows.oc</code> (sockets return <code>-1</code>); see <a href="stdlib.html#std-os">OC-OS(3)</a>. <code>tests/check_pe.py</code> validates the headers and W^X flags.</li>
         </ul>
         <pre><code>$ occ build examples/hello.oc -o hello --backend native --target windows-x86_64
 $ python3 tests/check_pe.py hello.exe
@@ -434,7 +434,7 @@ $ cmp /tmp/occ_stage2 /tmp/occ_stage3
               <td><code>1</code></td>
               <td>Compiler / Execution Error</td>
               <td>
-                Parse error, <code>EscapeValidator</code> memory safety violation, unsafe CLI path, unknown or unsupported <code>--target</code>, native image emission failure (including a Linux-only intrinsic on <code>windows-x86_64</code>), or child program termination via hardware trap (<code>SIGILL</code> / <code>SIGTRAP</code>).
+                Parse error, <code>EscapeValidator</code> memory safety violation, unsafe CLI path, unknown or unsupported <code>--target</code>, native image emission failure, or child program termination via hardware trap (<code>SIGILL</code> / <code>SIGTRAP</code>).
               </td>
             </tr>
             <tr>
