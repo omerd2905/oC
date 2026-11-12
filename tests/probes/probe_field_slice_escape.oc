@@ -1,0 +1,11 @@
+struct Msg { id: u32, body: [8]u8, }
+
+fn dangling() -> string {
+    let mut m: Msg = Msg { id: 1, body: [0] };
+    m.body[0] = 72;
+    return m.body[0..1]; // points into this function's stack frame
+}
+
+fn main() {
+    print(dangling());
+}

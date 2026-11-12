@@ -797,6 +797,7 @@ struct FnEffects {
 
 struct Validator {
     fx: *mut FnEffects,
+    program: *mut AstNode,
     vars: [512]VarInfo,
     vars_count: usize,
     deinit_arenas: [128]string,
@@ -1008,16 +1009,64 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
 
 // `buf[a..b]` on a local fixed-size array borrows the stack frame, like `&buf`. Returns the
 // array's name, or "" when `expr` is not such a slice.
+// Declared type of field `f_name` of struct `s_name` ("" if unknown).
+fn validator_field_type(v: *mut Validator, s_name: string, f_name: string) -> string {
+    let mut decl: *mut AstNode = v.program.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_STRUCT_DECL {
+            if str_eq(decl.tok.slice, s_name) {
+                let mut f: *mut AstNode = decl.left;
+                while f != (0).as(*mut AstNode) {
+                    if str_eq(f.tok.slice, f_name) { return f.type_name; }
+                    f = f.next;
+                }
+            }
+        }
+        decl = decl.next;
+    }
+    return "";
+}
+
+// Type of `expr` when it names storage held by value inside a local variable's stack slot:
+// `buf`, `msg.body`, `grid[1]`, ... Returns "" for anything else, in particular for anything
+// reached through a pointer or a string, whose target is not this stack frame.
+fn validator_stack_place_type(v: *mut Validator, expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_IDENT {
+        let idx: i32 = validator_find_var(v, expr.tok.slice);
+        if idx < 0 { return ""; }
+        if !v.vars[idx.as(usize)].is_stack_local { return ""; }
+        return v.vars[idx.as(usize)].type_name;
+    }
+    if expr.tag == NODE_FIELD_ACCESS {
+        let base: string = validator_stack_place_type(v, expr.left);
+        if base.len == 0 { return ""; }
+        if starts_with(base, "*") { return ""; }
+        if starts_with(base, "&") { return ""; }
+        return validator_field_type(v, base, expr.tok.slice);
+    }
+    if expr.tag == NODE_INDEX {
+        let base: string = validator_stack_place_type(v, expr.left);
+        if !starts_with(base, "[") { return ""; }
+        let mut close: usize = 1;
+        while close < base.len {
+            if base[close] == 93 { break; } // ']'
+            close = close + 1;
+        }
+        if close + 1 >= base.len { return ""; }
+        return base[close + 1..base.len];
+    }
+    return "";
+}
+
+// `buf[a..b]` on a fixed-size array stored in a local variable (directly, or as a field or
+// element of one) borrows the stack frame, like `&buf`. Returns the local's name, or "" when
+// `expr` is not such a slice.
 fn get_local_array_slice_source(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag != NODE_SLICE { return ""; }
-    if expr.left == (0).as(*mut AstNode) { return ""; }
-    if expr.left.tag != NODE_IDENT { return ""; }
-    let idx: i32 = validator_find_var(v, expr.left.tok.slice);
-    if idx < 0 { return ""; }
-    if !v.vars[idx.as(usize)].is_stack_local { return ""; }
-    if !starts_with(v.vars[idx.as(usize)].type_name, "[") { return ""; }
-    return expr.left.tok.slice;
+    if !starts_with(validator_stack_place_type(v, expr.left), "[") { return ""; }
+    return get_ident_name(expr.left);
 }
 
 fn contains_stack_ref(v: *mut Validator, expr: *mut AstNode) -> string {
@@ -1287,6 +1336,9 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                     if str_eq(stmt.left.tok.slice, "arena_init") {
                         inferred_type = "Arena";
                     }
+                }
+                if stmt.left.tag == NODE_STRUCT_INIT {
+                    inferred_type = stmt.left.tok.slice; // `let m = Msg { ... }` has type Msg
                 }
             }
         }
@@ -1590,11 +1642,12 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     return check_expr_use(v, stmt);
 }
 
-fn validate_function(f: *mut AstNode, fx: *mut FnEffects) -> bool {
+fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode) -> bool {
     if f.right == (0).as(*mut AstNode) { return true; } // extern/prototype
 
     let mut v: Validator = Validator {
         fx: fx,
+        program: program,
         vars: [VarInfo {
             name: "",
             type_name: "",
@@ -1696,7 +1749,7 @@ fn validate_program(root: *mut AstNode) -> bool {
     decl = root.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
-            if !validate_function(decl, &mut fx) {
+            if !validate_function(decl, &mut fx, root) {
                 return false;
             }
         }
