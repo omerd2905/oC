@@ -19,6 +19,17 @@ jobs:
           cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
           ./showcase.sh
 
+      - name: occ install, then run by name from another directory
+        run: |
+          ./bin/occ install
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$(occ run t.oc)" = "std ok"
+
+      - name: Every example in docs/*.html and README.md builds (or is rejected as documented)
+        run: python3 tests/check_docs.py
+
       - name: Verify W^X ELF64 segments on --backend native
         run: |
           ./bin/occ build examples/oc_tripwire.oc -o /tmp/oc_tripwire --backend native
@@ -57,6 +68,14 @@ jobs:
             "./build/$ex"
           done
 
+      - name: occ install, then run by name from another directory
+        run: |
+          ./bin/occ install
+          export PATH="$HOME/.local/bin:$PATH"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$(occ run t.oc)" = "std ok"
+
       - name: Cross-compile a Windows PE32+ from macOS (--backend native)
         run: |
           ./bin/occ build examples/hello.oc -o build/hello_win --backend native --target windows-x86_64
@@ -90,11 +109,19 @@ jobs:
             "./build/$ex.exe"
           done
 
+      - name: Self-host fixed point (stage 2 == stage 3, byte for byte)
+        run: |
+          mkdir -p build
+          ./bin/occ.exe build compiler/main.oc -o build/occ_stage2
+          ./build/occ_stage2.exe build compiler/main.oc -o build/occ_stage3
+          # sha256sum, not cmp: base MSYS2 ships coreutils but not diffutils
+          test "$(sha256sum < build/occ_stage2.exe)" = "$(sha256sum < build/occ_stage3.exe)"
+
       - name: Native PE32+ backend (no C compiler, no linker) + runtime trap probes
         run: |
           ./bin/occ.exe build examples/hello.oc -o build/hello_native --backend native --target windows-x86_64
           test "$(./build/hello_native.exe)" = "Hello World!"
-          for p in overflow_i32 overflow_u8 underflow_usize div_zero slice_bounds cast_narrow_i8 cast_neg_u64; do
+          for p in overflow_i32 overflow_u8 overflow_mul_u64 overflow_mul_i32 underflow_usize div_zero slice_bounds array_bounds array_slice_bounds cast_narrow_i8 cast_neg_u64; do
             ./bin/occ.exe build "tests/probes/probe_$p.oc" -o build/trap --backend native
             if ./build/trap.exe; then
               echo "probe_$p.oc exited 0 without trapping"
@@ -102,6 +129,37 @@ jobs:
             fi
             echo "probe_$p.oc trapped as expected"
           done
+
+      - name: occ.exe runs from another directory (std found via the real executable path)
+        run: |
+          occ="$PWD/bin/occ.exe"
+          cd "$(mktemp -d)"
+          printf 'import "std/mem.oc";\nfn main() {\n    let mut a: Arena = arena_init(4096);\n    arena_deinit(&mut a);\n    print("std ok");\n}\n' > t.oc
+          test "$("$occ" run t.oc | tr -d '\r')" = "std ok"
+
+      - name: occ install adds the bin directory to the user PATH
+        shell: pwsh
+        run: |
+          .\bin\occ.exe install
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          $bin = (Resolve-Path .\bin).Path
+          $userPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+          if (($userPath -split ';') -notcontains $bin) { Write-Error "user PATH does not contain $bin"; exit 1 }
+
+      - name: Native PE32+ std runtime (arenas and file I/O on KERNEL32, no C compiler)
+        run: |
+          for ex in arena_demo core_suite; do
+            ./bin/occ.exe build "examples/$ex.oc" -o "build/${ex}_native" --backend native
+            "./build/${ex}_native.exe"
+          done
+          ./bin/occ.exe build tests/win_native_io.oc -o build/win_native_io --backend native
+          # CR is stripped on both sides: git may check the expected file out with CRLF on Windows.
+          got="$(./build/win_native_io.exe | tr -d '\r')"
+          want="$(tr -d '\r' < tests/win_native_io.expected)"
+          if [ "$got" != "$want" ]; then
+            printf -- '--- got:\n%s\n--- expected:\n%s\n' "$got" "$want"
+            exit 1
+          fi
 
       - name: Validate PE32+ headers and strict W^X section flags
         shell: pwsh

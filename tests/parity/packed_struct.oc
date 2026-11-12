@@ -1,0 +1,49 @@
+// Packed structs overlay raw bytes with the C layout: exact field widths, no padding.
+// Both backends must read and write every field at the same offset and width.
+packed struct Hdr { version: u8, port: u16, flags: u8, seq: u32, delta: i16, big: u64, tag: i32, }
+
+struct Plain { a: u8, b: u32, c: i32, d: u64, }
+
+fn bump(p: *mut Hdr) {
+    p.port = p.port + 1;
+    p.delta = p.delta - 5;
+    p.tag = -7;
+}
+
+fn main() {
+    let raw: [24]u8 = [1, 144, 31, 9, 4, 3, 2, 1, 254, 255, 8, 7, 6, 5, 4, 3, 2, 1, 255, 255, 255, 255, 170, 187];
+    let h: *Hdr = (&raw).as(*Hdr);
+    print(h.version);          // 1
+    print(h.port);             // 8080
+    print(h.flags);            // 9
+    print(h.seq);              // 16909060
+    print(h.delta.as(i32));    // -2
+    print(h.big);              // 72623859790382856
+    print(h.tag);              // -1
+
+    // Narrow stores must not spill into neighbouring fields or locals.
+    let mut guard_a: u64 = 1111;
+    let mut loc: Hdr = Hdr { version: 2, port: 443, flags: 3, seq: 4000000000, delta: -2, big: 99, tag: -1 };
+    let mut guard_b: u64 = 2222;
+    bump(&mut loc);
+    loc.flags = 200;
+    loc.seq = 12;
+    print(loc.version);        // 2
+    print(loc.port);           // 444
+    print(loc.flags);          // 200
+    print(loc.seq);            // 12
+    print(loc.delta.as(i32));  // -7
+    print(loc.big);            // 99
+    print(loc.tag);            // -7
+    print(guard_a);            // 1111
+    print(guard_b);            // 2222
+
+    // Non-packed structs are unaffected.
+    let mut pl: Plain = Plain { a: 250, b: 4000000000, c: -3, d: 77 };
+    pl.b = pl.b - 1;
+    pl.c = pl.c - 1;
+    print(pl.a);               // 250
+    print(pl.b);               // 3999999999
+    print(pl.c);               // -4
+    print(pl.d);               // 77
+}

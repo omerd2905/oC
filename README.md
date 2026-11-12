@@ -13,7 +13,7 @@ Online documentation and language specification: [https://omerd2905.github.io/oC
 ```oc
 import "std/mem.oc";
 
-fn main() i32 {
+fn main() -> i32 {
     // 1. Regional arena allocated directly from the OS kernel
     let mut arena: Arena = arena_init(4096);
 
@@ -41,7 +41,7 @@ fn main() i32 {
 
 - **Regional Arenas:** Dynamic allocations are performed against explicit arenas. There are no inline chunk headers, metadata footers, or global heap freelists.
 - **Compile-Time Lifetime & Escape Checks:** An AST-level validator checks that references do not outlive their targets, stack addresses cannot be returned or leaked into outer scopes, and pointers into arenas cannot be accessed after the arena is reset or deinitialized.
-- **Checked Arithmetic and Slices:** Integer overflow (`+`, `-`, `*`), division by zero, narrowing casts (`.as(T)`), and slice indexing (`s[i]`) are explicitly checked. In the C backend, these map to overflow intrinsics; in the native backend, they lower to hardware condition checks and trap instructions.
+- **Checked Arithmetic and Slices:** Integer overflow (`+`, `-`, `*`), division by zero, narrowing casts (`.as(T)`), and slice indexing (`s[i]`) are explicitly checked. In the C backend, these map to overflow intrinsics; in the native backend, they lower to hardware condition checks and trap instructions. Code that needs modular arithmetic (hashes, PRNGs) opts in explicitly with `wrapping_add`, `wrapping_sub` and `wrapping_mul`.
 - **Zero Required Runtime:** Programs compiled with `--backend native` have no dependency on libc or an external runtime library.
 
 ---
@@ -83,11 +83,11 @@ cd oC
 - **Windows:** GCC on `PATH` via [MSYS2](https://www.msys2.org/), [w64devkit](https://github.com/skeeto/w64devkit), or WinLibs (`winget install MSYS2.MSYS2`).
 
 ### 3. Bootstrap the Compiler
-The portable C source (`bootstrap/occ_bootstrap.c`) is committed in the repository so no existing `oC` installation is required:
+The portable C source (`bootstrap/occ_bootstrap.c`) is committed in the repository so no existing `oC` installation is required. The compiler binary itself is not committed; it is always built for your machine:
 
 On Linux, macOS, or BSD:
 ```bash
-cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
+make        # same as: cc -O2 bootstrap/occ_bootstrap.c -o bin/occ
 ```
 
 On Windows:
@@ -104,15 +104,25 @@ gcc -O2 bootstrap\occ_bootstrap.c -o bin\occ.exe
 bin\occ.exe run examples\hello.oc
 ```
 
-### Updating oC
-To update an existing installation to the latest commit:
+### 5. Put `occ` on your PATH (optional)
 ```bash
-./bin/occ update
+./bin/occ install
 
 # On Windows:
-bin\occ.exe update
+bin\occ.exe install
 ```
-*(Automatically pulls upstream changes via `git pull` and rebuilds the compiler binary).*
+- **Linux / macOS / BSD:** creates the symlink `~/.local/bin/occ` (add `~/.local/bin` to `PATH` if it is not there).
+- **Windows:** appends the `bin` directory to your user `PATH` (open a new terminal afterwards).
+- **NixOS / Nix:** `nix profile install .` builds and installs the flake's default package.
+
+After that, `occ build x.oc` works from any directory. `occ` locates `std/` relative to its own real location (`<prefix>/bin/occ` uses `<prefix>/std`), also when started through a symlink. To use a different standard library, set `OC_HOME` to the directory that contains `std/`.
+
+### Updating oC
+To update an existing installation to the latest commit (from any directory):
+```bash
+occ update
+```
+*(Runs `git pull` in the checkout the `occ` binary lives in and rebuilds the compiler from `bootstrap/occ_bootstrap.c`).*
 
 ---
 
@@ -151,14 +161,23 @@ This runs:
 
 ## Performance Characteristics
 
-Measurements on Linux x86_64 comparing oC against GCC 9.x/13.x at `-O2`:
+Measured 2026-11-12 with `benchmarks/run_benchmarks.sh`: Intel(R) Xeon(R) Processor @ 2.30GHz, Linux x86_64, gcc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0. Best of 5 runs, wall-clock time; all three binaries of a row print the same checksum.
 
-| Workload | oC | Native C (`-O2`) | Notes |
-|:---|:---:|:---:|:---|
-| **12.8M allocations + reset scrub** | 43 ms | 320 ms | Regional bump arena (`sys_mmap`) vs per-object `malloc` + `memset` + `free` |
-| **25M wire packet parsing + FNV-1a** | 88 ms | 98 ms | Checked fat slices vs raw unchecked pointers |
-| **78.1M recursive calls (`fib(38)`)** | 85 ms (`-O2`)<br>738 ms (`native`) | 78 ms | Near parity on C backend with overflow checks enabled; native backend uses single-pass register assignment |
-| **Static binary size** | ~4.8 KB | 16 KB (dynamic)<br>~850 KB (static glibc) | Direct static ELF with raw system call instructions |
+| Workload | C (`gcc -O2`) | oC, C backend (`-O2`) | oC, native backend | What is compared |
+|:---|---:|---:|---:|:---|
+| 12.8M allocations + scrub on release | 289 ms | 45 ms | 3330 ms | Different allocators: oC bump arena (`sys_mmap`, one reset) vs C per-object `malloc` + `memset` + `free` |
+| 25M wire frames parsed + FNV-1a | 96 ms | 109 ms | 355 ms | Same algorithm: bounds-checked fat slices vs unchecked C pointers |
+| `fib(38)` (78.1M calls) + 200K Collatz chains | 77 ms | 197 ms | 394 ms | Same algorithm: overflow-checked arithmetic vs wrapping C arithmetic |
+| Hello-world binary size | 15960 B | 15960 B | 4539 B | Dynamically linked (libc) for the first two; the native backend emits a static ELF with no libc |
+
+How to read it:
+
+- **Checked arithmetic has a real cost on call-heavy code.** In the `fib` row the C backend is about 2.5x slower than plain C. Without overflow checks, `gcc -O2` reassociates `fib(n-1) + fib(n-2)` and turns one of the two recursive calls into a loop. With a checked `+` it cannot, because an overflow in an intermediate sum would have to trap at the same point, so the full double recursion stays.
+- **The allocation row compares allocation strategies, not code generation.** A bump arena that is scrubbed and reset once is much cheaper than one `malloc` + `memset` + `free` per object; C code using an arena would be just as fast.
+- **Bounds-checked slices cost roughly 10-15%** on the packet-parsing workload.
+- **The native backend is a single-pass code generator with no optimizer.** It is 2-4x slower than the C backend on these loops, and far slower when the hot loop is the byte-by-byte arena scrub, which `gcc -O2` turns into a `memset`. Use it for small, dependency-free binaries, and the C backend for speed.
+
+Timings depend on the machine and the compiler version: run `./benchmarks/run_benchmarks.sh` to reproduce them. The script prints this table.
 
 ---
 
