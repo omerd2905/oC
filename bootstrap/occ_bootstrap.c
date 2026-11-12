@@ -141,6 +141,7 @@ static inline int64_t __oc_mod_check(int64_t a, int64_t b) {
 #define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
 #define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
 #define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
+#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })
 
 static const int32_t OC_PROT_READ = 1;
 static const int32_t OC_PROT_WRITE = 2;
@@ -477,6 +478,7 @@ bool is_type_ptr(oc_string t);
 bool is_type_str(oc_string t);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
 bool is_expr_pointer(AstNode* expr, CodeBuffer* out);
+oc_string wrapping_op(oc_string fn_name);
 void codegen_expr(AstNode* expr, CodeBuffer* out);
 bool is_comparison_tok(uint32_t tag);
 bool is_bool_expr(AstNode* expr);
@@ -517,8 +519,8 @@ size_t ng_parse_array_len(oc_string t);
 oc_string ng_parse_array_elem(oc_string t);
 int32_t ng_type_stride(oc_string t);
 bool ng_is_byte_type(oc_string t);
-oc_string ng_expr_type(NativeGen* ng, AstNode* expr);
 bool is_unsigned_type_name(oc_string t);
+oc_string ng_expr_type(NativeGen* ng, AstNode* expr);
 bool ng_is_unsigned_expr(NativeGen* ng, AstNode* expr);
 bool ng_is_expr_slice(NativeGen* ng, AstNode* expr);
 void ng_emit_disp_store_rax(CodeBuffer* code, int32_t off);
@@ -3431,6 +3433,19 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     return false;
 }
 
+oc_string wrapping_op(oc_string fn_name) {
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("add"), .len = sizeof("add") - 1 };
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("wrapping_sub"), .len = sizeof("wrapping_sub") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("sub"), .len = sizeof("sub") - 1 };
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("wrapping_mul"), .len = sizeof("wrapping_mul") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("mul"), .len = sizeof("mul") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
 void codegen_expr(AstNode* expr, CodeBuffer* out) {
     if ((expr == ((AstNode*)(0)))) {
     return;
@@ -3684,6 +3699,20 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    oc_string w_op = wrapping_op(((((expr)->tok)).slice));
+    if ((((w_op).len) > 0)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_WRAP("), .len = sizeof("__OC_WRAP(") - 1 });
+    buf_append(out, w_op);
+    AstNode* w_arg = ((expr)->left);
+    while ((w_arg != ((AstNode*)(0)))) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", ("), .len = sizeof(", (") - 1 });
+    codegen_expr(w_arg, out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    w_arg = ((w_arg)->next);
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    return;
+    }
     buf_append(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* arg = ((expr)->left);
@@ -3733,22 +3762,12 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((((expr)->tok)).tag) == TOK_STAR)) {
-    bool is_fnv_prime = false;
-    if ((((expr)->right) != ((AstNode*)(0)))) {
-    if ((((((expr)->right))->tag) == NODE_INT)) {
-    if (str_eq(((((((expr)->right))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("16777619"), .len = sizeof("16777619") - 1 })) {
-    is_fnv_prime = true;
-    }
-    }
-    }
-    if ((!is_fnv_prime)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_MUL("), .len = sizeof("__OC_MUL(") - 1 });
     codegen_expr(((expr)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     codegen_expr(((expr)->right), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
-    }
     }
     }
     }
@@ -4230,7 +4249,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n"), .len = sizeof("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n"), .len = sizeof("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n"), .len = sizeof("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n") - 1 });
     __OC_AT((((out)->ptr_fields)), (0)) = (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
     ((out)->ptr_fields_count) = 1;
     AstNode* scan_decl = ((root)->left);
@@ -4918,6 +4938,34 @@ bool ng_is_byte_type(oc_string t) {
     return false;
 }
 
+bool is_unsigned_type_name(oc_string t) {
+    if ((((t).len) == 0)) {
+    return false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    return true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    return true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 })) {
+    return true;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 })) {
+    return true;
+    }
+    if ((__oc_index_str(t, 0) == 42)) {
+    return true;
+    }
+    if ((__oc_index_str(t, 0) == 38)) {
+    return true;
+    }
+    return false;
+}
+
 oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -4941,6 +4989,42 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     return ng_find_var_type(ng, ((((expr)->tok)).slice));
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    if ((((wrapping_op(((((expr)->tok)).slice))).len) > 0)) {
+    oc_string lt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    oc_string rt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if ((((expr)->left) != ((AstNode*)(0)))) {
+    lt = ng_expr_type(ng, ((expr)->left));
+    rt = ng_expr_type(ng, ((((expr)->left))->next));
+    }
+    if ((ng_scalar_width(lt) < 4)) {
+    return lt;
+    }
+    if ((ng_scalar_width(rt) < 4)) {
+    return rt;
+    }
+    if ((((lt).len) == 0)) {
+    return rt;
+    }
+    if ((((rt).len) == 0)) {
+    return lt;
+    }
+    if ((ng_scalar_width(lt) == 8)) {
+    if (is_unsigned_type_name(lt)) {
+    return lt;
+    }
+    if ((ng_scalar_width(rt) == 8)) {
+    return rt;
+    }
+    return lt;
+    }
+    if ((ng_scalar_width(rt) == 8)) {
+    return rt;
+    }
+    if (is_unsigned_type_name(lt)) {
+    return lt;
+    }
+    return rt;
+    }
     return ng_find_fn_ret_type(ng, ((((expr)->tok)).slice));
     }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
@@ -5002,34 +5086,6 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     return rt;
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-}
-
-bool is_unsigned_type_name(oc_string t) {
-    if ((((t).len) == 0)) {
-    return false;
-    }
-    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
-    return true;
-    }
-    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
-    return true;
-    }
-    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
-    return true;
-    }
-    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 })) {
-    return true;
-    }
-    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 })) {
-    return true;
-    }
-    if ((__oc_index_str(t, 0) == 42)) {
-    return true;
-    }
-    if ((__oc_index_str(t, 0) == 38)) {
-    return true;
-    }
-    return false;
 }
 
 bool ng_is_unsigned_expr(NativeGen* ng, AstNode* expr) {
@@ -6073,21 +6129,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((((expr)->tok)).tag) == TOK_STAR)) {
-    bool is_fnv_prime = false;
-    if ((((expr)->right) != ((AstNode*)(0)))) {
-    if ((((((expr)->right))->tag) == NODE_INT)) {
-    if (str_eq(((((((expr)->right))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("16777619"), .len = sizeof("16777619") - 1 })) {
-    is_fnv_prime = true;
-    }
-    }
-    }
-    bool use_unsigned_mul = false;
     if (is_uns) {
-    if ((!is_fnv_prime)) {
-    use_unsigned_mul = true;
-    }
-    }
-    if (use_unsigned_mul) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 247);
     buf_append_u8(code, 227);
@@ -6098,13 +6140,11 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 175);
     buf_append_u8(code, 195);
     }
-    if ((!is_fnv_prime)) {
     ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
     buf_append_u8(code, 15);
     buf_append_u8(code, 128);
     elf_append_u32(code, 0);
     ng_emit_range_check(ng, code, res_type);
-    }
     return;
     }
     if ((((((expr)->tok)).tag) == TOK_LT)) {
@@ -6292,6 +6332,87 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    oc_string w_op = wrapping_op(((((expr)->tok)).slice));
+    if ((((w_op).len) > 0)) {
+    size_t w_argc = 0;
+    AstNode* w_arg = ((expr)->left);
+    while ((w_arg != ((AstNode*)(0)))) {
+    w_argc = __OC_ADD(w_argc, 1);
+    w_arg = ((w_arg)->next);
+    }
+    if ((w_argc != 2)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: wrapping_add/wrapping_sub/wrapping_mul take exactly 2 arguments"), .len = sizeof("native codegen error: wrapping_add/wrapping_sub/wrapping_mul take exactly 2 arguments") - 1 });
+    return;
+    }
+    ng_emit_expr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, 80);
+    ng_emit_expr(ng, code, data, ((((expr)->left))->next));
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 195);
+    buf_append_u8(code, 88);
+    if (str_eq(w_op, (oc_string){ .ptr = (const uint8_t*)("add"), .len = sizeof("add") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 1);
+    buf_append_u8(code, 216);
+    }
+    else {
+    if (str_eq(w_op, (oc_string){ .ptr = (const uint8_t*)("sub"), .len = sizeof("sub") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 41);
+    buf_append_u8(code, 216);
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 175);
+    buf_append_u8(code, 195);
+    }
+    }
+    oc_string w_t = ng_expr_type(ng, expr);
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 182);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 190);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 183);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 191);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 99);
+    buf_append_u8(code, 192);
+    }
+    }
+    }
+    }
+    }
+    }
+    return;
+    }
     size_t reg_count = 0;
     AstNode* a = ((expr)->left);
     while ((a != ((AstNode*)(0)))) {

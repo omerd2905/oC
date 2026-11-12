@@ -1,0 +1,5 @@
+fn main() {
+    let a: u64 = 36000000000000000;
+    let b: u64 = a * 16777619; // exceeds u64: must trap, not wrap
+    print(b);
+}

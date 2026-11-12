@@ -7,11 +7,12 @@ fn parse_wire_frame(frame: string, seed: u32) -> u64 {
     let flags: u32 = tcp[13].as(u32);
     let mac_tail: u32 = eth[5].as(u32);
 
+    // FNV-1a needs modular multiplication: wrapping_mul wraps instead of trapping like `*`.
     let mut hash: u64 = 2166136261;
-    hash = (hash ^ proto.as(u64)) * 16777619;
-    hash = (hash ^ flags.as(u64)) * 16777619;
-    hash = (hash ^ mac_tail.as(u64)) * 16777619;
-    hash = (hash ^ seed.as(u64)) * 16777619;
+    hash = wrapping_mul(hash ^ proto.as(u64), 16777619);
+    hash = wrapping_mul(hash ^ flags.as(u64), 16777619);
+    hash = wrapping_mul(hash ^ mac_tail.as(u64), 16777619);
+    hash = wrapping_mul(hash ^ seed.as(u64), 16777619);
     return hash & 0xffffffff;
 }
 
