@@ -1,0 +1,23 @@
+// Unary operators: ~x keeps the width of x, and -x is checked like 0 - x.
+fn neg32(x: i32) -> i32 { return -x; }
+fn neg64(x: i64) -> i64 { return -x; }
+
+fn main() {
+    let a: u8 = 0x0F;
+    let b: u8 = ~a;
+    print(b);              // 240
+    let c: u16 = 1;
+    print(~c);             // 65534
+    let d: u32 = 1;
+    print(~d);             // 4294967294
+    let e: u64 = 0;
+    print(~e);             // 18446744073709551615
+    let f: i32 = 5;
+    print(~f);             // -6
+    print(a & ~b);         // 15
+    print(neg32(7));       // -7
+    print(neg32(-2147483647)); // 2147483647
+    print(neg64(-9));      // 9
+    let z: u32 = 0;
+    print(-z);             // 0 (the only unsigned value that can be negated)
+}

@@ -288,6 +288,28 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_UNARY {
+        let mut is_literal: bool = false;
+        if expr.left != (0).as(*mut AstNode) {
+            is_literal = expr.left.tag == NODE_INT;
+        }
+        if expr.tok.tag == TOK_MINUS {
+            if !is_literal {
+                // -x is 0 - x with the usual overflow check (-INT_MIN does not fit).
+                buf_append(out, "__OC_SUB(0, ");
+                codegen_expr(expr.left, out);
+                buf_append(out, ")");
+                return;
+            }
+        }
+        if expr.tok.tag == TOK_TILDE {
+            // ~x keeps the type of x (C would promote a u8 or u16 to int).
+            buf_append(out, "((__typeof__(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))~(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))");
+            return;
+        }
         buf_append(out, "(");
         buf_append(out, expr.tok.slice);
         codegen_expr(expr.left, out);

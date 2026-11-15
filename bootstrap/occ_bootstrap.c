@@ -571,6 +571,7 @@ void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string
 void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width);
 int32_t ng_value_words(NativeGen* ng, oc_string t);
 bool ng_emit_load_struct_at_rax(NativeGen* ng, CodeBuffer* code, oc_string s_name);
+void ng_emit_truncate(CodeBuffer* code, oc_string t);
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
@@ -3714,6 +3715,26 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_UNARY)) {
+    bool is_literal = false;
+    if ((((expr)->left) != ((AstNode*)(0)))) {
+    is_literal = (((((expr)->left))->tag) == NODE_INT);
+    }
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    if ((!is_literal)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_SUB(0, "), .len = sizeof("__OC_SUB(0, ") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    return;
+    }
+    }
+    if ((((((expr)->tok)).tag) == TOK_TILDE)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("((__typeof__("), .len = sizeof("((__typeof__(") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("))~("), .len = sizeof("))~(") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("))"), .len = sizeof("))") - 1 });
+    return;
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     buf_append(out, ((((expr)->tok)).slice));
     codegen_expr(((expr)->left), out);
@@ -4816,7 +4837,7 @@ void elf_patch_u64(CodeBuffer* buf, size_t offset, uint64_t v) {
 void elf_append_i32(CodeBuffer* buf, int32_t v) {
     uint64_t uv = 0;
     if ((v < 0)) {
-    int64_t neg = (-({ __auto_type _v = (v); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
+    int64_t neg = __OC_SUB(0, ({ __auto_type _v = (v); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
     uv = __OC_SUB(4294967296, ({ __auto_type _v = (neg); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     }
     else {
@@ -4828,7 +4849,7 @@ void elf_append_i32(CodeBuffer* buf, int32_t v) {
 void elf_patch_i32(CodeBuffer* buf, size_t offset, int32_t v) {
     uint64_t uv = 0;
     if ((v < 0)) {
-    int64_t neg = (-({ __auto_type _v = (v); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
+    int64_t neg = __OC_SUB(0, ({ __auto_type _v = (v); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
     uv = __OC_SUB(4294967296, ({ __auto_type _v = (neg); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     }
     else {
@@ -5381,6 +5402,10 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     }
     if ((((expr)->tag) == NODE_UNARY)) {
     if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    oc_string neg_t = ng_expr_type(ng, ((expr)->left));
+    if ((((neg_t).len) > 0)) {
+    return neg_t;
+    }
     return (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 };
     }
     if ((((((expr)->tok)).tag) == TOK_BANG)) {
@@ -5775,6 +5800,50 @@ bool ng_emit_load_struct_at_rax(NativeGen* ng, CodeBuffer* code, oc_string s_nam
     buf_append_u8(code, 139);
     buf_append_u8(code, 0);
     return true;
+}
+
+void ng_emit_truncate(CodeBuffer* code, oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 182);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 190);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 183);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 191);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 192);
+    }
+    else {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 99);
+    buf_append_u8(code, 192);
+    }
+    }
+    }
+    }
+    }
+    }
 }
 
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width) {
@@ -6264,16 +6333,29 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     ng_emit_expr(ng, code, data, ((expr)->left));
+    oc_string neg_t = ng_expr_type(ng, ((expr)->left));
     buf_append_u8(code, 72);
     buf_append_u8(code, 247);
     buf_append_u8(code, 216);
     ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
     buf_append_u8(code, 15);
+    if (is_unsigned_type_name(neg_t)) {
+    buf_append_u8(code, 130);
+    }
+    else {
     buf_append_u8(code, 128);
+    }
     elf_append_u32(code, 0);
+    ng_emit_range_check(ng, code, neg_t, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     return;
     }
     ng_emit_expr(ng, code, data, ((expr)->left));
+    if ((((((expr)->tok)).tag) == TOK_TILDE)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 247);
+    buf_append_u8(code, 208);
+    ng_emit_truncate(code, ng_expr_type(ng, ((expr)->left)));
+    }
     if ((((((expr)->tok)).tag) == TOK_BANG)) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 133);
@@ -6770,48 +6852,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 195);
     }
     }
-    oc_string w_t = ng_expr_type(ng, expr);
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 182);
-    buf_append_u8(code, 192);
-    }
-    else {
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 190);
-    buf_append_u8(code, 192);
-    }
-    else {
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 183);
-    buf_append_u8(code, 192);
-    }
-    else {
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 15);
-    buf_append_u8(code, 191);
-    buf_append_u8(code, 192);
-    }
-    else {
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
-    buf_append_u8(code, 137);
-    buf_append_u8(code, 192);
-    }
-    else {
-    if (str_eq(w_t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
-    buf_append_u8(code, 72);
-    buf_append_u8(code, 99);
-    buf_append_u8(code, 192);
-    }
-    }
-    }
-    }
-    }
-    }
+    ng_emit_truncate(code, ng_expr_type(ng, expr));
     return;
     }
     size_t reg_count = 0;
@@ -8282,7 +8323,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     stmt = ((stmt)->next);
     }
     }
-    uint32_t used_sz = ({ __auto_type _v = (__OC_MUL(__OC_DIV(__OC_ADD((-((ng)->curr_off)), 15), 16), 16)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; });
+    uint32_t used_sz = ({ __auto_type _v = (__OC_MUL(__OC_DIV(__OC_ADD(__OC_SUB(0, ((ng)->curr_off)), 15), 16), 16)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; });
     if ((used_sz > stack_sz)) {
     if (has_frame) {
     elf_patch_u32(code, frame_patch, used_sz);
@@ -8393,7 +8434,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     int32_t rel8 = ({ __auto_type _v = (__OC_SUB(({ __auto_type _v = (loop_s); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (loop_e); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     uint32_t u8_val = 0;
     if ((rel8 < 0)) {
-    int32_t neg = (-rel8);
+    int32_t neg = __OC_SUB(0, rel8);
     u8_val = __OC_SUB(256, __OC_MOD(({ __auto_type _v = (neg); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }), 256));
     }
     else {

@@ -1,0 +1,6 @@
+fn negate(x: i32) -> i32 { return -x; }
+
+fn main() {
+    let lowest: i32 = -2147483647 - 1;
+    print(negate(lowest)); // 2147483648 does not fit in i32: must trap
+}
