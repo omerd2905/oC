@@ -792,6 +792,9 @@ struct VarInfo {
 struct FnEffects {
     names: [256]string,
     effects: [4096]u8,
+    // borrows[f * 16 + n]: the value returned by function f may point into the arena behind
+    // its parameter n (f allocates from it, directly or through its callees).
+    borrows: [4096]bool,
     count: usize,
 }
 
@@ -903,6 +906,20 @@ fn fx_param_effect(fx: *mut FnEffects, fn_name: string, idx: usize) -> u8 {
     return 0;
 }
 
+// True if the value returned by `fn_name` may point into the arena passed as argument `idx`.
+fn fx_param_borrows(fx: *mut FnEffects, fn_name: string, idx: usize) -> bool {
+    if idx == 0 {
+        if str_eq(fn_name, "arena_alloc") { return true; }
+    }
+    if idx >= 16 { return false; }
+    let mut i: usize = 0;
+    while i < fx.count {
+        if str_eq(fx.names[i], fn_name) { return fx.borrows[i * 16 + idx]; }
+        i = i + 1;
+    }
+    return false;
+}
+
 // Arena (or arena-owning variable) named by a call argument: `&mut a`, `a`, `p.arena`, ...
 fn get_arena_arg_name(arg: *mut AstNode) -> string {
     let u: string = get_underlying_address_of(arg);
@@ -912,7 +929,9 @@ fn get_arena_arg_name(arg: *mut AstNode) -> string {
 
 // Folds the effects of every call under `n` into the summary of function `slot` when the
 // affected argument is one of its own parameters. Returns true if the summary grew.
-fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNode) -> bool {
+// `ret_ptr` says the function returns something that can hold a pointer (not a scalar, not
+// void): then allocating from a parameter's arena makes the return value borrow from it.
+fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, ret_ptr: bool, n: *mut AstNode) -> bool {
     let mut changed: bool = false;
     let mut cur: *mut AstNode = n;
     while cur != (0).as(*mut AstNode) {
@@ -921,7 +940,11 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
             let mut ai: usize = 0;
             while arg != (0).as(*mut AstNode) {
                 let eff: u8 = fx_param_effect(fx, cur.tok.slice, ai);
-                if eff > 0 {
+                let mut allocs: bool = false;
+                if ret_ptr { allocs = fx_param_borrows(fx, cur.tok.slice, ai); }
+                let mut relevant: bool = eff > 0;
+                if allocs { relevant = true; }
+                if relevant {
                     let name: string = get_arena_arg_name(arg);
                     let mut prm: *mut AstNode = params;
                     let mut pi: usize = 0;
@@ -931,6 +954,12 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
                                 if fx.effects[slot * 16 + pi] < eff {
                                     fx.effects[slot * 16 + pi] = eff;
                                     changed = true;
+                                }
+                                if allocs {
+                                    if !fx.borrows[slot * 16 + pi] {
+                                        fx.borrows[slot * 16 + pi] = true;
+                                        changed = true;
+                                    }
                                 }
                             }
                         }
@@ -942,32 +971,37 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
                 ai = ai + 1;
             }
         }
-        if fx_scan(fx, slot, params, cur.left) { changed = true; }
-        if fx_scan(fx, slot, params, cur.right) { changed = true; }
+        if fx_scan(fx, slot, params, ret_ptr, cur.left) { changed = true; }
+        if fx_scan(fx, slot, params, ret_ptr, cur.right) { changed = true; }
         cur = cur.next;
     }
     return changed;
 }
 
-fn get_arena_source(expr: *mut AstNode) -> string {
+// Arena a call result points into: arena_alloc(&mut a, n) directly, or any function whose
+// summary says its return value borrows from an arena argument. "" if none.
+fn get_arena_source(fx: *mut FnEffects, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_CALL {
-        if str_eq(expr.tok.slice, "arena_alloc") {
-            if expr.left != (0).as(*mut AstNode) {
-                let u: string = get_underlying_address_of(expr.left);
-                if u.len > 0 { return u; }
-                return get_ident_name(expr.left);
+        let mut arg: *mut AstNode = expr.left;
+        let mut ai: usize = 0;
+        while arg != (0).as(*mut AstNode) {
+            if fx_param_borrows(fx, expr.tok.slice, ai) {
+                let name: string = get_arena_arg_name(arg);
+                if name.len > 0 { return name; }
             }
+            arg = arg.next;
+            ai = ai + 1;
         }
         return "";
     }
-    if expr.tag == NODE_CAST { return get_arena_source(expr.left); }
+    if expr.tag == NODE_CAST { return get_arena_source(fx, expr.left); }
     return "";
 }
 
 fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    let direct: string = get_arena_source(expr);
+    let direct: string = get_arena_source(v.fx, expr);
     if direct.len > 0 { return direct; }
     if expr.tag == NODE_IDENT {
         let idx: i32 = validator_find_var(v, expr.tok.slice);
@@ -1317,6 +1351,34 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     return true;
 }
 
+fn validator_save_invalidated(v: *mut Validator, out: *mut bool) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        out[i] = v.vars[i].is_invalidated;
+        i = i + 1;
+    }
+}
+
+fn validator_restore_invalidated(v: *mut Validator, saved: *mut bool) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        v.vars[i].is_invalidated = saved[i];
+        i = i + 1;
+    }
+}
+
+// True if control never falls out of the end of `block` (its last statement is a return).
+fn block_always_returns(block: *mut AstNode) -> bool {
+    if block == (0).as(*mut AstNode) { return false; }
+    if block.tag != NODE_BLOCK { return false; }
+    let mut last: *mut AstNode = block.left;
+    if last == (0).as(*mut AstNode) { return false; }
+    while last.next != (0).as(*mut AstNode) {
+        last = last.next;
+    }
+    return last.tag == NODE_RETURN;
+}
+
 fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     if stmt == (0).as(*mut AstNode) { return true; }
 
@@ -1485,12 +1547,18 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 if t_idx >= 0 {
                     let a_idx: i32 = validator_find_var(v, rhs_arena);
                     let mut arena_depth: u32 = v.scope_depth;
-                    if a_idx >= 0 { arena_depth = v.vars[a_idx.as(usize)].scope_depth; }
+                    // An arena the caller passed in outlives this call, like any target the
+                    // caller passed in; only an arena owned by this function can die first.
+                    let mut arena_is_local: bool = true;
+                    if a_idx >= 0 {
+                        arena_depth = v.vars[a_idx.as(usize)].scope_depth;
+                        arena_is_local = v.vars[a_idx.as(usize)].is_stack_local;
+                    }
                     let mut cross_escape: bool = false;
                     if v.vars[t_idx.as(usize)].scope_depth < arena_depth {
                         cross_escape = true;
                     } else if !v.vars[t_idx.as(usize)].is_stack_local {
-                        cross_escape = true;
+                        cross_escape = arena_is_local;
                     }
                     if cross_escape {
                         print_err_cross_arena(rhs_arena, tgt_opt);
@@ -1614,10 +1682,26 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_IF {
         if !check_expr_use(v, stmt.left) { return false; }
+        // A branch that always returns cannot affect the code after the `if`: what it reset
+        // or deinitialized is forgotten again once the branch has been checked.
+        let mut saved: [512]bool = [false];
+        let saved_ptr: *mut bool = (&mut saved).as(*mut bool);
+        let saved_deinit: usize = v.deinit_count;
+        validator_save_invalidated(v, saved_ptr);
         if !validate_stmt(v, stmt.right) { return false; }
+        if block_always_returns(stmt.right) {
+            validator_restore_invalidated(v, saved_ptr);
+            v.deinit_count = saved_deinit;
+        }
         if stmt.right != (0).as(*mut AstNode) {
             if stmt.right.next != (0).as(*mut AstNode) {
+                let else_deinit: usize = v.deinit_count;
+                validator_save_invalidated(v, saved_ptr);
                 if !validate_stmt(v, stmt.right.next) { return false; }
+                if block_always_returns(stmt.right.next) {
+                    validator_restore_invalidated(v, saved_ptr);
+                    v.deinit_count = else_deinit;
+                }
             }
         }
         return true;
@@ -1713,6 +1797,7 @@ fn validate_program(root: *mut AstNode) -> bool {
     let mut fx: FnEffects = FnEffects {
         names: [""],
         effects: [0],
+        borrows: [false],
         count: 0,
     };
     let mut decl: *mut AstNode = root.left;
@@ -1737,7 +1822,9 @@ fn validate_program(root: *mut AstNode) -> bool {
             if decl.tag == NODE_FN {
                 if decl.right != (0).as(*mut AstNode) {
                     if slot < 256 {
-                        if fx_scan(&mut fx, slot, decl.left, decl.right) { changed = true; }
+                        let mut ret_ptr: bool = decl.type_name.len > 0;
+                        if is_scalar_value_type(decl.type_name) { ret_ptr = false; }
+                        if fx_scan(&mut fx, slot, decl.left, ret_ptr, decl.right) { changed = true; }
                     }
                     slot = slot + 1;
                 }
