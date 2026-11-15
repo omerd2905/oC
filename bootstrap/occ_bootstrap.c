@@ -2364,6 +2364,35 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
+    if ((((expr)->tag) == NODE_ARRAY_INIT)) {
+    AstNode* el = ((expr)->left);
+    while ((el != ((AstNode*)(0)))) {
+    oc_string held = get_expr_arena_borrow(v, el);
+    if ((((held).len) > 0)) {
+    return held;
+    }
+    el = ((el)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    bool is_load = (((expr)->tag) == NODE_INDEX);
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    is_load = true;
+    }
+    if (is_load) {
+    oc_string loaded_t = validator_stack_place_type(v, expr);
+    if ((((loaded_t).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (is_scalar_value_type(loaded_t)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    int32_t root_idx = validator_find_var(v, get_ident_name(expr));
+    if ((root_idx < 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return ((__OC_AT((((v)->vars)), (({ __auto_type _v = (root_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena);
+    }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
     oc_string id = get_ident_name(((expr)->left));
     if ((((id).len) > 0)) {
@@ -3017,6 +3046,18 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     print_err_cross_arena(rhs_arena, tgt_opt);
     ((v)->has_error) = true;
     return false;
+    }
+    }
+    }
+    }
+    if ((!is_direct_ident)) {
+    if ((((rhs_arena).len) > 0)) {
+    if ((((validator_stack_place_type(v, ((stmt)->left))).len) > 0)) {
+    int32_t agg_idx = validator_find_var(v, tgt_opt);
+    if ((agg_idx >= 0)) {
+    if ((((((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena)).len) == 0)) {
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena) = rhs_arena;
+    }
     }
     }
     }

@@ -1023,6 +1023,28 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
         }
         return "";
     }
+    if expr.tag == NODE_ARRAY_INIT {
+        // An array literal holding an arena pointer borrows from that arena as a whole.
+        let mut el: *mut AstNode = expr.left;
+        while el != (0).as(*mut AstNode) {
+            let held: string = get_expr_arena_borrow(v, el);
+            if held.len > 0 { return held; }
+            el = el.next;
+        }
+        return "";
+    }
+    let mut is_load: bool = expr.tag == NODE_INDEX;
+    if expr.tag == NODE_FIELD_ACCESS { is_load = true; }
+    if is_load {
+        // A pointer, string or struct read out of a local array or struct (ptrs[0], h.p)
+        // inherits what the aggregate borrows. Scalars (s.len, bytes[i]) carry no pointer.
+        let loaded_t: string = validator_stack_place_type(v, expr);
+        if loaded_t.len == 0 { return ""; }
+        if is_scalar_value_type(loaded_t) { return ""; }
+        let root_idx: i32 = validator_find_var(v, get_ident_name(expr));
+        if root_idx < 0 { return ""; }
+        return v.vars[root_idx.as(usize)].borrowed_from_arena;
+    }
     if expr.tag == NODE_ADDRESS_OF {
         let id: string = get_ident_name(expr.left);
         if id.len > 0 {
@@ -1564,6 +1586,21 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                         print_err_cross_arena(rhs_arena, tgt_opt);
                         v.has_error = true;
                         return false;
+                    }
+                }
+            }
+        }
+
+        if !is_direct_ident {
+            // ptrs[i] = arena_alloc(...) or h.p = ...: storing an arena pointer into a local
+            // array or struct makes the whole aggregate borrow from that arena.
+            if rhs_arena.len > 0 {
+                if validator_stack_place_type(v, stmt.left).len > 0 {
+                    let agg_idx: i32 = validator_find_var(v, tgt_opt);
+                    if agg_idx >= 0 {
+                        if v.vars[agg_idx.as(usize)].borrowed_from_arena.len == 0 {
+                            v.vars[agg_idx.as(usize)].borrowed_from_arena = rhs_arena;
+                        }
                     }
                 }
             }
