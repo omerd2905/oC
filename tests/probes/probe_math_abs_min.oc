@@ -1,0 +1,6 @@
+import "std/math.oc";
+
+fn main() {
+    let lowest: i32 = -2147483647 - 1;
+    print(abs_i32(lowest)); // |INT_MIN| does not fit in i32: must trap, not return INT_MIN
+}

@@ -41,6 +41,9 @@ RUNTIME_TRAP=(
   "probe_array_slice_bounds.oc"
   "probe_cast_narrow_i8.oc"
   "probe_cast_neg_u64.oc"
+  "probe_math_abs_min.oc"
+  "probe_math_pow_overflow.oc"
+  "probe_math_ilog2_zero.oc"
 )
 
 PASS=0
@@ -150,6 +153,13 @@ for t in "$ROOT"/tests/parity/*.oc; do
     echo "exit $?" >>"/tmp/oc_parity_$backend.out"
     set -e
   done
+  # A <name>.expected file next to the test holds independently computed results.
+  want="${t%.oc}.expected"
+  if [ -f "$want" ] && ! cmp -s /tmp/oc_parity_c.out "$want"; then
+    echo "  [FAIL] $base: output differs from $(basename "$want"):"
+    diff /tmp/oc_parity_c.out "$want" || true
+    exit 1
+  fi
   if cmp -s /tmp/oc_parity_c.out /tmp/oc_parity_native.out; then
     echo "  [PASS] $base (identical output on both backends)"
     PASS=$((PASS + 1))

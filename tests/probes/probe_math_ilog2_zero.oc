@@ -1,0 +1,6 @@
+import "std/math.oc";
+
+fn main() {
+    let zero: u64 = 0;
+    print(ilog2_u64(zero)); // log2(0) is undefined: must trap
+}
