@@ -1,0 +1,4 @@
+fn main() {
+    let minus_one: f64 = -1.0;
+    print(minus_one.as(u32)); // negative value into an unsigned type: must trap
+}

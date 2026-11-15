@@ -134,6 +134,10 @@ fn parse_primary(p: *mut Parser) -> *mut AstNode {
         parser_advance(p);
         return ast_alloc_node(p.arena, NODE_STRING, tok);
     }
+    if tok.tag == TOK_FLOAT {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_FLOAT, tok);
+    }
     if tok.tag == TOK_TRUE {
         parser_advance(p);
         return ast_alloc_node(p.arena, NODE_BOOL, tok);
@@ -792,12 +796,16 @@ struct VarInfo {
 struct FnEffects {
     names: [256]string,
     effects: [4096]u8,
+    // borrows[f * 16 + n]: the value returned by function f may point into the arena behind
+    // its parameter n (f allocates from it, directly or through its callees).
+    borrows: [4096]bool,
     count: usize,
 }
 
 struct Validator {
     fx: *mut FnEffects,
     program: *mut AstNode,
+    ret_type: string, // declared return type of the function being checked
     vars: [512]VarInfo,
     vars_count: usize,
     deinit_arenas: [128]string,
@@ -903,6 +911,20 @@ fn fx_param_effect(fx: *mut FnEffects, fn_name: string, idx: usize) -> u8 {
     return 0;
 }
 
+// True if the value returned by `fn_name` may point into the arena passed as argument `idx`.
+fn fx_param_borrows(fx: *mut FnEffects, fn_name: string, idx: usize) -> bool {
+    if idx == 0 {
+        if str_eq(fn_name, "arena_alloc") { return true; }
+    }
+    if idx >= 16 { return false; }
+    let mut i: usize = 0;
+    while i < fx.count {
+        if str_eq(fx.names[i], fn_name) { return fx.borrows[i * 16 + idx]; }
+        i = i + 1;
+    }
+    return false;
+}
+
 // Arena (or arena-owning variable) named by a call argument: `&mut a`, `a`, `p.arena`, ...
 fn get_arena_arg_name(arg: *mut AstNode) -> string {
     let u: string = get_underlying_address_of(arg);
@@ -912,7 +934,9 @@ fn get_arena_arg_name(arg: *mut AstNode) -> string {
 
 // Folds the effects of every call under `n` into the summary of function `slot` when the
 // affected argument is one of its own parameters. Returns true if the summary grew.
-fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNode) -> bool {
+// `ret_ptr` says the function returns something that can hold a pointer (not a scalar, not
+// void): then allocating from a parameter's arena makes the return value borrow from it.
+fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, ret_ptr: bool, n: *mut AstNode) -> bool {
     let mut changed: bool = false;
     let mut cur: *mut AstNode = n;
     while cur != (0).as(*mut AstNode) {
@@ -921,7 +945,11 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
             let mut ai: usize = 0;
             while arg != (0).as(*mut AstNode) {
                 let eff: u8 = fx_param_effect(fx, cur.tok.slice, ai);
-                if eff > 0 {
+                let mut allocs: bool = false;
+                if ret_ptr { allocs = fx_param_borrows(fx, cur.tok.slice, ai); }
+                let mut relevant: bool = eff > 0;
+                if allocs { relevant = true; }
+                if relevant {
                     let name: string = get_arena_arg_name(arg);
                     let mut prm: *mut AstNode = params;
                     let mut pi: usize = 0;
@@ -931,6 +959,12 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
                                 if fx.effects[slot * 16 + pi] < eff {
                                     fx.effects[slot * 16 + pi] = eff;
                                     changed = true;
+                                }
+                                if allocs {
+                                    if !fx.borrows[slot * 16 + pi] {
+                                        fx.borrows[slot * 16 + pi] = true;
+                                        changed = true;
+                                    }
                                 }
                             }
                         }
@@ -942,32 +976,37 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, n: *mut AstNod
                 ai = ai + 1;
             }
         }
-        if fx_scan(fx, slot, params, cur.left) { changed = true; }
-        if fx_scan(fx, slot, params, cur.right) { changed = true; }
+        if fx_scan(fx, slot, params, ret_ptr, cur.left) { changed = true; }
+        if fx_scan(fx, slot, params, ret_ptr, cur.right) { changed = true; }
         cur = cur.next;
     }
     return changed;
 }
 
-fn get_arena_source(expr: *mut AstNode) -> string {
+// Arena a call result points into: arena_alloc(&mut a, n) directly, or any function whose
+// summary says its return value borrows from an arena argument. "" if none.
+fn get_arena_source(fx: *mut FnEffects, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_CALL {
-        if str_eq(expr.tok.slice, "arena_alloc") {
-            if expr.left != (0).as(*mut AstNode) {
-                let u: string = get_underlying_address_of(expr.left);
-                if u.len > 0 { return u; }
-                return get_ident_name(expr.left);
+        let mut arg: *mut AstNode = expr.left;
+        let mut ai: usize = 0;
+        while arg != (0).as(*mut AstNode) {
+            if fx_param_borrows(fx, expr.tok.slice, ai) {
+                let name: string = get_arena_arg_name(arg);
+                if name.len > 0 { return name; }
             }
+            arg = arg.next;
+            ai = ai + 1;
         }
         return "";
     }
-    if expr.tag == NODE_CAST { return get_arena_source(expr.left); }
+    if expr.tag == NODE_CAST { return get_arena_source(fx, expr.left); }
     return "";
 }
 
 fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    let direct: string = get_arena_source(expr);
+    let direct: string = get_arena_source(v.fx, expr);
     if direct.len > 0 { return direct; }
     if expr.tag == NODE_IDENT {
         let idx: i32 = validator_find_var(v, expr.tok.slice);
@@ -988,6 +1027,28 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
             f = f.next;
         }
         return "";
+    }
+    if expr.tag == NODE_ARRAY_INIT {
+        // An array literal holding an arena pointer borrows from that arena as a whole.
+        let mut el: *mut AstNode = expr.left;
+        while el != (0).as(*mut AstNode) {
+            let held: string = get_expr_arena_borrow(v, el);
+            if held.len > 0 { return held; }
+            el = el.next;
+        }
+        return "";
+    }
+    let mut is_load: bool = expr.tag == NODE_INDEX;
+    if expr.tag == NODE_FIELD_ACCESS { is_load = true; }
+    if is_load {
+        // A pointer, string or struct read out of a local array or struct (ptrs[0], h.p)
+        // inherits what the aggregate borrows. Scalars (s.len, bytes[i]) carry no pointer.
+        let loaded_t: string = validator_stack_place_type(v, expr);
+        if loaded_t.len == 0 { return ""; }
+        if is_scalar_value_type(loaded_t) { return ""; }
+        let root_idx: i32 = validator_find_var(v, get_ident_name(expr));
+        if root_idx < 0 { return ""; }
+        return v.vars[root_idx.as(usize)].borrowed_from_arena;
     }
     if expr.tag == NODE_ADDRESS_OF {
         let id: string = get_ident_name(expr.left);
@@ -1057,6 +1118,130 @@ fn validator_stack_place_type(v: *mut Validator, expr: *mut AstNode) -> string {
         return base[close + 1..base.len];
     }
     return "";
+}
+
+fn is_float_type_name(t: string) -> bool {
+    if str_eq(t, "f64") { return true; }
+    return str_eq(t, "f32");
+}
+
+fn is_int_type_name(t: string) -> bool {
+    if !is_scalar_value_type(t) { return false; }
+    return !str_eq(t, "bool");
+}
+
+// "*T", "*mut T", "&T", "&mut T" -> "T"; anything else unchanged.
+fn strip_ptr_type(t: string) -> string {
+    if t.len < 2 { return t; }
+    let mut is_ptr: bool = t[0] == 42;
+    if t[0] == 38 { is_ptr = true; }
+    if !is_ptr { return t; }
+    if t.len > 5 {
+        if str_eq(t[1..5], "mut ") { return t[5..t.len]; }
+    }
+    return t[1..t.len];
+}
+
+// First declaration of function `name` in the program (null if there is none).
+fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
+    let mut decl: *mut AstNode = v.program.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_FN {
+            if str_eq(decl.tok.slice, name) { return decl; }
+        }
+        decl = decl.next;
+    }
+    return (0).as(*mut AstNode);
+}
+
+// Best-effort static type of an expression ("" when unknown). The validator is not a full
+// type checker; this is enough to tell floats from integers.
+fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_BOOL { return "bool"; }
+    if expr.tag == NODE_STRING { return "string"; }
+    if expr.tag == NODE_CAST { return expr.type_name; }
+    if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
+    if expr.tag == NODE_IDENT {
+        let idx: i32 = validator_find_var(v, expr.tok.slice);
+        if idx >= 0 { return v.vars[idx.as(usize)].type_name; }
+        let mut decl: *mut AstNode = v.program.left;
+        while decl != (0).as(*mut AstNode) {
+            if decl.tag == NODE_LET {
+                if str_eq(decl.tok.slice, expr.tok.slice) { return decl.type_name; }
+            }
+            decl = decl.next;
+        }
+        return "";
+    }
+    if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; } // built-in
+        let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
+        if callee == (0).as(*mut AstNode) { return ""; }
+        return callee.type_name;
+    }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_BANG { return "bool"; }
+        return validator_expr_type(v, expr.left);
+    }
+    if expr.tag == NODE_DEREF { return strip_ptr_type(validator_expr_type(v, expr.left)); }
+    if expr.tag == NODE_FIELD_ACCESS {
+        return validator_field_type(v, strip_ptr_type(validator_expr_type(v, expr.left)), expr.tok.slice);
+    }
+    if expr.tag == NODE_INDEX {
+        let base: string = validator_expr_type(v, expr.left);
+        if str_eq(base, "string") { return "u8"; }
+        if starts_with(base, "[") {
+            let mut close: usize = 1;
+            while close < base.len {
+                if base[close] == 93 { break; }
+                close = close + 1;
+            }
+            if close + 1 >= base.len { return ""; }
+            return base[close + 1..base.len];
+        }
+        if starts_with(base, "*") { return strip_ptr_type(base); }
+        return "";
+    }
+    if expr.tag == NODE_BINARY {
+        let op: u32 = expr.tok.tag;
+        let mut is_cmp: bool = op == TOK_EQEQ;
+        if op == TOK_NEQ { is_cmp = true; }
+        if op == TOK_LT { is_cmp = true; }
+        if op == TOK_LTE { is_cmp = true; }
+        if op == TOK_GT { is_cmp = true; }
+        if op == TOK_GTE { is_cmp = true; }
+        if is_cmp { return "bool"; }
+        let lt: string = validator_expr_type(v, expr.left);
+        let rt: string = validator_expr_type(v, expr.right);
+        if str_eq(lt, "f64") { return lt; }
+        if str_eq(rt, "f64") { return rt; }
+        if is_float_type_name(lt) { return lt; }
+        if is_float_type_name(rt) { return rt; }
+        if lt.len > 0 { return lt; }
+        return rt;
+    }
+    return "";
+}
+
+fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
+    return is_float_type_name(validator_expr_type(v, expr));
+}
+
+// A float never becomes an integer silently: in C that conversion is undefined behaviour
+// when the value does not fit, so it has to go through .as(T), which checks the range.
+// Returns false (after reporting) if `value` is a float going into integer type `target`.
+fn validator_check_no_float_to_int(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if !is_int_type_name(target) { return true; }
+    if !validator_is_float(v, value) { return true; }
+    print_str_raw("error: implicit conversion from float to integer in ");
+    print_str_raw(place);
+    print_str_raw("; write .as(");
+    print_str_raw(target);
+    print_str_raw("), which checks that the value fits\n");
+    v.has_error = true;
+    return false;
 }
 
 // `buf[a..b]` on a fixed-size array stored in a local variable (directly, or as a field or
@@ -1239,6 +1424,18 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
             a = a.next;
         }
 
+        let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
+        if callee != (0).as(*mut AstNode) {
+            let mut prm: *mut AstNode = callee.left;
+            let mut arg_v: *mut AstNode = expr.left;
+            while prm != (0).as(*mut AstNode) {
+                if arg_v == (0).as(*mut AstNode) { break; }
+                if !validator_check_no_float_to_int(v, prm.type_name, arg_v, "a function argument") { return false; }
+                prm = prm.next;
+                arg_v = arg_v.next;
+            }
+        }
+
         // The call may reset or deinit an arena passed to it, directly or through its callees.
         let mut ea: *mut AstNode = expr.left;
         let mut ei: usize = 0;
@@ -1288,9 +1485,36 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
     if expr.tag == NODE_INDEX {
         if !check_expr_use(v, expr.left) { return false; }
+        if validator_is_float(v, expr.right) {
+            print("error: an index must be an integer; convert the float with .as(usize)");
+            v.has_error = true;
+            return false;
+        }
         return check_expr_use(v, expr.right);
     }
     if expr.tag == NODE_BINARY {
+        let mut float_operand: bool = validator_is_float(v, expr.left);
+        if validator_is_float(v, expr.right) { float_operand = true; }
+        if float_operand {
+            let mut is_equality: bool = expr.tok.tag == TOK_EQEQ;
+            if expr.tok.tag == TOK_NEQ { is_equality = true; }
+            if is_equality {
+                print("error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN");
+                v.has_error = true;
+                return false;
+            }
+            let mut int_only: bool = expr.tok.tag == TOK_PERCENT;
+            if expr.tok.tag == TOK_AMP { int_only = true; }
+            if expr.tok.tag == TOK_PIPE { int_only = true; }
+            if expr.tok.tag == TOK_CARET { int_only = true; }
+            if expr.tok.tag == TOK_SHL { int_only = true; }
+            if expr.tok.tag == TOK_SHR { int_only = true; }
+            if int_only {
+                print("error: the operators % & | ^ << >> are defined for integers only, not for floats");
+                v.has_error = true;
+                return false;
+            }
+        }
         if !check_expr_use(v, expr.left) { return false; }
         return check_expr_use(v, expr.right);
     }
@@ -1317,6 +1541,34 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     return true;
 }
 
+fn validator_save_invalidated(v: *mut Validator, out: *mut bool) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        out[i] = v.vars[i].is_invalidated;
+        i = i + 1;
+    }
+}
+
+fn validator_restore_invalidated(v: *mut Validator, saved: *mut bool) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        v.vars[i].is_invalidated = saved[i];
+        i = i + 1;
+    }
+}
+
+// True if control never falls out of the end of `block` (its last statement is a return).
+fn block_always_returns(block: *mut AstNode) -> bool {
+    if block == (0).as(*mut AstNode) { return false; }
+    if block.tag != NODE_BLOCK { return false; }
+    let mut last: *mut AstNode = block.left;
+    if last == (0).as(*mut AstNode) { return false; }
+    while last.next != (0).as(*mut AstNode) {
+        last = last.next;
+    }
+    return last.tag == NODE_RETURN;
+}
+
 fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     if stmt == (0).as(*mut AstNode) { return true; }
 
@@ -1340,8 +1592,12 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 if stmt.left.tag == NODE_STRUCT_INIT {
                     inferred_type = stmt.left.tok.slice; // `let m = Msg { ... }` has type Msg
                 }
+                if validator_is_float(v, stmt.left) {
+                    inferred_type = validator_expr_type(v, stmt.left); // `let x = 1.5` is an f64
+                }
             }
         }
+        if !validator_check_no_float_to_int(v, inferred_type, stmt.left, "a variable initializer") { return false; }
 
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1434,6 +1690,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_ASSIGN {
         if !check_expr_use(v, stmt.right) { return false; }
+        if !validator_check_no_float_to_int(v, validator_expr_type(v, stmt.left), stmt.right, "an assignment") { return false; }
         let mut is_direct_ident: bool = false;
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1485,17 +1742,38 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 if t_idx >= 0 {
                     let a_idx: i32 = validator_find_var(v, rhs_arena);
                     let mut arena_depth: u32 = v.scope_depth;
-                    if a_idx >= 0 { arena_depth = v.vars[a_idx.as(usize)].scope_depth; }
+                    // An arena the caller passed in outlives this call, like any target the
+                    // caller passed in; only an arena owned by this function can die first.
+                    let mut arena_is_local: bool = true;
+                    if a_idx >= 0 {
+                        arena_depth = v.vars[a_idx.as(usize)].scope_depth;
+                        arena_is_local = v.vars[a_idx.as(usize)].is_stack_local;
+                    }
                     let mut cross_escape: bool = false;
                     if v.vars[t_idx.as(usize)].scope_depth < arena_depth {
                         cross_escape = true;
                     } else if !v.vars[t_idx.as(usize)].is_stack_local {
-                        cross_escape = true;
+                        cross_escape = arena_is_local;
                     }
                     if cross_escape {
                         print_err_cross_arena(rhs_arena, tgt_opt);
                         v.has_error = true;
                         return false;
+                    }
+                }
+            }
+        }
+
+        if !is_direct_ident {
+            // ptrs[i] = arena_alloc(...) or h.p = ...: storing an arena pointer into a local
+            // array or struct makes the whole aggregate borrow from that arena.
+            if rhs_arena.len > 0 {
+                if validator_stack_place_type(v, stmt.left).len > 0 {
+                    let agg_idx: i32 = validator_find_var(v, tgt_opt);
+                    if agg_idx >= 0 {
+                        if v.vars[agg_idx.as(usize)].borrowed_from_arena.len == 0 {
+                            v.vars[agg_idx.as(usize)].borrowed_from_arena = rhs_arena;
+                        }
                     }
                 }
             }
@@ -1578,6 +1856,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     if stmt.tag == NODE_RETURN {
         if stmt.left != (0).as(*mut AstNode) {
             if !check_expr_use(v, stmt.left) { return false; }
+            if !validator_check_no_float_to_int(v, v.ret_type, stmt.left, "a return value") { return false; }
             let src_name: string = contains_stack_ref(v, stmt.left);
             if src_name.len > 0 {
                 print_err_ret_local(src_name);
@@ -1614,10 +1893,26 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_IF {
         if !check_expr_use(v, stmt.left) { return false; }
+        // A branch that always returns cannot affect the code after the `if`: what it reset
+        // or deinitialized is forgotten again once the branch has been checked.
+        let mut saved: [512]bool = [false];
+        let saved_ptr: *mut bool = (&mut saved).as(*mut bool);
+        let saved_deinit: usize = v.deinit_count;
+        validator_save_invalidated(v, saved_ptr);
         if !validate_stmt(v, stmt.right) { return false; }
+        if block_always_returns(stmt.right) {
+            validator_restore_invalidated(v, saved_ptr);
+            v.deinit_count = saved_deinit;
+        }
         if stmt.right != (0).as(*mut AstNode) {
             if stmt.right.next != (0).as(*mut AstNode) {
+                let else_deinit: usize = v.deinit_count;
+                validator_save_invalidated(v, saved_ptr);
                 if !validate_stmt(v, stmt.right.next) { return false; }
+                if block_always_returns(stmt.right.next) {
+                    validator_restore_invalidated(v, saved_ptr);
+                    v.deinit_count = else_deinit;
+                }
             }
         }
         return true;
@@ -1648,6 +1943,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode)
     let mut v: Validator = Validator {
         fx: fx,
         program: program,
+        ret_type: f.type_name,
         vars: [VarInfo {
             name: "",
             type_name: "",
@@ -1713,6 +2009,7 @@ fn validate_program(root: *mut AstNode) -> bool {
     let mut fx: FnEffects = FnEffects {
         names: [""],
         effects: [0],
+        borrows: [false],
         count: 0,
     };
     let mut decl: *mut AstNode = root.left;
@@ -1737,7 +2034,9 @@ fn validate_program(root: *mut AstNode) -> bool {
             if decl.tag == NODE_FN {
                 if decl.right != (0).as(*mut AstNode) {
                     if slot < 256 {
-                        if fx_scan(&mut fx, slot, decl.left, decl.right) { changed = true; }
+                        let mut ret_ptr: bool = decl.type_name.len > 0;
+                        if is_scalar_value_type(decl.type_name) { ret_ptr = false; }
+                        if fx_scan(&mut fx, slot, decl.left, ret_ptr, decl.right) { changed = true; }
                     }
                     slot = slot + 1;
                 }

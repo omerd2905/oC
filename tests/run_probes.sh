@@ -23,6 +23,11 @@ COMPILE_REJECT=(
   "probe_array_slice_escape.oc|cannot return reference to local stack variable 's'"
   "probe_struct_wrap_uaf.oc|use-after-free: variable 's' used after arena 'a' was reset"
   "probe_field_slice_escape.oc|cannot return reference to local stack variable 'm'"
+  "probe_helper_alloc_uaf.oc|use-after-free: variable 'p' used after arena 'a' was deinitialized"
+  "probe_array_ptr_uaf.oc|use-after-free: variable 'ptrs' used after arena 'a' was reset"
+  "probe_array_store_uaf.oc|use-after-free: variable 'q' used after arena 'a' was deinitialized"
+  "probe_float_eq.oc|== and != are not allowed on floats"
+  "probe_float_to_int_implicit.oc|implicit conversion from float to integer"
 )
 
 RUNTIME_TRAP=(
@@ -30,6 +35,7 @@ RUNTIME_TRAP=(
   "probe_overflow_u8.oc"
   "probe_overflow_mul_u64.oc"
   "probe_overflow_mul_i32.oc"
+  "probe_overflow_neg_i32.oc"
   "probe_underflow_usize.oc"
   "probe_div_zero.oc"
   "probe_slice_bounds.oc"
@@ -37,6 +43,12 @@ RUNTIME_TRAP=(
   "probe_array_slice_bounds.oc"
   "probe_cast_narrow_i8.oc"
   "probe_cast_neg_u64.oc"
+  "probe_math_abs_min.oc"
+  "probe_math_pow_overflow.oc"
+  "probe_math_ilog2_zero.oc"
+  "probe_float_cast_nan.oc"
+  "probe_float_cast_huge.oc"
+  "probe_float_cast_neg_u32.oc"
 )
 
 PASS=0
@@ -121,6 +133,26 @@ for p in "${RUNTIME_TRAP[@]}"; do
   done
 done
 
+echo "=== --fp-trap: NaN / infinity results are IEEE values by default, a panic on request ==="
+for backend in c native; do
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/probes/probe_fp_trap.oc" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null
+  plain="$(/tmp/oc_probe_bin 2>&1)"
+  "$OCC" build "$ROOT/tests/probes/probe_fp_trap.oc" -o /tmp/oc_probe_bin --backend "$backend" --fp-trap >/dev/null
+  set +e
+  trapped="$(/tmp/oc_probe_bin 2>&1)"
+  RC=$?
+  set -e
+  rm -f /tmp/oc_probe_bin
+  if [ "$plain" = "inf" ] && [ "$RC" -ne 0 ] && [ "$trapped" = "panic: floating-point result is NaN or infinite" ]; then
+    echo "  [PASS] probe_fp_trap.oc (--backend $backend): prints inf by default, panics with --fp-trap"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] probe_fp_trap.oc (--backend $backend): default printed '$plain'; --fp-trap exit $RC, printed '$trapped'"
+    exit 1
+  fi
+done
+
 echo "=== [3/4] Positive Examples Verification (C & Native Backends) ==="
 for ex in "$ROOT"/examples/*.oc; do
   base="$(basename "$ex")"
@@ -146,6 +178,13 @@ for t in "$ROOT"/tests/parity/*.oc; do
     echo "exit $?" >>"/tmp/oc_parity_$backend.out"
     set -e
   done
+  # A <name>.expected file next to the test holds independently computed results.
+  want="${t%.oc}.expected"
+  if [ -f "$want" ] && ! cmp -s /tmp/oc_parity_c.out "$want"; then
+    echo "  [FAIL] $base: output differs from $(basename "$want"):"
+    diff /tmp/oc_parity_c.out "$want" || true
+    exit 1
+  fi
   if cmp -s /tmp/oc_parity_c.out /tmp/oc_parity_native.out; then
     echo "  [PASS] $base (identical output on both backends)"
     PASS=$((PASS + 1))

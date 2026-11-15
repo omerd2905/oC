@@ -8,7 +8,7 @@ fn main() {
     print("=== oC Core Standard Libraries Suite ===")
 
     // 1. Math
-    let aligned: usize = align_forward(17, 8)
+    let aligned: usize = align_up(17, 8)
     print("Aligned 17 to 8:")
     print(aligned)
 

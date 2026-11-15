@@ -25,6 +25,11 @@ struct CodeBuffer {
     var_names: [512]string,
     var_types: [512]string,
     var_types_len: usize,
+    // Struct fields, functions and global constants whose type is f32 or f64, by name.
+    flt_names: [256]string,
+    flt_types: [256]string,
+    flt_count: usize,
+    fp_trap: bool, // --fp-trap: panic when a float operation produces NaN or infinity
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
@@ -48,6 +53,10 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         var_names: [""],
         var_types: [""],
         var_types_len: 0,
+        flt_names: [""],
+        flt_types: [""],
+        flt_count: 0,
+        fp_trap: false,
     };
 }
 
@@ -93,6 +102,8 @@ fn to_c_type(type_name: string) -> string {
     if str_eq(type_name, "i64") { return "int64_t"; }
     if str_eq(type_name, "usize") { return "size_t"; }
     if str_eq(type_name, "bool") { return "bool"; }
+    if str_eq(type_name, "f64") { return "double"; }
+    if str_eq(type_name, "f32") { return "float"; }
     if str_eq(type_name, "string") { return "oc_string"; }
     if str_eq(type_name, "void") { return "void"; }
     if type_name.len == 0 { return "void"; }
@@ -242,6 +253,127 @@ fn is_expr_pointer(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
     return false;
 }
 
+fn is_float_type(t: string) -> bool {
+    if str_eq(t, "f64") { return true; }
+    return str_eq(t, "f32");
+}
+
+fn cg_flt_add(out: *mut CodeBuffer, name: string, t: string) {
+    if !is_float_type(t) { return; }
+    if out.flt_count < 256 {
+        out.flt_names[out.flt_count] = name;
+        out.flt_types[out.flt_count] = t;
+        out.flt_count = out.flt_count + 1;
+    }
+}
+
+fn cg_flt_lookup(out: *mut CodeBuffer, name: string) -> string {
+    let mut i: usize = 0;
+    while i < out.flt_count {
+        if str_eq(out.flt_names[i], name) { return out.flt_types[i]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// Element type of "[N]T", pointee of "*T" / "*mut T"; "" otherwise.
+fn cg_elem_type(t: string) -> string {
+    if t.len < 2 { return ""; }
+    if t[0] == 91 {
+        let mut close: usize = 1;
+        while close < t.len {
+            if t[close] == 93 { break; }
+            close = close + 1;
+        }
+        if close + 1 >= t.len { return ""; }
+        return t[close + 1..t.len];
+    }
+    if t[0] == 42 {
+        if t.len > 5 {
+            if str_eq(t[0..5], "*mut ") { return t[5..t.len]; }
+        }
+        return t[1..t.len];
+    }
+    return "";
+}
+
+extern fn cg_var_type(out: *mut CodeBuffer, name: string) -> string;
+
+// "f64" or "f32" if `expr` is a floating-point value, "" if it is not. Floats take plain C
+// arithmetic (IEEE 754: no overflow trap), so the checked integer macros must not see them.
+fn cg_float_type(expr: *mut AstNode, out: *mut CodeBuffer) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_CAST {
+        if is_float_type(expr.type_name) { return expr.type_name; }
+        return "";
+    }
+    if expr.tag == NODE_IDENT {
+        let vt: string = cg_var_type(out, expr.tok.slice);
+        if vt.len > 0 {
+            if is_float_type(vt) { return vt; }
+            return "";
+        }
+        return cg_flt_lookup(out, expr.tok.slice);
+    }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS { return cg_float_type(expr.left, out); }
+        return "";
+    }
+    if expr.tag == NODE_BINARY {
+        let lf: string = cg_float_type(expr.left, out);
+        let rf: string = cg_float_type(expr.right, out);
+        if expr.tok.tag == TOK_EQEQ { return ""; }
+        if expr.tok.tag == TOK_NEQ { return ""; }
+        if expr.tok.tag == TOK_LT { return ""; }
+        if expr.tok.tag == TOK_LTE { return ""; }
+        if expr.tok.tag == TOK_GT { return ""; }
+        if expr.tok.tag == TOK_GTE { return ""; }
+        if str_eq(lf, "f64") { return lf; }
+        if str_eq(rf, "f64") { return rf; }
+        if lf.len > 0 { return lf; }
+        return rf;
+    }
+    if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
+        return cg_flt_lookup(out, expr.tok.slice);
+    }
+    if expr.tag == NODE_FIELD_ACCESS { return cg_flt_lookup(out, expr.tok.slice); }
+    let mut via_elem: bool = expr.tag == NODE_INDEX;
+    if expr.tag == NODE_DEREF { via_elem = true; }
+    if via_elem {
+        if expr.left != (0).as(*mut AstNode) {
+            if expr.left.tag == NODE_IDENT {
+                let et: string = cg_elem_type(cg_var_type(out, expr.left.tok.slice));
+                if is_float_type(et) { return et; }
+            }
+        }
+        return "";
+    }
+    return "";
+}
+
+// Exclusive bounds, as C double literals, between which a float converts to integer type `t`
+// without leaving its range (the conversion truncates toward zero).
+fn float_cast_lo(t: string) -> string {
+    if str_eq(t, "i8") { return "-129.0"; }
+    if str_eq(t, "i16") { return "-32769.0"; }
+    if str_eq(t, "i32") { return "-2147483649.0"; }
+    if str_eq(t, "i64") { return "-9223372036854777856.0"; } // the double just below -2^63
+    return "-1.0";
+}
+
+fn float_cast_hi(t: string) -> string {
+    if str_eq(t, "i8") { return "128.0"; }
+    if str_eq(t, "i16") { return "32768.0"; }
+    if str_eq(t, "i32") { return "2147483648.0"; }
+    if str_eq(t, "i64") { return "9223372036854775808.0"; }
+    if str_eq(t, "u8") { return "256.0"; }
+    if str_eq(t, "u16") { return "65536.0"; }
+    if str_eq(t, "u32") { return "4294967296.0"; }
+    return "18446744073709551616.0";
+}
+
 // Explicit modular arithmetic: wrapping_add / wrapping_sub / wrapping_mul(a, b) wrap at the
 // width of their operands instead of trapping (hashes, checksums, PRNGs). "" if not one of them.
 fn wrapping_op(fn_name: string) -> string {
@@ -258,6 +390,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
 
     if expr.tag == NODE_INT {
         // `_` digit separators (1_000, 0b0010_1010) are oC syntax; C does not accept them.
+        let lit_start: usize = out.len;
         let mut di: usize = 0;
         while di < expr.tok.slice.len {
             if expr.tok.slice[di] != 95 {
@@ -265,6 +398,35 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             }
             di = di + 1;
         }
+        // A decimal literal above the i64 maximum is a u64 in oC; C wants that said out loud
+        // ("integer constant is so large that it is unsigned"). Hex and binary need nothing.
+        let digits: string = string { ptr: (out.buffer + lit_start).as(*u8), len: out.len - lit_start };
+        let mut is_decimal: bool = true;
+        if digits.len > 1 {
+            if digits[0] == 48 {
+                if digits[1] > 57 { is_decimal = false; } // 0x.. / 0b..
+            }
+        }
+        if is_decimal {
+            let mut too_big: bool = digits.len > 19;
+            if digits.len == 19 {
+                let limit: string = "9223372036854775807";
+                let mut k: usize = 0;
+                while k < 19 {
+                    if digits[k] != limit[k] {
+                        too_big = digits[k] > limit[k];
+                        break;
+                    }
+                    k = k + 1;
+                }
+            }
+            if too_big { buf_append(out, "ULL"); }
+        }
+        return;
+    }
+
+    if expr.tag == NODE_FLOAT {
+        buf_append(out, expr.tok.slice);
         return;
     }
 
@@ -288,6 +450,32 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_UNARY {
+        let mut is_literal: bool = false;
+        if expr.left != (0).as(*mut AstNode) {
+            is_literal = expr.left.tag == NODE_INT;
+        }
+        if expr.left != (0).as(*mut AstNode) {
+            if expr.left.tag == NODE_FLOAT { is_literal = true; }
+        }
+        if cg_float_type(expr.left, out).len > 0 { is_literal = true; } // floats: plain -x
+        if expr.tok.tag == TOK_MINUS {
+            if !is_literal {
+                // -x is 0 - x with the usual overflow check (-INT_MIN does not fit).
+                buf_append(out, "__OC_SUB(0, ");
+                codegen_expr(expr.left, out);
+                buf_append(out, ")");
+                return;
+            }
+        }
+        if expr.tok.tag == TOK_TILDE {
+            // ~x keeps the type of x (C would promote a u8 or u16 to int).
+            buf_append(out, "((__typeof__(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))~(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))");
+            return;
+        }
         buf_append(out, "(");
         buf_append(out, expr.tok.slice);
         codegen_expr(expr.left, out);
@@ -312,6 +500,27 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     if expr.tag == NODE_CAST {
         let mut is_unsigned_num: bool = false;
         let mut is_signed_num: bool = false;
+        let mut from_float: bool = cg_float_type(expr.left, out).len > 0;
+        if is_float_type(expr.type_name) { from_float = false; }
+        if is_type_ptr(expr.type_name) { from_float = false; }
+        if str_eq(expr.type_name, "bool") { from_float = false; }
+        if from_float {
+            // In C this conversion is undefined behaviour when the value does not fit.
+            buf_append(out, "({ double _f = (double)(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "); if (!(_f > ");
+            buf_append(out, float_cast_lo(expr.type_name));
+            buf_append(out, " && _f < ");
+            buf_append(out, float_cast_hi(expr.type_name));
+            if str_eq(float_cast_lo(expr.type_name), "-1.0") {
+                buf_append(out, ")) { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } (");
+            } else {
+                buf_append(out, ")) { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } (");
+            }
+            emit_c_type(expr.type_name, out);
+            buf_append(out, ")_f; })");
+            return;
+        }
         if !is_type_ptr(expr.type_name) {
             if !is_expr_pointer(expr.left, out) {
                 if str_eq(expr.type_name, "u8") { is_unsigned_num = true; }
@@ -465,6 +674,15 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") {
+            // Built-in square root: one correctly rounded instruction on both backends.
+            if out.fp_trap { buf_append(out, "__OC_FCHK("); }
+            buf_append(out, "__builtin_sqrt((double)(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))");
+            if out.fp_trap { buf_append(out, ")"); }
+            return;
+        }
         let w_op: string = wrapping_op(expr.tok.slice);
         if w_op.len > 0 {
             buf_append(out, "__OC_WRAP(");
@@ -494,6 +712,21 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_BINARY {
+        let mut float_op: bool = cg_float_type(expr.left, out).len > 0;
+        if cg_float_type(expr.right, out).len > 0 { float_op = true; }
+        if float_op {
+            let mut checked: bool = out.fp_trap;
+            if is_comparison_tok(expr.tok.tag) { checked = false; }
+            if checked { buf_append(out, "__OC_FCHK"); }
+            buf_append(out, "(");
+            codegen_expr(expr.left, out);
+            buf_append(out, " ");
+            buf_append(out, expr.tok.slice);
+            buf_append(out, " ");
+            codegen_expr(expr.right, out);
+            buf_append(out, ")");
+            return;
+        }
         if expr.tok.tag == TOK_SLASH {
             buf_append(out, "__OC_DIV(");
             codegen_expr(expr.left, out);
@@ -607,6 +840,14 @@ fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
             }
         }
     }
+    let print_ft: string = cg_float_type(arg, out);
+    if print_ft.len > 0 {
+        // One formatter, written in oC (std/sys/float.oc), gives both backends the same text.
+        buf_append(out, "    fmt_print_f64((double)(");
+        codegen_expr(arg, out);
+        buf_append(out, "));\n");
+        return;
+    }
     buf_append(out, "    __oc_print(");
     if is_bool_expr(arg) {
         buf_append(out, "(bool)(");
@@ -641,8 +882,10 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
 
     if stmt.tag == NODE_LET {
         if out.var_types_len < 512 {
+            let mut let_type: string = stmt.type_name;
+            if let_type.len == 0 { let_type = cg_float_type(stmt.left, out); }
             out.var_names[out.var_types_len] = stmt.tok.slice;
-            out.var_types[out.var_types_len] = stmt.type_name;
+            out.var_types[out.var_types_len] = let_type;
             out.var_types_len = out.var_types_len + 1;
         }
         if is_type_ptr(stmt.type_name) {
@@ -823,6 +1066,8 @@ fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "sys_mkdtemp") { return true; }
     if str_eq(fn_name, "sys_rmdir") { return true; }
     if str_eq(fn_name, "sys_exe_path") { return true; }
+    if str_eq(fn_name, "sys_f64_bits") { return true; }
+    if str_eq(fn_name, "sys_f32_bits") { return true; }
     if str_eq(fn_name, "exit") { return true; }
     if str_eq(fn_name, "sys_read") { return true; }
     if str_eq(fn_name, "sys_write") { return true; }
@@ -920,6 +1165,9 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#else\n");
     buf_append(out, "static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n");
     buf_append(out, "#endif\n");
+    // IEEE 754 bit pattern of a decimal literal (compiler driver: float literals of the native backend).
+    buf_append(out, "static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n");
+    buf_append(out, "static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n");
     buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
     // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.
     buf_append(out, "#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n");
@@ -964,6 +1212,9 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n");
     buf_append(out, "}\n\n");
 
+    // --fp-trap: x - x is 0 for every finite x, and NaN for NaN and for either infinity.
+    buf_append(out, "#define __OC_FCHK(x) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite\\n\"); exit(1); } _r; })\n\n");
+
     // View of a fixed-size array as a slice. A raw pointer has no length, so slicing one is a
     // C compile error (void initializer) instead of an unbounded slice.
     buf_append(out, "#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n");
@@ -1003,6 +1254,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
         if scan_decl.tag == NODE_STRUCT_DECL {
             let mut sf: *mut AstNode = scan_decl.left;
             while sf != (0).as(*mut AstNode) {
+                cg_flt_add(out, sf.tok.slice, sf.type_name);
                 if is_type_ptr(sf.type_name) {
                     if out.ptr_fields_count < 256 {
                         out.ptr_fields[out.ptr_fields_count] = sf.tok.slice;
@@ -1016,7 +1268,10 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                 }
                 sf = sf.next;
             }
+        } else if scan_decl.tag == NODE_LET {
+            cg_flt_add(out, scan_decl.tok.slice, scan_decl.type_name);
         } else if scan_decl.tag == NODE_FN {
+            cg_flt_add(out, scan_decl.tok.slice, scan_decl.type_name);
             if is_type_ptr(scan_decl.type_name) {
                 if out.ptr_fns_count < 256 {
                     out.ptr_fns[out.ptr_fns_count] = scan_decl.tok.slice;

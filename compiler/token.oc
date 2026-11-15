@@ -3,6 +3,7 @@ let TOK_EOF: u32 = 0;
 let TOK_IDENT: u32 = 1;
 let TOK_INT: u32 = 2;
 let TOK_STRING: u32 = 3;
+let TOK_FLOAT: u32 = 4;
 
 // Keywords
 let TOK_FN: u32 = 10;

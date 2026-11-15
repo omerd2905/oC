@@ -1,0 +1,119 @@
+// Floating point: literals, arithmetic, comparisons, conversions and print formatting.
+// float_basics.expected was computed independently (Python, IEEE 754 doubles); both backends
+// must reproduce it exactly.
+struct Vec2 { x: f64, y: f64, }
+packed struct Sample { tag: u8, gain: f32, level: f64, }
+let HALF: f64 = 0.5;
+let NEG: f64 = -2.5;
+let THIRD: f32 = 0.333;
+let MINUS_SEVEN: i32 = -7;
+
+fn dot(a: Vec2, b: Vec2) -> f64 { return (a.x * b.x) + (a.y * b.y); }
+fn scale(v: f32, k: f32) -> f32 { return v * k; }
+fn mean(a: f64, b: f64) -> f64 { return (a + b) / 2; }
+fn widen(v: f32) -> f64 { return v; }
+fn lerp(a: f64, b: f64, t: f64) -> f64 { return a + ((b - a) * t); }
+
+fn main() {
+    let a: f64 = 1.5;
+    let b: f64 = 2.25;
+    let v: Vec2 = Vec2 { x: 3.0, y: 4.0 };
+    let n: i32 = 7;
+    let big: u64 = 18446744073709551615;
+    let neg: i64 = -9007199254740993;
+    let third: f32 = 0.1;
+    let arr: [3]f64 = [1.0, 2.5, 4.0];
+    let untyped = 2.5;
+    let nan: f64 = 0.0 / 0.0;
+    let inf: f64 = 1.0 / 0.0;
+    let s: Sample = Sample { tag: 9, gain: 0.75, level: -12.5 };
+    print(a + b);                                             // 3.750000
+    print(a - b);                                             // -0.750000
+    print(a * b);                                             // 3.375000
+    print(a / b);                                             // 0.666667
+    print(-a);                                                // -1.500000
+    print(a < b);                                             // true
+    print(a <= a);                                            // true
+    print(a > b);                                             // false
+    print(b >= a);                                            // true
+    print(dot(v, v));                                         // 25.000000
+    print(HALF * 3);                                          // 1.500000
+    print(NEG);                                               // -2.500000
+    print(THIRD);                                             // 0.333000
+    print(MINUS_SEVEN);                                       // -7
+    print(n.as(f64) / 2.0);                                   // 3.500000
+    print(mean(1, 4));                                        // 2.500000
+    print(lerp(10.0, 20.0, 0.25));                            // 12.500000
+    print(scale(1.5, 2.0));                                   // 3.000000
+    print(widen(third));                                      // 0.100000
+    print(third * third);                                     // 0.010000
+    print(third + a);                                         // 1.600000
+    print(arr[1] + arr[2]);                                   // 6.500000
+    print(untyped * 2.0);                                     // 5.000000
+    print(s.tag);                                             // 9
+    print(s.gain);                                            // 0.750000
+    print(s.level);                                           // -12.500000
+    print(s.gain * s.level);                                  // -9.375000
+    print(0.1 + 0.2);                                         // 0.300000
+    print(1.0 / 3.0);                                         // 0.333333
+    print(2.0e10 * 2.0e10);                                   // 4.000000e+20
+    print(1.0e300 * 1.0e10);                                  // inf
+    print(nan);                                               // NaN
+    print(inf);                                               // inf
+    print(-inf);                                              // -inf
+    print(nan < 1.0);                                         // false
+    print(nan >= nan);                                        // false
+    print(inf > 1.0e308);                                     // true
+    print(0.0);                                               // 0.000000
+    print(-0.0);                                              // 0.000000
+    print(1.0e-7);                                            // 1.000000e-07
+    print(123456789012345678.0);                              // 1.234568e+17
+    print(0.000123);                                          // 0.000123
+    print(0.0001);                                            // 0.000100
+    print(0.00009999);                                        // 9.999000e-05
+    print(999999.9999996);                                    // 1000000.000000
+    print(999999999999999.0);                                 // 999999999999999.000000
+    print(1.0e15);                                            // 1.000000e+15
+    print(9.99999999e20);                                     // 1.000000e+21
+    print(5.0e-324);                                          // 4.940656e-324
+    print(1.7976931348623157e308);                            // 1.797693e+308
+    print(2.2250738585072014e-308);                           // 2.225074e-308
+    print(3.141592653589793);                                 // 3.141593
+    print(-123.456);                                          // -123.456000
+    print(1e3);                                               // 1000.000000
+    print(2.5E-3);                                            // 0.002500
+    print(big.as(f64));                                       // 1.844674e+19
+    print(neg.as(f64));                                       // -9.007199e+15
+    print(n.as(f32));                                         // 7.000000
+    print((9223372036854775807).as(f64));                     // 9.223372e+18
+    print(big.as(f32));                                       // 1.844674e+19
+    print((127.9).as(i8));                                    // 127
+    print((-128.9).as(i8));                                   // -128
+    print((32767.9).as(i16));                                 // 32767
+    print((-32768.9).as(i16));                                // -32768
+    print((2147483647.9).as(i32));                            // 2147483647
+    print((-2147483648.9).as(i32));                           // -2147483648
+    print((255.9).as(u8));                                    // 255
+    print((-0.9).as(u8));                                     // 0
+    print((65535.9).as(u16));                                 // 65535
+    print((-0.9).as(u16));                                    // 0
+    print((4294967295.9).as(u32));                            // 4294967295
+    print((-0.9).as(u32));                                    // 0
+    print((2.9).as(i64));                                     // 2
+    print((-2.9).as(i64));                                    // -2
+    print((9007199254740992.0).as(i64));                      // 9007199254740992
+    print((-9223372036854775808.0).as(i64));                  // -9223372036854775808
+    print((9223372036854774784.0).as(i64));                   // 9223372036854774784
+    print((18446744073709549568.0).as(u64));                  // 18446744073709549568
+    print((9223372036854775808.0).as(u64));                   // 9223372036854775808
+    print((1.0e19).as(u64));                                  // 10000000000000000000
+    print((3.99).as(usize));                                  // 3
+    print(third.as(i32));                                     // 0
+    print((a * 10.0).as(i32));                                // 15
+    print((2.5).as(f32));                                     // 2.500000
+    print((0.1).as(f32).as(f64));                             // 0.100000
+    print(sqrt_f64(2.0));                                     // 1.414214
+    print(sqrt_f64(144));                                     // 12.000000
+    print(sqrt_f64(-1.0));                                    // NaN
+    print(sqrt_f64(0.0));                                     // 0.000000
+}

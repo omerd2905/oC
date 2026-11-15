@@ -27,6 +27,7 @@ let NODE_STRUCT_INIT: u32 = 23;
 let NODE_ARRAY_INIT: u32 = 24;
 let NODE_STRUCT_DECL: u32 = 25;
 let NODE_UNARY: u32 = 26;
+let NODE_FLOAT: u32 = 29; // 27 and 28 are NODE_BREAK / NODE_CONTINUE (parser.oc)
 
 struct AstNode {
     tag: u32,

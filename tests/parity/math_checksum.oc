@@ -1,0 +1,22 @@
+// std/math.oc: CRC-16/CCITT, CRC-32, FNV-1a.
+// The expected output in math_checksum.expected was computed independently (Python); both
+// backends must reproduce it exactly.
+import "std/math.oc";
+
+fn main() {
+    print(crc16_ccitt(""));                                           // 65535
+    print(crc32(""));                                                 // 0
+    print(fnv1a_64(""));                                              // 14695981039346656037
+    print(crc16_ccitt("a"));                                          // 40311
+    print(crc32("a"));                                                // 3904355907
+    print(fnv1a_64("a"));                                             // 12638187200555641996
+    print(crc16_ccitt("123456789"));                                  // 10673
+    print(crc32("123456789"));                                        // 3421780262
+    print(fnv1a_64("123456789"));                                     // 492395637191921148
+    print(crc16_ccitt("hello"));                                      // 53870
+    print(crc32("hello"));                                            // 907060870
+    print(fnv1a_64("hello"));                                         // 11831194018420276491
+    print(crc16_ccitt("The quick brown fox jumps over the lazy dog")); // 36829
+    print(crc32("The quick brown fox jumps over the lazy dog"));      // 1095738169
+    print(fnv1a_64("The quick brown fox jumps over the lazy dog"));   // 17580284887202820368
+}

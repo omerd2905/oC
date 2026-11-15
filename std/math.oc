@@ -1,28 +1,915 @@
+// Integer and fixed-point math.
+//
+// Everything here follows oC's rule for arithmetic: a result that does not fit panics.
+// Behaviour that deliberately differs is spelled out in the name (sat_* saturates, the
+// checksums wrap). There are no generics yet, so each function names its type.
+
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn sys_exit(code: i32);
+
+// Stops the program for an argument outside a function's domain, e.g. ilog2_u64(0).
+fn math_domain_error(what: string) {
+    sys_write(2, "panic: math domain error: ".ptr, 26);
+    sys_write(2, what.ptr, what.len);
+    sys_write(2, "\n".ptr, 1);
+    sys_exit(1);
+}
+
+// ---------------------------------------------------------------------------------------
+// min / max / clamp / abs / sign
+// ---------------------------------------------------------------------------------------
+
+fn min_i32(a: i32, b: i32) -> i32 { if a < b { return a; } return b; }
+fn max_i32(a: i32, b: i32) -> i32 { if a > b { return a; } return b; }
+fn min_i64(a: i64, b: i64) -> i64 { if a < b { return a; } return b; }
+fn max_i64(a: i64, b: i64) -> i64 { if a > b { return a; } return b; }
+fn min_u32(a: u32, b: u32) -> u32 { if a < b { return a; } return b; }
+fn max_u32(a: u32, b: u32) -> u32 { if a > b { return a; } return b; }
+fn min_u64(a: u64, b: u64) -> u64 { if a < b { return a; } return b; }
+fn max_u64(a: u64, b: u64) -> u64 { if a > b { return a; } return b; }
+fn min_usize(a: usize, b: usize) -> usize { if a < b { return a; } return b; }
+fn max_usize(a: usize, b: usize) -> usize { if a > b { return a; } return b; }
+
+// clamp_T(x, lo, hi) returns x limited to [lo, hi]. lo must not exceed hi.
+fn clamp_i32(x: i32, lo: i32, hi: i32) -> i32 {
+    if lo > hi { math_domain_error("clamp_i32: lo > hi"); }
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn clamp_i64(x: i64, lo: i64, hi: i64) -> i64 {
+    if lo > hi { math_domain_error("clamp_i64: lo > hi"); }
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn clamp_u32(x: u32, lo: u32, hi: u32) -> u32 {
+    if lo > hi { math_domain_error("clamp_u32: lo > hi"); }
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn clamp_u64(x: u64, lo: u64, hi: u64) -> u64 {
+    if lo > hi { math_domain_error("clamp_u64: lo > hi"); }
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+fn clamp_usize(x: usize, lo: usize, hi: usize) -> usize {
+    if lo > hi { math_domain_error("clamp_usize: lo > hi"); }
+    if x < lo { return lo; }
+    if x > hi { return hi; }
+    return x;
+}
+
+// |x|. The most negative value has no positive counterpart, so abs of it panics.
 fn abs_i32(x: i32) -> i32 {
-    if x < 0 {
-        return -x
-    }
-    return x
+    if x < 0 { return -x; }
+    return x;
 }
 
-fn min_u32(a: u32, b: u32) -> u32 {
-    if a < b {
-        return a
-    }
-    return b
+fn abs_i64(x: i64) -> i64 {
+    if x < 0 { return -x; }
+    return x;
 }
 
-fn max_u32(a: u32, b: u32) -> u32 {
-    if a > b {
-        return a
-    }
-    return b
+// -1, 0 or 1.
+fn sign_i32(x: i32) -> i32 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+    return 0;
 }
 
-fn align_forward(addr: usize, alignment: usize) -> usize {
-    let rem: usize = addr % alignment
-    if rem == 0 {
-        return addr
+fn sign_i64(x: i64) -> i32 {
+    if x < 0 { return -1; }
+    if x > 0 { return 1; }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------------------
+// Number theory and powers
+// ---------------------------------------------------------------------------------------
+
+// Greatest common divisor (Euclid). gcd_u64(0, 0) is 0.
+fn gcd_u64(a: u64, b: u64) -> u64 {
+    let mut x: u64 = a;
+    let mut y: u64 = b;
+    while y != 0 {
+        let r: u64 = x % y;
+        x = y;
+        y = r;
     }
-    return addr + (alignment - rem)
+    return x;
+}
+
+// Least common multiple; panics if it does not fit in u64. lcm_u64(0, n) is 0.
+fn lcm_u64(a: u64, b: u64) -> u64 {
+    if a == 0 { return 0; }
+    if b == 0 { return 0; }
+    return (a / gcd_u64(a, b)) * b;
+}
+
+// base^exp by squaring; panics on overflow. pow_u64(0, 0) is 1.
+fn pow_u64(base: u64, exp: u64) -> u64 {
+    let mut result: u64 = 1;
+    let mut b: u64 = base;
+    let mut e: u64 = exp;
+    while e > 0 {
+        if (e & 1) == 1 {
+            result = result * b;
+        }
+        e = e >> 1;
+        if e > 0 {
+            b = b * b; // only squared while still needed, so it cannot trap spuriously
+        }
+    }
+    return result;
+}
+
+// (a + b) mod m for a, b < m, without the sum overflowing.
+fn add_mod_u64(a: u64, b: u64, m: u64) -> u64 {
+    if a >= m - b { return a - (m - b); }
+    return a + b;
+}
+
+// (a * b) mod m for any u64 operands (double-and-add, no 128-bit product needed).
+fn mul_mod_u64(a: u64, b: u64, m: u64) -> u64 {
+    let mut x: u64 = a % m;
+    let mut y: u64 = b % m;
+    let mut result: u64 = 0;
+    while y > 0 {
+        if (y & 1) == 1 {
+            result = add_mod_u64(result, x, m);
+        }
+        x = add_mod_u64(x, x, m);
+        y = y >> 1;
+    }
+    return result;
+}
+
+// base^exp mod m. Never overflows; m == 0 panics (division by zero).
+fn pow_mod_u64(base: u64, exp: u64, m: u64) -> u64 {
+    let mut result: u64 = 1 % m;
+    let mut b: u64 = base % m;
+    let mut e: u64 = exp;
+    while e > 0 {
+        if (e & 1) == 1 {
+            result = mul_mod_u64(result, b, m);
+        }
+        b = mul_mod_u64(b, b, m);
+        e = e >> 1;
+    }
+    return result;
+}
+
+// floor(sqrt(n)), exact for every u64 (bit-by-bit method, no rounding involved).
+fn isqrt_u64(n: u64) -> u64 {
+    let mut x: u64 = n;
+    let mut result: u64 = 0;
+    let mut bit: u64 = 4611686018427387904; // 2^62, the highest power of four in u64
+    while bit > x {
+        bit = bit >> 2;
+    }
+    while bit != 0 {
+        if x >= result + bit {
+            x = x - (result + bit);
+            result = (result >> 1) + bit;
+        } else {
+            result = result >> 1;
+        }
+        bit = bit >> 2;
+    }
+    return result;
+}
+
+// floor(log2(n)); panics for n == 0.
+fn ilog2_u64(n: u64) -> u32 {
+    if n == 0 { math_domain_error("ilog2_u64(0)"); }
+    let mut x: u64 = n;
+    let mut result: u32 = 0;
+    while x > 1 {
+        x = x >> 1;
+        result = result + 1;
+    }
+    return result;
+}
+
+fn is_pow2_u64(n: u64) -> bool {
+    if n == 0 { return false; }
+    return (n & (n - 1)) == 0;
+}
+
+// Smallest power of two >= n; panics if that is 2^64. next_pow2_u64(0) is 1.
+fn next_pow2_u64(n: u64) -> u64 {
+    let mut p: u64 = 1;
+    while p < n {
+        p = p * 2;
+    }
+    return p;
+}
+
+// ceil(a / b); panics for b == 0.
+fn div_ceil_u64(a: u64, b: u64) -> u64 {
+    let q: u64 = a / b;
+    if (a % b) != 0 { return q + 1; }
+    return q;
+}
+
+// Rounds addr up / down to a multiple of alignment (any alignment > 0, not only powers of
+// two). align_up panics if the result does not fit.
+fn align_up(addr: usize, alignment: usize) -> usize {
+    let rem: usize = addr % alignment;
+    if rem == 0 { return addr; }
+    return addr + (alignment - rem);
+}
+
+fn align_down(addr: usize, alignment: usize) -> usize {
+    return addr - (addr % alignment);
+}
+
+// ---------------------------------------------------------------------------------------
+// Bit manipulation
+// ---------------------------------------------------------------------------------------
+
+// Number of set bits.
+fn popcount_u64(x: u64) -> u32 {
+    let mut v: u64 = x;
+    let mut count: u32 = 0;
+    while v != 0 {
+        v = v & (v - 1); // clears the lowest set bit
+        count = count + 1;
+    }
+    return count;
+}
+
+// Leading / trailing zero bits; 64 for x == 0.
+fn clz_u64(x: u64) -> u32 {
+    if x == 0 { return 64; }
+    let mut v: u64 = x;
+    let mut count: u32 = 0;
+    while (v & 0x8000000000000000) == 0 {
+        v = v << 1;
+        count = count + 1;
+    }
+    return count;
+}
+
+fn ctz_u64(x: u64) -> u32 {
+    if x == 0 { return 64; }
+    let mut v: u64 = x;
+    let mut count: u32 = 0;
+    while (v & 1) == 0 {
+        v = v >> 1;
+        count = count + 1;
+    }
+    return count;
+}
+
+// Rotations; the count is taken modulo the width.
+fn rotl_u64(x: u64, n: u32) -> u64 {
+    let k: u32 = n % 64;
+    if k == 0 { return x; }
+    return (x << k) | (x >> (64 - k));
+}
+
+fn rotr_u64(x: u64, n: u32) -> u64 {
+    let k: u32 = n % 64;
+    if k == 0 { return x; }
+    return (x >> k) | (x << (64 - k));
+}
+
+fn rotl_u32(x: u32, n: u32) -> u32 {
+    let k: u32 = n % 32;
+    let v: u64 = x.as(u64);
+    if k == 0 { return x; }
+    return (((v << k) | (v >> (32 - k))) & 0xffffffff).as(u32);
+}
+
+fn rotr_u32(x: u32, n: u32) -> u32 {
+    let k: u32 = n % 32;
+    let v: u64 = x.as(u64);
+    if k == 0 { return x; }
+    return (((v >> k) | (v << (32 - k))) & 0xffffffff).as(u32);
+}
+
+// Byte order reversal.
+fn bswap16(x: u16) -> u16 {
+    let v: u32 = x.as(u32);
+    return (((v & 0xff) << 8) | (v >> 8)).as(u16);
+}
+
+fn bswap32(x: u32) -> u32 {
+    let v: u64 = x.as(u64);
+    let r: u64 = ((v & 0xff) << 24) | ((v & 0xff00) << 8) | ((v >> 8) & 0xff00) | (v >> 24);
+    return r.as(u32);
+}
+
+fn bswap64(x: u64) -> u64 {
+    let lo: u64 = bswap32((x & 0xffffffff).as(u32)).as(u64);
+    let hi: u64 = bswap32((x >> 32).as(u32)).as(u64);
+    return (lo << 32) | hi;
+}
+
+// Single bits; bit 0 is the least significant. n must be below 64.
+fn bit_get(x: u64, n: u32) -> bool {
+    if n >= 64 { math_domain_error("bit_get: bit index >= 64"); }
+    return ((x >> n) & 1) == 1;
+}
+
+fn bit_set(x: u64, n: u32) -> u64 {
+    if n >= 64 { math_domain_error("bit_set: bit index >= 64"); }
+    let one: u64 = 1;
+    return x | (one << n);
+}
+
+fn bit_clear(x: u64, n: u32) -> u64 {
+    if n >= 64 { math_domain_error("bit_clear: bit index >= 64"); }
+    let one: u64 = 1;
+    return x & ~(one << n);
+}
+
+// The `width` bits of x starting at bit `lo`, moved down to bit 0. lo + width must be <= 64.
+fn bits_extract(x: u64, lo: u32, width: u32) -> u64 {
+    if lo + width > 64 { math_domain_error("bits_extract: lo + width > 64"); }
+    if width == 0 { return 0; }
+    if width == 64 { return x; }
+    let one: u64 = 1;
+    return (x >> lo) & ((one << width) - 1);
+}
+
+// ---------------------------------------------------------------------------------------
+// Saturating arithmetic: the result is clipped to the type's range instead of panicking.
+// ---------------------------------------------------------------------------------------
+
+fn sat_add_i16(a: i16, b: i16) -> i16 { return clamp_i64(a.as(i64) + b.as(i64), -32768, 32767).as(i16); }
+fn sat_sub_i16(a: i16, b: i16) -> i16 { return clamp_i64(a.as(i64) - b.as(i64), -32768, 32767).as(i16); }
+fn sat_mul_i16(a: i16, b: i16) -> i16 { return clamp_i64(a.as(i64) * b.as(i64), -32768, 32767).as(i16); }
+
+fn sat_add_i32(a: i32, b: i32) -> i32 { return clamp_i64(a.as(i64) + b.as(i64), -2147483648, 2147483647).as(i32); }
+fn sat_sub_i32(a: i32, b: i32) -> i32 { return clamp_i64(a.as(i64) - b.as(i64), -2147483648, 2147483647).as(i32); }
+fn sat_mul_i32(a: i32, b: i32) -> i32 { return clamp_i64(a.as(i64) * b.as(i64), -2147483648, 2147483647).as(i32); }
+
+fn sat_add_u8(a: u8, b: u8) -> u8 { return clamp_i64(a.as(i64) + b.as(i64), 0, 255).as(u8); }
+fn sat_sub_u8(a: u8, b: u8) -> u8 { return clamp_i64(a.as(i64) - b.as(i64), 0, 255).as(u8); }
+fn sat_mul_u8(a: u8, b: u8) -> u8 { return clamp_i64(a.as(i64) * b.as(i64), 0, 255).as(u8); }
+
+fn sat_add_u16(a: u16, b: u16) -> u16 { return clamp_i64(a.as(i64) + b.as(i64), 0, 65535).as(u16); }
+fn sat_sub_u16(a: u16, b: u16) -> u16 { return clamp_i64(a.as(i64) - b.as(i64), 0, 65535).as(u16); }
+fn sat_mul_u16(a: u16, b: u16) -> u16 { return clamp_i64(a.as(i64) * b.as(i64), 0, 65535).as(u16); }
+
+// ---------------------------------------------------------------------------------------
+// Fixed point. Q15 is an i16 holding value * 2^15, so it covers [-1, 1) in steps of
+// 1/32768; Q31 is the same idea in an i32. All operations saturate, as DSP code expects:
+// the one product that does not fit, (-1) * (-1), gives the largest positive value.
+// ---------------------------------------------------------------------------------------
+
+// Raw conversions: saturate a wider intermediate into Q15, and widen a Q15 value.
+fn q15_from_i32(x: i32) -> i16 { return clamp_i64(x.as(i64), -32768, 32767).as(i16); }
+fn q15_to_i32(q: i16) -> i32 { return q.as(i32); }
+
+fn q15_add(a: i16, b: i16) -> i16 { return sat_add_i16(a, b); }
+
+// Product, truncated toward minus infinity.
+fn q15_mul(a: i16, b: i16) -> i16 {
+    return clamp_i64((a.as(i64) * b.as(i64)) >> 15, -32768, 32767).as(i16);
+}
+
+// Product, rounded to nearest (adds half an output step before the shift).
+fn q15_mul_round(a: i16, b: i16) -> i16 {
+    return clamp_i64(((a.as(i64) * b.as(i64)) + 16384) >> 15, -32768, 32767).as(i16);
+}
+
+fn q31_mul(a: i32, b: i32) -> i32 {
+    return clamp_i64((a.as(i64) * b.as(i64)) >> 31, -2147483648, 2147483647).as(i32);
+}
+
+// atan(2^-i) in units of 2^30 per full turn.
+fn cordic_atan(i: u32) -> i64 {
+    if i == 0 { return 134217728; }
+    if i == 1 { return 79233351; }
+    if i == 2 { return 41864727; }
+    if i == 3 { return 21251189; }
+    if i == 4 { return 10666833; }
+    if i == 5 { return 5338616; }
+    if i == 6 { return 2669960; }
+    if i == 7 { return 1335061; }
+    if i == 8 { return 667541; }
+    if i == 9 { return 333772; }
+    if i == 10 { return 166886; }
+    if i == 11 { return 83443; }
+    if i == 12 { return 41722; }
+    if i == 13 { return 20861; }
+    if i == 14 { return 10430; }
+    if i == 15 { return 5215; }
+    if i == 16 { return 2608; }
+    if i == 17 { return 1304; }
+    if i == 18 { return 652; }
+    if i == 19 { return 326; }
+    if i == 20 { return 163; }
+    if i == 21 { return 81; }
+    if i == 22 { return 41; }
+    return 20;
+}
+
+// CORDIC rotation: sine (want_cos false) or cosine of a binary angle, in Q15.
+// `angle` counts 1/65536 of a turn, so 16384 is 90 degrees and the u16 wraps exactly once
+// per turn, which is what a numerically controlled oscillator's phase accumulator needs.
+// Only shifts and adds are used. Accurate to within one Q15 step.
+fn cordic_q15(angle: u16, want_cos: bool) -> i16 {
+    let a: u32 = angle.as(u32);
+    let quadrant: u32 = a >> 14;
+    // Rotate (K, 0) by the angle within the quadrant; K pre-compensates the CORDIC gain.
+    let mut x: i64 = 652032874; // K * 2^30
+    let mut y: i64 = 0;
+    let mut z: i64 = (a & 16383).as(i64) << 14; // remaining angle, 2^30 per turn
+    let mut i: u32 = 0;
+    while i < 24 {
+        let dx: i64 = y >> i;
+        let dy: i64 = x >> i;
+        if z >= 0 {
+            x = x - dx;
+            y = y + dy;
+            z = z - cordic_atan(i);
+        } else {
+            x = x + dx;
+            y = y - dy;
+            z = z + cordic_atan(i);
+        }
+        i = i + 1;
+    }
+    // x = cos, y = sin of the in-quadrant angle (Q30); rotate by the quadrant.
+    let mut s: i64 = y;
+    let mut c: i64 = x;
+    if quadrant == 1 {
+        s = x;
+        c = -y;
+    } else if quadrant == 2 {
+        s = -y;
+        c = -x;
+    } else if quadrant == 3 {
+        s = -x;
+        c = y;
+    }
+    let mut v: i64 = s;
+    if want_cos { v = c; }
+    return clamp_i64((v + 16384) >> 15, -32768, 32767).as(i16);
+}
+
+fn sin_q15(angle: u16) -> i16 { return cordic_q15(angle, false); }
+fn cos_q15(angle: u16) -> i16 { return cordic_q15(angle, true); }
+
+// ---------------------------------------------------------------------------------------
+// Checksums and hashes (modular arithmetic by design).
+// ---------------------------------------------------------------------------------------
+
+// CRC-16/CCITT-FALSE: polynomial 0x1021, initial value 0xFFFF, no reflection.
+// crc16_ccitt("123456789") == 0x29B1.
+fn crc16_ccitt(data: string) -> u16 {
+    let mut crc: u32 = 0xffff;
+    let mut i: usize = 0;
+    while i < data.len {
+        crc = crc ^ (data[i].as(u32) << 8);
+        let mut bit: u32 = 0;
+        while bit < 8 {
+            if (crc & 0x8000) != 0 {
+                crc = ((crc << 1) ^ 0x1021) & 0xffff;
+            } else {
+                crc = (crc << 1) & 0xffff;
+            }
+            bit = bit + 1;
+        }
+        i = i + 1;
+    }
+    return crc.as(u16);
+}
+
+// CRC-32 (IEEE 802.3, as used by zip and PNG): reflected polynomial 0xEDB88320.
+// crc32("123456789") == 0xCBF43926.
+fn crc32(data: string) -> u32 {
+    let mut crc: u32 = 0xffffffff;
+    let mut i: usize = 0;
+    while i < data.len {
+        crc = crc ^ data[i].as(u32);
+        let mut bit: u32 = 0;
+        while bit < 8 {
+            if (crc & 1) != 0 {
+                crc = (crc >> 1) ^ 0xedb88320;
+            } else {
+                crc = crc >> 1;
+            }
+            bit = bit + 1;
+        }
+        i = i + 1;
+    }
+    return crc ^ 0xffffffff;
+}
+
+// FNV-1a, 64-bit.
+fn fnv1a_64(data: string) -> u64 {
+    let mut hash: u64 = 14695981039346656037;
+    let mut i: usize = 0;
+    while i < data.len {
+        hash = wrapping_mul(hash ^ data[i].as(u64), 1099511628211);
+        i = i + 1;
+    }
+    return hash;
+}
+
+// ---------------------------------------------------------------------------------------
+// Floating point (f64)
+//
+// These are written in oC and use only + - * /, comparisons, casts and the built-in
+// sqrt_f64, so both backends compute bit-identical results without a C math library.
+// Accuracy against the C library, measured on 200,000-point grids: sin, cos, atan, atan2,
+// exp and log are within 1 ulp; tan, log10 and hypot within 2 ulp. Floats follow IEEE 754:
+// nothing here panics, and NaN or infinity in gives NaN or infinity out.
+// ---------------------------------------------------------------------------------------
+
+let PI: f64 = 3.141592653589793;
+let TAU: f64 = 6.283185307179586;
+let E: f64 = 2.718281828459045;
+let SQRT2: f64 = 1.4142135623730951;
+let LN2: f64 = 0.6931471805599453;
+
+// Classification. NaN is the only value that is not <= itself.
+fn is_nan(x: f64) -> bool { return !(x <= x); }
+
+fn is_inf(x: f64) -> bool {
+    if x > 1.7976931348623157e308 { return true; }
+    return x < -1.7976931348623157e308;
+}
+
+fn is_finite(x: f64) -> bool {
+    if x > 1.7976931348623157e308 { return false; }
+    return x >= -1.7976931348623157e308; // false for NaN as well
+}
+
+// |a - b| <= eps: the way to compare floats, since == is not allowed on them.
+fn approx_eq(a: f64, b: f64, eps: f64) -> bool {
+    return fabs_f64(a - b) <= eps;
+}
+
+fn fabs_f64(x: f64) -> f64 {
+    if x < 0.0 { return -x; }
+    return x;
+}
+
+fn fmin_f64(a: f64, b: f64) -> f64 {
+    if is_nan(a) { return b; }
+    if is_nan(b) { return a; }
+    if a < b { return a; }
+    return b;
+}
+
+fn fmax_f64(a: f64, b: f64) -> f64 {
+    if is_nan(a) { return b; }
+    if is_nan(b) { return a; }
+    if a > b { return a; }
+    return b;
+}
+
+// Magnitude of x with the sign of y. A negative zero y counts as positive.
+fn copysign_f64(x: f64, y: f64) -> f64 {
+    let mag: f64 = fabs_f64(x);
+    if y < 0.0 { return -mag; }
+    return mag;
+}
+
+// Rounding to an integral value. From 2^52 up every double is already integral, and the
+// comparison is false for NaN, so those (and infinities) are returned unchanged.
+fn trunc_f64(x: f64) -> f64 {
+    if fabs_f64(x) < 4503599627370496.0 {
+        return x.as(i64).as(f64);
+    }
+    return x;
+}
+
+fn floor_f64(x: f64) -> f64 {
+    let t: f64 = trunc_f64(x);
+    if t > x { return t - 1.0; }
+    return t;
+}
+
+fn ceil_f64(x: f64) -> f64 {
+    let t: f64 = trunc_f64(x);
+    if t < x { return t + 1.0; }
+    return t;
+}
+
+// Nearest integer, halves away from zero.
+fn round_f64(x: f64) -> f64 {
+    let t: f64 = trunc_f64(x);
+    let d: f64 = x - t;
+    if d >= 0.5 { return t + 1.0; }
+    if d <= -0.5 { return t - 1.0; }
+    return t;
+}
+
+// 2^n for |n| <= 1023, exact.
+fn pow2_f64(n: i64) -> f64 {
+    let mut p: f64 = 1.0;
+    let mut b: f64 = 2.0;
+    let mut k: i64 = n;
+    if n < 0 {
+        b = 0.5;
+        k = -n;
+    }
+    while k > 0 {
+        if (k & 1) == 1 { p = p * b; }
+        k = k >> 1;
+        if k > 0 { b = b * b; }
+    }
+    return p;
+}
+
+// sin on [-pi/4, pi/4]; y is the low part of the reduced argument.
+fn ksin_f64(x: f64, y: f64) -> f64 {
+    let z: f64 = x * x;
+    let v: f64 = z * x;
+    let r: f64 = 8.33333333332248946124e-03 + (z * (-1.98412698298579493134e-04 + (z * (2.75573137070700676789e-06 + (z * (-2.50507602534068634195e-08 + (z * 1.58969099521155010221e-10)))))));
+    return x - (((z * ((0.5 * y) - (v * r))) - y) - (v * -1.66666666666666324348e-01));
+}
+
+// cos on [-pi/4, pi/4].
+fn kcos_f64(x: f64, y: f64) -> f64 {
+    let z: f64 = x * x;
+    let r: f64 = z * (4.16666666666666019037e-02 + (z * (-1.38888888888741095749e-03 + (z * (2.48015872894767294178e-05 + (z * (-2.75573143513906633035e-07 + (z * (2.08757232129817482790e-09 + (z * -1.13596475577881948265e-11))))))))));
+    let ax: f64 = fabs_f64(x);
+    if ax < 0.3 {
+        return 1.0 - ((0.5 * z) - ((z * r) - (x * y)));
+    }
+    let mut qx: f64 = 0.125;
+    if ax > 0.78125 { qx = 0.28125; }
+    let hz: f64 = (0.5 * z) - qx;
+    return (1.0 - qx) - (hz - ((z * r) - (x * y)));
+}
+
+// One of the two parts of x reduced modulo pi/2 (Cody-Waite, pi/2 split in three pieces):
+// x = n * pi/2 + y0 + y1 with n = round(x * 2/pi). `low` selects y1.
+fn rem_pio2_f64(x: f64, n: f64, low: bool) -> f64 {
+    let t: f64 = x - (n * 1.57079632673412561417e+00);
+    let mut w: f64 = n * 6.07710050630396597660e-11;
+    let r: f64 = t - w;
+    w = (n * 2.02226624879595063154e-21) - ((t - r) - w);
+    let y0: f64 = r - w;
+    if low { return (r - y0) - w; }
+    return y0;
+}
+
+// Shared by sin_f64 and cos_f64: `shift` is 0 for sine and 1 for cosine (cos x = sin(x + pi/2)).
+// Within 1 ulp for |x| <= 1e6. Above that the result is the sine of a value within one
+// rounding step of x, so the absolute error grows to about |x| * 1.1e-16. From 2^52 up,
+// where neighbouring doubles are a radian or more apart, the result is NaN (as for NaN and
+// infinities; the comparison below is false for NaN).
+fn sincos_f64(x: f64, shift: i64) -> f64 {
+    if !(fabs_f64(x) < 4503599627370496.0) { return 0.0 / 0.0; }
+    let mut n: f64 = 0.0;
+    let mut y0: f64 = x;
+    let mut y1: f64 = 0.0;
+    if fabs_f64(x) >= 0.7853981633974483 {
+        n = round_f64(x * 6.36619772367581382433e-01);
+        y0 = rem_pio2_f64(x, n, false);
+        y1 = rem_pio2_f64(x, n, true);
+    }
+    let q: i64 = (((n.as(i64) + shift) % 4) + 4) % 4;
+    if q == 0 { return ksin_f64(y0, y1); }
+    if q == 1 { return kcos_f64(y0, y1); }
+    if q == 2 { return -ksin_f64(y0, y1); }
+    return -kcos_f64(y0, y1);
+}
+
+fn sin_f64(x: f64) -> f64 { return sincos_f64(x, 0); }
+fn cos_f64(x: f64) -> f64 { return sincos_f64(x, 1); }
+fn tan_f64(x: f64) -> f64 { return sin_f64(x) / cos_f64(x); }
+
+fn atan_f64(x: f64) -> f64 {
+    if is_nan(x) { return x; }
+    let ax: f64 = fabs_f64(x);
+    let mut hi: f64 = 0.0;
+    let mut lo: f64 = 0.0;
+    let mut reduced: bool = true;
+    let mut t: f64 = ax;
+    if ax >= 73786976294838206464.0 { // 2^66: the result is pi/2 to full precision
+        if x < 0.0 { return -1.57079632679489655800e+00; }
+        return 1.57079632679489655800e+00;
+    }
+    if ax < 0.4375 {
+        reduced = false;
+    } else if ax < 0.6875 {
+        hi = 4.63647609000806093515e-01; // atan(0.5)
+        lo = 2.26987774529616870924e-17;
+        t = ((2.0 * ax) - 1.0) / (2.0 + ax);
+    } else if ax < 1.1875 {
+        hi = 7.85398163397448278999e-01; // atan(1)
+        lo = 3.06161699786838301793e-17;
+        t = (ax - 1.0) / (ax + 1.0);
+    } else if ax < 2.4375 {
+        hi = 9.82793723247329054082e-01; // atan(1.5)
+        lo = 1.39033110312309984516e-17;
+        t = (ax - 1.5) / (1.0 + (1.5 * ax));
+    } else {
+        hi = 1.57079632679489655800e+00; // atan(inf)
+        lo = 6.12323399573676603587e-17;
+        t = -1.0 / ax;
+    }
+    let z: f64 = t * t;
+    let w: f64 = z * z;
+    let s1: f64 = z * (3.33333333333329318027e-01 + (w * (1.42857142725034663711e-01 + (w * (9.09088713343650656196e-02 + (w * (6.66107313738753120669e-02 + (w * (4.97687799461593236017e-02 + (w * 1.62858201153657823623e-02))))))))));
+    let s2: f64 = w * (-1.99999999998764832476e-01 + (w * (-1.11111104054623557880e-01 + (w * (-7.69187620504482999495e-02 + (w * (-5.83357013379057348645e-02 + (w * -3.65315727442169155270e-02))))))));
+    let mut r: f64 = t - (t * (s1 + s2));
+    if reduced {
+        r = hi - (((t * (s1 + s2)) - lo) - t);
+    }
+    if x < 0.0 { return -r; }
+    return r;
+}
+
+// Angle of the point (x, y), in (-pi, pi].
+fn atan2_f64(y: f64, x: f64) -> f64 {
+    if is_nan(x) { return x; }
+    if is_nan(y) { return y; }
+    let mut x_zero: bool = false;
+    if x >= 0.0 { x_zero = x <= 0.0; }
+    let mut y_zero: bool = false;
+    if y >= 0.0 { y_zero = y <= 0.0; }
+    let mut r: f64 = 0.0;
+    if is_inf(x) {
+        if is_inf(y) {
+            r = 0.7853981633974483;
+            if x < 0.0 { r = 2.356194490192345; }
+        } else if x < 0.0 {
+            r = 3.141592653589793;
+        }
+        if y < 0.0 { return -r; }
+        return r;
+    }
+    if x_zero {
+        if y_zero { return 0.0; }
+        if y < 0.0 { return -1.5707963267948966; }
+        return 1.5707963267948966;
+    }
+    if y_zero {
+        if x > 0.0 { return 0.0; }
+        return 3.141592653589793;
+    }
+    if is_inf(y) {
+        if y < 0.0 { return -1.5707963267948966; }
+        return 1.5707963267948966;
+    }
+    let z: f64 = atan_f64(fabs_f64(y / x));
+    if x > 0.0 {
+        if y < 0.0 { return -z; }
+        return z;
+    }
+    // Second and third quadrant: pi is added in two pieces to keep the last bits.
+    if y < 0.0 { return (z - 1.2246467991473532e-16) - 3.141592653589793; }
+    return 3.141592653589793 - (z - 1.2246467991473532e-16);
+}
+
+fn exp_f64(x: f64) -> f64 {
+    if is_nan(x) { return x; }
+    if x > 709.782712893384 { return 1.0e300 * 1.0e300; } // overflow: +inf
+    if x < -745.1332191019411 { return 0.0; }
+    // x = k * ln2 + r with |r| <= ln2 / 2; exp(x) = 2^k * exp(r).
+    let mut k: i64 = 0;
+    let mut hi: f64 = x;
+    let mut lo: f64 = 0.0;
+    if fabs_f64(x) > 0.34657359027997264 {
+        if x > 0.0 {
+            k = ((1.44269504088896338700e+00 * x) + 0.5).as(i64);
+        } else {
+            k = ((1.44269504088896338700e+00 * x) - 0.5).as(i64);
+        }
+        hi = x - (k.as(f64) * 6.93147180369123816490e-01);
+        lo = k.as(f64) * 1.90821492927058770002e-10;
+    }
+    let r: f64 = hi - lo;
+    let t: f64 = r * r;
+    let c: f64 = r - (t * (1.66666666666666019037e-01 + (t * (-2.77777777770155933842e-03 + (t * (6.61375632143793436117e-05 + (t * (-1.65339022054652515390e-06 + (t * 4.13813679705723846039e-08)))))))));
+    let y: f64 = 1.0 - ((lo - ((r * c) / (2.0 - c))) - hi);
+    if k == 0 { return y; }
+    // Scale in two steps near the ends of the range so the intermediate stays representable.
+    if k > 1000 { return (y * pow2_f64(k - 1000)) * 1.0715086071862673e301; }
+    if k < -1000 { return (y * pow2_f64(k + 1000)) * 9.332636185032189e-302; }
+    return y * pow2_f64(k);
+}
+
+// Natural logarithm. log of a negative number is NaN; log of zero is -inf.
+fn log_f64(x: f64) -> f64 {
+    if is_nan(x) { return x; }
+    if x < 0.0 { return 0.0 / 0.0; }
+    if x <= 0.0 { return -1.0 / 0.0; }
+    if is_inf(x) { return x; }
+    // x = m * 2^k with m in [sqrt(1/2), sqrt(2)); every step multiplies by a power of two, which is exact.
+    let mut m: f64 = x;
+    let mut k: i64 = 0;
+    if m < 2.2250738585072014e-308 { // subnormal: bring it into the normal range first
+        m = m * 18014398509481984.0;
+        k = -54;
+    }
+    while m >= 18446744073709551616.0 {
+        m = m * 5.421010862427522e-20; // 2^-64
+        k = k + 64;
+    }
+    while m < 5.421010862427522e-20 {
+        m = m * 18446744073709551616.0; // 2^64
+        k = k - 64;
+    }
+    while m >= 2.0 {
+        m = m * 0.5;
+        k = k + 1;
+    }
+    while m < 1.0 {
+        m = m * 2.0;
+        k = k - 1;
+    }
+    if m > 1.4142135623730951 {
+        m = m * 0.5;
+        k = k + 1;
+    }
+    let f: f64 = m - 1.0;
+    let hfsq: f64 = (0.5 * f) * f;
+    let s: f64 = f / (2.0 + f);
+    let z: f64 = s * s;
+    let w: f64 = z * z;
+    let t1: f64 = w * (3.999999999940941908e-01 + (w * (2.222219843214978396e-01 + (w * 1.531383769920937332e-01))));
+    let t2: f64 = z * (6.666666666666735130e-01 + (w * (2.857142874366239149e-01 + (w * (1.818357216161805012e-01 + (w * 1.479819860511658591e-01))))));
+    let dk: f64 = k.as(f64);
+    return ((((s * (hfsq + (t2 + t1))) + (dk * 1.90821492927058770002e-10)) - hfsq) + f) + (dk * 6.93147180369123816490e-01);
+}
+
+fn log10_f64(x: f64) -> f64 {
+    return log_f64(x) * 0.4342944819032518; // 1 / ln(10)
+}
+
+// x^n for an integer n by repeated squaring.
+fn powi_f64(x: f64, n: i64) -> f64 {
+    let mut result: f64 = 1.0;
+    let mut b: f64 = x;
+    let mut k: i64 = n;
+    if n < 0 { k = -n; }
+    while k > 0 {
+        if (k & 1) == 1 { result = result * b; }
+        k = k >> 1;
+        if k > 0 { b = b * b; }
+    }
+    if n < 0 { return 1.0 / result; }
+    return result;
+}
+
+// x^y. Integer exponents up to 1024 in magnitude are computed by repeated squaring, which
+// is exact whenever the result is (2^10 is exactly 1024). Other exponents use
+// exp(y * log(x)), accurate to about 1e-13 relative. A negative base with a non-integer
+// exponent gives NaN; anything to the power 0 is 1.
+fn pow_f64(x: f64, y: f64) -> f64 {
+    let mut y_zero: bool = false;
+    if y >= 0.0 { y_zero = y <= 0.0; }
+    if y_zero { return 1.0; }
+    if is_nan(x) { return x; }
+    if is_nan(y) { return y; }
+    let ty: f64 = trunc_f64(y);
+    let mut y_int: bool = true;
+    if ty < y { y_int = false; }
+    if ty > y { y_int = false; }
+    if y_int {
+        if fabs_f64(y) <= 1024.0 { return powi_f64(x, y.as(i64)); }
+    }
+    if x < 0.0 {
+        if !y_int { return 0.0 / 0.0; }
+        let mag: f64 = exp_f64(y * log_f64(-x));
+        let half: f64 = ty * 0.5;
+        let mut odd: bool = false;
+        if trunc_f64(half) < half { odd = true; }
+        if trunc_f64(half) > half { odd = true; }
+        if odd { return -mag; }
+        return mag;
+    }
+    if x <= 0.0 { // zero base
+        if y < 0.0 { return 1.0 / 0.0; }
+        return 0.0;
+    }
+    return exp_f64(y * log_f64(x));
+}
+
+// sqrt(x^2 + y^2) without overflowing when x or y is large.
+fn hypot_f64(x: f64, y: f64) -> f64 {
+    let ax: f64 = fabs_f64(x);
+    let ay: f64 = fabs_f64(y);
+    if is_inf(ax) { return ax; }
+    if is_inf(ay) { return ay; }
+    if is_nan(ax) { return ax; }
+    if is_nan(ay) { return ay; }
+    let mut big: f64 = ay;
+    let mut small: f64 = ax;
+    if ax > ay {
+        big = ax;
+        small = ay;
+    }
+    if big <= 0.0 { return 0.0; }
+    let r: f64 = small / big;
+    return big * sqrt_f64(1.0 + (r * r));
 }

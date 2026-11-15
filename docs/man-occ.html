@@ -244,6 +244,14 @@ All 4 suites completed successfully.</code></pre>
               </td>
             </tr>
             <tr>
+              <td><code>--fp-trap</code></td>
+              <td><em>none</em></td>
+              <td><em>Disabled</em></td>
+              <td>
+                Panics at the first floating-point operation whose result is NaN or infinite, instead of letting the value propagate as IEEE 754 defines. A debugging aid: some algorithms use infinity on purpose.
+              </td>
+            </tr>
+            <tr>
               <td><code>-O1</code></td>
               <td><em>None</em></td>
               <td><em>Disabled</em></td>

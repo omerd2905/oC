@@ -1,0 +1,9 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut ptrs: [2]*mut u8 = [arena_alloc(&mut a, 8), arena_alloc(&mut a, 8)];
+    arena_reset(&mut a);
+    let q: *mut u8 = ptrs[0];
+    q[0] = 1; // use-after-free: the array still holds pointers into the reset arena
+}

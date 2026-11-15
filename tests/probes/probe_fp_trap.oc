@@ -1,0 +1,7 @@
+// Built twice by run_probes.sh: normally it prints "inf" and exits 0 (IEEE 754 semantics);
+// with --fp-trap the division must panic instead.
+fn main() {
+    let zero: f64 = 0.0;
+    let x: f64 = 1.0 / zero;
+    print(x);
+}
