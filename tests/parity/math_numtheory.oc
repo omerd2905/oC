@@ -1,0 +1,66 @@
+// std/math.oc: gcd, lcm, powers, roots, logs, alignment.
+// The expected output in math_numtheory.expected was computed independently (Python); both
+// backends must reproduce it exactly.
+import "std/math.oc";
+
+fn main() {
+    print(gcd_u64(48, 18));                                           // 6
+    print(gcd_u64(0, 9));                                             // 9
+    print(gcd_u64(9, 0));                                             // 9
+    print(gcd_u64(0, 0));                                             // 0
+    print(gcd_u64(18446744073709551615, 4294967295));                 // 4294967295
+    print(lcm_u64(4, 6));                                             // 12
+    print(lcm_u64(0, 6));                                             // 0
+    print(lcm_u64(4294967296, 4294967295));                           // 18446744069414584320
+    print(pow_u64(2, 10));                                            // 1024
+    print(pow_u64(0, 0));                                             // 1
+    print(pow_u64(7, 0));                                             // 1
+    print(pow_u64(0, 5));                                             // 0
+    print(pow_u64(2, 63));                                            // 9223372036854775808
+    print(pow_u64(3, 40));                                            // 12157665459056928801
+    print(pow_u64(10, 19));                                           // 10000000000000000000
+    print(pow_u64(4294967295, 2));                                    // 18446744065119617025
+    print(pow_mod_u64(2, 10, 1000));                                  // 24
+    print(pow_mod_u64(3, 200, 13));                                   // 9
+    print(pow_mod_u64(5, 0, 1));                                      // 0
+    print(pow_mod_u64(123456789, 987654321, 1000000007));             // 652541198
+    print(pow_mod_u64(18446744073709551615, 18446744073709551615, 18446744073709551557)); // 4959809447704153900
+    print(mul_mod_u64(18446744073709551615, 18446744073709551614, 18446744073709551557)); // 3306
+    print(add_mod_u64(18446744073709551556, 18446744073709551555, 18446744073709551557)); // 18446744073709551554
+    print(isqrt_u64(0));                                              // 0
+    print(isqrt_u64(1));                                              // 1
+    print(isqrt_u64(15));                                             // 3
+    print(isqrt_u64(16));                                             // 4
+    print(isqrt_u64(17));                                             // 4
+    print(isqrt_u64(18446744073709551615));                           // 4294967295
+    print(isqrt_u64(18446744065119617025));                           // 4294967295
+    print(isqrt_u64(18446744065119617024));                           // 4294967294
+    print(isqrt_u64(1000000000000));                                  // 1000000
+    print(ilog2_u64(1));                                              // 0
+    print(ilog2_u64(2));                                              // 1
+    print(ilog2_u64(1023));                                           // 9
+    print(ilog2_u64(1024));                                           // 10
+    print(ilog2_u64(18446744073709551615));                           // 63
+    print(is_pow2_u64(0));                                            // false
+    print(is_pow2_u64(1));                                            // true
+    print(is_pow2_u64(4096));                                         // true
+    print(is_pow2_u64(4097));                                         // false
+    print(is_pow2_u64(9223372036854775808));                          // true
+    print(next_pow2_u64(0));                                          // 1
+    print(next_pow2_u64(1));                                          // 1
+    print(next_pow2_u64(5));                                          // 8
+    print(next_pow2_u64(4096));                                       // 4096
+    print(next_pow2_u64(4611686018427387905));                        // 9223372036854775808
+    print(div_ceil_u64(10, 3));                                       // 4
+    print(div_ceil_u64(9, 3));                                        // 3
+    print(div_ceil_u64(0, 7));                                        // 0
+    print(div_ceil_u64(18446744073709551615, 2));                     // 9223372036854775808
+    print(align_up(17, 8));                                           // 24
+    print(align_up(16, 8));                                           // 16
+    print(align_up(0, 4096));                                         // 0
+    print(align_up(10, 3));                                           // 12
+    print(align_down(17, 8));                                         // 16
+    print(align_down(16, 8));                                         // 16
+    print(align_down(7, 8));                                          // 0
+    print(align_down(10, 3));                                         // 9
+}

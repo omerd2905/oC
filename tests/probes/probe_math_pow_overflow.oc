@@ -1,0 +1,6 @@
+import "std/math.oc";
+
+fn main() {
+    print(pow_u64(2, 63)); // 9223372036854775808 still fits
+    print(pow_u64(2, 64)); // 2^64 does not fit in u64: must trap
+}

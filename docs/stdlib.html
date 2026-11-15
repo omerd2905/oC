@@ -82,7 +82,7 @@ import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_rese
 import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_exec, unlink_file
 import "std/io.oc"    // OC-IO(3):    print, read_int, sys_read
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
-import "std/math.oc"  // OC-MATH(3):  abs_i32, min_u32, max_u32, align_forward
+import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
 import "std/os.oc"    // OC-OS(3):    OC_PROT_*, OC_MAP_*, OC_O_*, OC_MODE_*, OC_AF_*, OC_SOCK_*, OC_TARGET_*, sys_host_target
 
 // Direct x86_64 Linux kernel intrinsics (extern declarations bound to direct syscall instructions)
@@ -696,31 +696,54 @@ fn main() {
       <section id="std-math">
         <h2>OC-MATH(3) &mdash; `std/math.oc` Checked Mathematical Helpers</h2>
         <p>
-          The <code>std/math.oc</code> module provides numerical utilities that cooperate with the compiler's hardware overflow detection.
+          The <code>std/math.oc</code> module provides integer and fixed-point math. Every function follows oC's rule for arithmetic: a result that does not fit panics. Behaviour that deliberately differs is in the name (<code>sat_*</code> saturates, the checksums wrap). Floating-point types are not part of the language yet.
         </p>
 
         <div class="fn-box">
-          <h3>abs_i32</h3>
-          <div class="fn-sig">fn abs_i32(x: i32) i32</div>
+          <h3>min, max, clamp, abs, sign</h3>
+          <div class="fn-sig">fn min_T(a: T, b: T) -&gt; T<br>fn max_T(a: T, b: T) -&gt; T<br>fn clamp_T(x: T, lo: T, hi: T) -&gt; T<br>fn abs_i32(x: i32) -&gt; i32 &nbsp; fn abs_i64(x: i64) -&gt; i64<br>fn sign_i32(x: i32) -&gt; i32 &nbsp; fn sign_i64(x: i64) -&gt; i32</div>
           <p>
-            Returns the absolute value of signed 32-bit integer <code>x</code>.<br>
-            <strong>Hardware Overflow Trap Note (CWE-190):</strong> In traditional C, evaluating <code>abs(-2147483648)</code> triggers undefined behavior and silently returns <code>-2147483648</code> because <code>2147483648</code> cannot be represented in a 32-bit signed integer. In oC, negating <code>-2147483648</code> activates the CPU's Overflow Flag (<code>OF=1</code>), instantly executing <code>jo __trap_overflow</code> (hardware <code>ud2</code> exception) rather than silently returning corrupted numbers.
+            There are no generics yet, so each function names its type: <code>T</code> is one of <code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code>, <code>usize</code>. <code>abs</code> of the most negative value has no result and panics with <code>integer overflow</code> (in C it silently returns the same negative number). <code>clamp</code> requires <code>lo &lt;= hi</code>.
           </p>
         </div>
 
         <div class="fn-box">
-          <h3>min_u32 &amp; max_u32</h3>
-          <div class="fn-sig">fn min_u32(a: u32, b: u32) u32<br>fn max_u32(a: u32, b: u32) u32</div>
+          <h3>Number theory and powers</h3>
+          <div class="fn-sig">fn gcd_u64(a: u64, b: u64) -&gt; u64 &nbsp; fn lcm_u64(a: u64, b: u64) -&gt; u64<br>fn pow_u64(base: u64, exp: u64) -&gt; u64<br>fn pow_mod_u64(base: u64, exp: u64, m: u64) -&gt; u64 &nbsp; fn mul_mod_u64(a: u64, b: u64, m: u64) -&gt; u64<br>fn isqrt_u64(n: u64) -&gt; u64 &nbsp; fn ilog2_u64(n: u64) -&gt; u32<br>fn is_pow2_u64(n: u64) -&gt; bool &nbsp; fn next_pow2_u64(n: u64) -&gt; u64<br>fn div_ceil_u64(a: u64, b: u64) -&gt; u64<br>fn align_up(addr: usize, alignment: usize) -&gt; usize &nbsp; fn align_down(addr: usize, alignment: usize) -&gt; usize</div>
           <p>
-            Branchless and checked boundary selection routines. Evaluates minimum and maximum without type coercion or sign extension errors.
+            <code>lcm_u64</code>, <code>pow_u64</code>, <code>next_pow2_u64</code> and <code>align_up</code> panic when the result does not fit. <code>pow_mod_u64</code> and <code>mul_mod_u64</code> never overflow, for any 64-bit modulus. <code>isqrt_u64</code> is the exact floor of the square root for every <code>u64</code>. <code>ilog2_u64(0)</code> panics. <code>align_up</code> replaces the former <code>align_forward</code> and works for any alignment above zero.
           </p>
         </div>
 
         <div class="fn-box">
-          <h3>align_forward</h3>
-          <div class="fn-sig">fn align_forward(addr: usize, alignment: usize) usize</div>
+          <h3>Bit manipulation</h3>
+          <div class="fn-sig">fn popcount_u64(x: u64) -&gt; u32 &nbsp; fn clz_u64(x: u64) -&gt; u32 &nbsp; fn ctz_u64(x: u64) -&gt; u32<br>fn rotl_u32 / rotr_u32(x: u32, n: u32) -&gt; u32 &nbsp; fn rotl_u64 / rotr_u64(x: u64, n: u32) -&gt; u64<br>fn bswap16(x: u16) -&gt; u16 &nbsp; fn bswap32(x: u32) -&gt; u32 &nbsp; fn bswap64(x: u64) -&gt; u64<br>fn bit_get(x: u64, n: u32) -&gt; bool &nbsp; fn bit_set / bit_clear(x: u64, n: u32) -&gt; u64<br>fn bits_extract(x: u64, lo: u32, width: u32) -&gt; u64</div>
           <p>
-            Computes the next multiple of <code>alignment</code> greater than or equal to <code>addr</code>. Essential for hardware-aligned memory allocation in custom arena buffers.
+            Building blocks for registers, protocol fields, CRCs and hashes. <code>clz_u64(0)</code> and <code>ctz_u64(0)</code> are 64. Rotation counts are taken modulo the width. Bit indices must be below 64, and <code>lo + width</code> must not exceed 64.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Saturating arithmetic</h3>
+          <div class="fn-sig">fn sat_add_T(a: T, b: T) -&gt; T &nbsp; fn sat_sub_T(a: T, b: T) -&gt; T &nbsp; fn sat_mul_T(a: T, b: T) -&gt; T</div>
+          <p>
+            For <code>T</code> in <code>i16</code>, <code>i32</code>, <code>u8</code>, <code>u16</code>. The result is clipped to the range of the type instead of panicking, which is what audio and control loops want.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Fixed point (Q15, Q31) and integer sine / cosine</h3>
+          <div class="fn-sig">fn q15_mul(a: i16, b: i16) -&gt; i16 &nbsp; fn q15_mul_round(a: i16, b: i16) -&gt; i16 &nbsp; fn q15_add(a: i16, b: i16) -&gt; i16<br>fn q31_mul(a: i32, b: i32) -&gt; i32<br>fn q15_from_i32(x: i32) -&gt; i16 &nbsp; fn q15_to_i32(q: i16) -&gt; i32<br>fn sin_q15(angle: u16) -&gt; i16 &nbsp; fn cos_q15(angle: u16) -&gt; i16</div>
+          <p>
+            A Q15 number is an <code>i16</code> holding <code>value &times; 2<sup>15</sup></code>, so it covers [-1, 1) in steps of 1/32768; Q31 is the same in an <code>i32</code>. All operations saturate. <code>sin_q15</code> and <code>cos_q15</code> use CORDIC (shifts and adds only) and take a binary angle: 65536 units per turn, so 16384 is 90 degrees and a <code>u16</code> phase accumulator wraps exactly once per turn. They are accurate to within one Q15 step.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Checksums and hashes</h3>
+          <div class="fn-sig">fn crc16_ccitt(data: string) -&gt; u16<br>fn crc32(data: string) -&gt; u32<br>fn fnv1a_64(data: string) -&gt; u64</div>
+          <p>
+            CRC-16/CCITT-FALSE (polynomial 0x1021, initial value 0xFFFF; <code>"123456789"</code> gives 0x29B1), CRC-32 as used by zip and PNG (<code>"123456789"</code> gives 0xCBF43926), and 64-bit FNV-1a. These are modular by design and use the <code>wrapping_*</code> built-ins internally.
           </p>
         </div>
 
@@ -739,8 +762,8 @@ fn main() {
               <pre><code>import "std/math.oc";
 
 fn main() {
-    let aligned: usize = align_forward(17, 8);
-    print("Align 17 forward to 8-byte boundary:");
+    let aligned: usize = align_up(17, 8);
+    print("Align 17 up to an 8-byte boundary:");
     print(aligned); // 24
 
     let abs_val: i32 = abs_i32(-42);
@@ -758,7 +781,7 @@ fn main() {
                 
               </div>
               <pre><code><span class="term-cmd">$ occ run math_demo.oc</span>
-<span class="term-out">Align 17 forward to 8-byte boundary:</span>
+<span class="term-out">Align 17 up to an 8-byte boundary:</span>
 <span class="term-pass">24</span>
 <span class="term-out">Absolute value of -42:</span>
 <span class="term-pass">42</span>
@@ -767,7 +790,7 @@ fn main() {
             </div>
           </div>
           <div class="explanation-box">
-            <strong>Overflow Boundary Invariant:</strong> Testing <code>abs_i32(-2147483648)</code> triggers <code>jo __trap_overflow</code>, terminating execution immediately with a SIGILL / hardware trap. Silent numerical corruption is strictly eliminated.
+            <strong>Overflow Boundary Invariant:</strong> <code>abs_i32(-2147483648)</code> stops the program with <code>panic: integer overflow</code> on both backends. Silent numerical corruption is strictly eliminated.
           </div>
         </div>
       </section>
