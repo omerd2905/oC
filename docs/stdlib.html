@@ -575,7 +575,7 @@ fn main() {
           <h3>read_int</h3>
           <div class="fn-sig">fn read_int() i32</div>
           <p>
-            Reads characters directly from standard input (<code>fd = 0</code>) using <code>sys_read</code>, filters ASCII characters between <code>'0'</code> (48) and <code>'9'</code> (57), and builds an integer. Ignores trailing newlines and non-numeric characters. The returned integer is marked tainted in the compiler's dataflow engine until checked against boundary constraints.
+            Reads characters directly from standard input (<code>fd = 0</code>) using <code>sys_read</code>, filters ASCII characters between <code>'0'</code> (48) and <code>'9'</code> (57), and builds an integer. Ignores trailing newlines and non-numeric characters. The result is an ordinary <code>i32</code>: validate it before using it as a length, index or path.
           </p>
         </div>
 
