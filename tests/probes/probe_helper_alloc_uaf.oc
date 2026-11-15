@@ -1,0 +1,14 @@
+import "std/mem.oc";
+
+fn grab(a: *mut Arena) -> *mut u8 { return arena_alloc(a, 16); }
+fn grab_twice_removed(n: usize, a: *mut Arena) -> *mut u8 {
+    let p: *mut u8 = grab(a);
+    return p;
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = grab_twice_removed(16, &mut a);
+    arena_deinit(&mut a);
+    p[0] = 1; // use-after-free: p came from the arena through two helper calls
+}

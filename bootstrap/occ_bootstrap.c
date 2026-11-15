@@ -334,6 +334,7 @@ struct VarInfo {
 struct FnEffects {
     oc_string names[256];
     uint8_t effects[4096];
+    bool borrows[4096];
     size_t count;
 };
 
@@ -481,15 +482,19 @@ void validator_invalidate_var(Validator* v, oc_string var_name);
 oc_string get_ident_name(AstNode* expr);
 oc_string get_underlying_address_of(AstNode* expr);
 uint8_t fx_param_effect(FnEffects* fx, oc_string fn_name, size_t idx);
+bool fx_param_borrows(FnEffects* fx, oc_string fn_name, size_t idx);
 oc_string get_arena_arg_name(AstNode* arg);
-bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n);
-oc_string get_arena_source(AstNode* expr);
+bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, bool ret_ptr, AstNode* n);
+oc_string get_arena_source(FnEffects* fx, AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
 oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name);
 oc_string validator_stack_place_type(Validator* v, AstNode* expr);
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
+void validator_save_invalidated(Validator* v, bool* out);
+void validator_restore_invalidated(Validator* v, bool* saved);
+bool block_always_returns(AstNode* block);
 bool validate_stmt(Validator* v, AstNode* stmt);
 bool validate_function(AstNode* f, FnEffects* fx, AstNode* program);
 bool validate_program(AstNode* root);
@@ -2220,6 +2225,25 @@ uint8_t fx_param_effect(FnEffects* fx, oc_string fn_name, size_t idx) {
     return 0;
 }
 
+bool fx_param_borrows(FnEffects* fx, oc_string fn_name, size_t idx) {
+    if ((idx == 0)) {
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("arena_alloc"), .len = sizeof("arena_alloc") - 1 })) {
+    return true;
+    }
+    }
+    if ((idx >= 16)) {
+    return false;
+    }
+    size_t i = 0;
+    while ((i < ((fx)->count))) {
+    if (str_eq(__OC_AT((((fx)->names)), (i)), fn_name)) {
+    return __OC_AT((((fx)->borrows)), (__OC_ADD(__OC_MUL(i, 16), idx)));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+}
+
 oc_string get_arena_arg_name(AstNode* arg) {
     oc_string u = get_underlying_address_of(arg);
     if ((((u).len) > 0)) {
@@ -2228,7 +2252,7 @@ oc_string get_arena_arg_name(AstNode* arg) {
     return get_ident_name(arg);
 }
 
-bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
+bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, bool ret_ptr, AstNode* n) {
     bool changed = false;
     AstNode* cur = n;
     while ((cur != ((AstNode*)(0)))) {
@@ -2237,7 +2261,15 @@ bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
     size_t ai = 0;
     while ((arg != ((AstNode*)(0)))) {
     uint8_t eff = fx_param_effect(fx, ((((cur)->tok)).slice), ai);
-    if ((eff > 0)) {
+    bool allocs = false;
+    if (ret_ptr) {
+    allocs = fx_param_borrows(fx, ((((cur)->tok)).slice), ai);
+    }
+    bool relevant = (eff > 0);
+    if (allocs) {
+    relevant = true;
+    }
+    if (relevant) {
     oc_string name = get_arena_arg_name(arg);
     AstNode* prm = params;
     size_t pi = 0;
@@ -2247,6 +2279,12 @@ bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
     if ((__OC_AT((((fx)->effects)), (__OC_ADD(__OC_MUL(slot, 16), pi))) < eff)) {
     __OC_AT((((fx)->effects)), (__OC_ADD(__OC_MUL(slot, 16), pi))) = eff;
     changed = true;
+    }
+    if (allocs) {
+    if ((!__OC_AT((((fx)->borrows)), (__OC_ADD(__OC_MUL(slot, 16), pi))))) {
+    __OC_AT((((fx)->borrows)), (__OC_ADD(__OC_MUL(slot, 16), pi))) = true;
+    changed = true;
+    }
     }
     }
     }
@@ -2258,10 +2296,10 @@ bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
     ai = __OC_ADD(ai, 1);
     }
     }
-    if (fx_scan(fx, slot, params, ((cur)->left))) {
+    if (fx_scan(fx, slot, params, ret_ptr, ((cur)->left))) {
     changed = true;
     }
-    if (fx_scan(fx, slot, params, ((cur)->right))) {
+    if (fx_scan(fx, slot, params, ret_ptr, ((cur)->right))) {
     changed = true;
     }
     cur = ((cur)->next);
@@ -2269,24 +2307,27 @@ bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, AstNode* n) {
     return changed;
 }
 
-oc_string get_arena_source(AstNode* expr) {
+oc_string get_arena_source(FnEffects* fx, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_CALL)) {
-    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("arena_alloc"), .len = sizeof("arena_alloc") - 1 })) {
-    if ((((expr)->left) != ((AstNode*)(0)))) {
-    oc_string u = get_underlying_address_of(((expr)->left));
-    if ((((u).len) > 0)) {
-    return u;
+    AstNode* arg = ((expr)->left);
+    size_t ai = 0;
+    while ((arg != ((AstNode*)(0)))) {
+    if (fx_param_borrows(fx, ((((expr)->tok)).slice), ai)) {
+    oc_string name = get_arena_arg_name(arg);
+    if ((((name).len) > 0)) {
+    return name;
     }
-    return get_ident_name(((expr)->left));
     }
+    arg = ((arg)->next);
+    ai = __OC_ADD(ai, 1);
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_CAST)) {
-    return get_arena_source(((expr)->left));
+    return get_arena_source(fx, ((expr)->left));
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
@@ -2295,7 +2336,7 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
-    oc_string direct = get_arena_source(expr);
+    oc_string direct = get_arena_source(((v)->fx), expr);
     if ((((direct).len) > 0)) {
     return direct;
     }
@@ -2756,6 +2797,39 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return true;
 }
 
+void validator_save_invalidated(Validator* v, bool* out) {
+    size_t i = 0;
+    while ((i < ((v)->vars_count))) {
+    __OC_AT((out), (i)) = ((__OC_AT((((v)->vars)), (i))).is_invalidated);
+    i = __OC_ADD(i, 1);
+    }
+}
+
+void validator_restore_invalidated(Validator* v, bool* saved) {
+    size_t i = 0;
+    while ((i < ((v)->vars_count))) {
+    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = __OC_AT((saved), (i));
+    i = __OC_ADD(i, 1);
+    }
+}
+
+bool block_always_returns(AstNode* block) {
+    if ((block == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((block)->tag) != NODE_BLOCK)) {
+    return false;
+    }
+    AstNode* last = ((block)->left);
+    if ((last == ((AstNode*)(0)))) {
+    return false;
+    }
+    while ((((last)->next) != ((AstNode*)(0)))) {
+    last = ((last)->next);
+    }
+    return (((last)->tag) == NODE_RETURN);
+}
+
 bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((stmt == ((AstNode*)(0)))) {
     return true;
@@ -2925,8 +2999,10 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((t_idx >= 0)) {
     int32_t a_idx = validator_find_var(v, rhs_arena);
     uint32_t arena_depth = ((v)->scope_depth);
+    bool arena_is_local = true;
     if ((a_idx >= 0)) {
     arena_depth = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth);
+    arena_is_local = ((__OC_AT((((v)->vars)), (({ __auto_type _v = (a_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local);
     }
     bool cross_escape = false;
     if ((((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).scope_depth) < arena_depth)) {
@@ -2934,7 +3010,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     else {
     if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (t_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_stack_local))) {
-    cross_escape = true;
+    cross_escape = arena_is_local;
     }
     }
     if (cross_escape) {
@@ -3072,13 +3148,27 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
+    bool saved[512] = {0};
+    bool* saved_ptr = ((bool*)((&(saved))));
+    size_t saved_deinit = ((v)->deinit_count);
+    validator_save_invalidated(v, saved_ptr);
     if ((!validate_stmt(v, ((stmt)->right)))) {
     return false;
     }
+    if (block_always_returns(((stmt)->right))) {
+    validator_restore_invalidated(v, saved_ptr);
+    ((v)->deinit_count) = saved_deinit;
+    }
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->next) != ((AstNode*)(0)))) {
+    size_t else_deinit = ((v)->deinit_count);
+    validator_save_invalidated(v, saved_ptr);
     if ((!validate_stmt(v, ((((stmt)->right))->next)))) {
     return false;
+    }
+    if (block_always_returns(((((stmt)->right))->next))) {
+    validator_restore_invalidated(v, saved_ptr);
+    ((v)->deinit_count) = else_deinit;
     }
     }
     }
@@ -3159,7 +3249,7 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program) {
 }
 
 bool validate_program(AstNode* root) {
-    FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .count = 0 };
+    FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .borrows = { false }, .count = 0 };
     AstNode* decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
@@ -3181,7 +3271,11 @@ bool validate_program(AstNode* root) {
     if ((((decl)->tag) == NODE_FN)) {
     if ((((decl)->right) != ((AstNode*)(0)))) {
     if ((slot < 256)) {
-    if (fx_scan((&(fx)), slot, ((decl)->left), ((decl)->right))) {
+    bool ret_ptr = (((((decl)->type_name)).len) > 0);
+    if (is_scalar_value_type(((decl)->type_name))) {
+    ret_ptr = false;
+    }
+    if (fx_scan((&(fx)), slot, ((decl)->left), ret_ptr, ((decl)->right))) {
     changed = true;
     }
     }
