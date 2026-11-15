@@ -363,8 +363,37 @@ fn remove_private_tmp_dir(arena: *mut Arena, dir: string) {
     sys_rmdir(cstr_path(dir, (&mut pbuf).as(*mut u8)));
 }
 
+// Cheap textual test for floating point in a program: the type names f32 / f64, or a literal
+// such as 1.5 or 1e-3. A false positive (in a comment, say) only loads the formatter unused.
+fn source_uses_floats(src: string) -> bool {
+    let mut i: usize = 0;
+    while i + 2 < src.len {
+        let c: u8 = src[i];
+        if c == 102 { // 'f'
+            if src[i + 1] == 54 {
+                if src[i + 2] == 52 { return true; } // f64
+            }
+            if src[i + 1] == 51 {
+                if src[i + 2] == 50 { return true; } // f32
+            }
+        }
+        if is_digit(c) {
+            if src[i + 1] == 46 {
+                if is_digit(src[i + 2]) { return true; } // 1.5
+            }
+            if (src[i + 1] | 32) == 101 {
+                if is_digit(src[i + 2]) { return true; } // 1e5
+                if src[i + 2] == 45 { return true; }     // 1e-5
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
 fn print_usage() {
-    print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]");
+    print("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)");
     print("       occ install | update | version | help   (also: --version, -v, --help, -h)");
     print("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
     print("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
@@ -519,6 +548,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let mut opt_flag: string = "";
     let mut is_run: bool = false;
     let mut is_native: bool = false;
+    let mut fp_trap: bool = false;
     let mut target_name: string = "";
     let mut target_explicit: bool = false;
 
@@ -584,6 +614,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
             opt_flag = " -O2";
         } else if str_eq(arg, "-O3") {
             opt_flag = " -O3";
+        } else if str_eq(arg, "--fp-trap") {
+            fp_trap = true;
         } else if str_eq(arg, "--help") {
             print_usage();
             return 0;
@@ -710,6 +742,17 @@ fn main(argc: i32, argv: **u8) -> i32 {
         return 1;
     }
 
+    // Programs that use floating point get the float formatter (print of f32 / f64).
+    if source_uses_floats(buf_to_string(&mut combined_buf)) {
+        let fmt_ok: bool = load_module_recursive("std/sys/float.oc", "", std_root, &mut combined_buf, &mut loader, &mut arena);
+        if !fmt_ok {
+            print("error: the float formatter std/sys/float.oc was not found; set OC_HOME to the directory that contains std/");
+            buf_deinit(&mut combined_buf);
+            arena_deinit(&mut arena);
+            return 1;
+        }
+    }
+
     // Native Windows images get their sys_* runtime from oC source (KERNEL32 instead of syscalls).
     if is_native {
         if out_target == OC_TARGET_WINDOWS_X86_64 {
@@ -766,9 +809,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if is_native {
         let mut ok_native: bool = false;
         if out_target == OC_TARGET_WINDOWS_X86_64 {
-            ok_native = emit_native_pe(prog, out_file_str);
+            ok_native = emit_native_pe(prog, out_file_str, fp_trap);
         } else {
-            ok_native = emit_native_elf(prog, out_file_str);
+            ok_native = emit_native_elf(prog, out_file_str, fp_trap);
         }
         buf_deinit(&mut combined_buf);
         if !ok_native {
@@ -779,6 +822,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
         }
     } else {
         let mut out: CodeBuffer = buf_init(4194304);
+        out.fp_trap = fp_trap;
         codegen_program(prog, &mut out);
         buf_deinit(&mut combined_buf);
 
@@ -801,6 +845,11 @@ fn main(argc: i32, argv: **u8) -> i32 {
         let mut cmd_buf: CodeBuffer = buf_init(512);
         buf_append(&mut cmd_buf, cc_cmd);
         buf_append(&mut cmd_buf, opt_flag);
+        // No fused multiply-add: a*b+c must round twice, as on the native backend, so float
+        // results are bit-identical everywhere (matters on targets with FMA, e.g. arm64).
+        // -fno-math-errno lets __builtin_sqrt become the square-root instruction alone, so
+        // generated programs never need libm.
+        buf_append(&mut cmd_buf, " -ffp-contract=off -fno-math-errno");
         if out_target == OC_TARGET_WINDOWS_X86_64 {
             // MinGW ld stamps the link time into the PE header; without it identical input
             // gives a byte-identical .exe (reproducible builds, stage2 == stage3 by plain hash).

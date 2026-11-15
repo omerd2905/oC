@@ -1,0 +1,5 @@
+fn main() {
+    let zero: f64 = 0.0;
+    let nan: f64 = zero / zero;
+    print(nan.as(i32)); // NaN has no integer value: must trap (undefined behaviour in C)
+}

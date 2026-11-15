@@ -476,6 +476,30 @@ Slice: sub | Length: 14</code></pre>
         </div>
       </section>
 
+      <!-- Section 3b: Floating point -->
+      <section id="floats">
+        <h2>Floating Point: <code>f32</code> and <code>f64</code></h2>
+        <p>
+          <code>f32</code> and <code>f64</code> are IEEE 754 single and double precision. Literals have a fraction, an exponent or both (<code>1.5</code>, <code>1e-3</code>, <code>2.0e10</code>) and are <code>f64</code>; they convert to <code>f32</code> where one is expected. An integer converts to a float implicitly, and mixing <code>f32</code> with <code>f64</code> computes in <code>f64</code>.
+        </p>
+        <ul>
+          <li><strong>Arithmetic does not trap.</strong> <code>+ - * /</code> follow IEEE 754: overflow gives <code>inf</code>, and <code>0.0 / 0.0</code> gives <code>NaN</code>. This is the one place oC arithmetic does not panic. Build with <code>--fp-trap</code> to panic at the first operation whose result is NaN or infinite.</li>
+          <li><strong>Floats cannot break memory safety.</strong> The only way from a float to an integer is <code>.as(T)</code>, which truncates toward zero and panics for NaN, infinity and any value outside the range of <code>T</code> (undefined behaviour in C). A float is never converted to an integer implicitly: assigning, passing, returning or indexing with one is a compile error.</li>
+          <li><strong>No <code>==</code> or <code>!=</code> on floats.</strong> Rounding makes exact equality unreliable (<code>0.1 + 0.2</code> is not <code>0.3</code>), so it is a compile error. Use <code>&lt; &lt;= &gt; &gt;=</code>; a comparison with NaN is false. <code>% &amp; | ^ &lt;&lt; &gt;&gt;</code> are integer-only.</li>
+          <li><strong><code>print</code></strong> writes six digits after the point (<code>3.750000</code>), switches to scientific notation below 1e-4 and from 1e15 (<code>1.234568e+17</code>), and writes <code>NaN</code>, <code>inf</code> and <code>-inf</code>. The text is identical on both backends.</li>
+          <li><strong><code>sqrt_f64(x)</code></strong> is built in and compiles to the processor's square-root instruction.</li>
+        </ul>
+        <pre><code>fn mean(a: f64, b: f64) -&gt; f64 { return (a + b) / 2; }
+
+fn main() {
+    let ratio: f64 = mean(1.5, 4.0);
+    print(ratio);              // 2.750000
+    print(ratio.as(i32));      // 2
+    print(sqrt_f64(2.0));      // 1.414214
+    print(1.0e300 * 1.0e10);   // inf
+}</code></pre>
+      </section>
+
       <!-- Section 4: Variable Declarations & Scope Rules -->
       <section id="declarations">
         <h2>4. Variable Declarations &amp; Scope Rules</h2>

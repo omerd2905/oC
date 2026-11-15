@@ -88,6 +88,8 @@ static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; 
 #else
 static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink("/proc/self/exe", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }
 #endif
+static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }
+static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }
 static inline void sys_exit(int32_t code) { _exit(code); }
 #if defined(_WIN32)
 static inline int32_t sys_host_target(void) { return 2; }
@@ -140,6 +142,8 @@ static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {
     return (oc_string){ .ptr = s.ptr + start, .len = end - start };
 }
 
+#define __OC_FCHK(x) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, "panic: floating-point result is NaN or infinite\n"); exit(1); } _r; })
+
 #define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })
 
 static inline uint8_t __oc_index_str(oc_string s, size_t idx) {
@@ -187,6 +191,7 @@ static const uint32_t TOK_EOF = 0;
 static const uint32_t TOK_IDENT = 1;
 static const uint32_t TOK_INT = 2;
 static const uint32_t TOK_STRING = 3;
+static const uint32_t TOK_FLOAT = 4;
 static const uint32_t TOK_FN = 10;
 static const uint32_t TOK_LET = 11;
 static const uint32_t TOK_MUT = 12;
@@ -262,6 +267,7 @@ static const uint32_t NODE_STRUCT_INIT = 23;
 static const uint32_t NODE_ARRAY_INIT = 24;
 static const uint32_t NODE_STRUCT_DECL = 25;
 static const uint32_t NODE_UNARY = 26;
+static const uint32_t NODE_FLOAT = 29;
 static const uint32_t NODE_BREAK = 27;
 static const uint32_t NODE_CONTINUE = 28;
 static const size_t NG_IMP_EXIT_PROCESS = 0;
@@ -341,6 +347,7 @@ struct FnEffects {
 struct Validator {
     FnEffects* fx;
     AstNode* program;
+    oc_string ret_type;
     VarInfo vars[512];
     size_t vars_count;
     oc_string deinit_arenas[128];
@@ -369,6 +376,10 @@ struct CodeBuffer {
     oc_string var_names[512];
     oc_string var_types[512];
     size_t var_types_len;
+    oc_string flt_names[256];
+    oc_string flt_types[256];
+    size_t flt_count;
+    bool fp_trap;
 };
 
 struct NativeGen {
@@ -402,6 +413,10 @@ struct NativeGen {
     oc_string field_types[256];
     bool field_packed[256];
     size_t field_count;
+    AstNode* root;
+    bool fp_trap;
+    oc_string cur_ret;
+    oc_string const_types[128];
     oc_string const_names[128];
     uint64_t const_vals[128];
     size_t const_count;
@@ -489,6 +504,13 @@ oc_string get_arena_source(FnEffects* fx, AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
 oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name);
 oc_string validator_stack_place_type(Validator* v, AstNode* expr);
+bool is_float_type_name(oc_string t);
+bool is_int_type_name(oc_string t);
+oc_string strip_ptr_type(oc_string t);
+AstNode* validator_find_fn(Validator* v, oc_string name);
+oc_string validator_expr_type(Validator* v, AstNode* expr);
+bool validator_is_float(Validator* v, AstNode* expr);
+bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
@@ -510,6 +532,14 @@ bool is_type_ptr(oc_string t);
 bool is_type_str(oc_string t);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
 bool is_expr_pointer(AstNode* expr, CodeBuffer* out);
+bool is_float_type(oc_string t);
+void cg_flt_add(CodeBuffer* out, oc_string name, oc_string t);
+oc_string cg_flt_lookup(CodeBuffer* out, oc_string name);
+oc_string cg_elem_type(oc_string t);
+oc_string cg_var_type(CodeBuffer* out, oc_string name);
+oc_string cg_float_type(AstNode* expr, CodeBuffer* out);
+oc_string float_cast_lo(oc_string t);
+oc_string float_cast_hi(oc_string t);
 oc_string wrapping_op(oc_string fn_name);
 void codegen_expr(AstNode* expr, CodeBuffer* out);
 bool is_comparison_tok(uint32_t tag);
@@ -554,6 +584,7 @@ oc_string ng_parse_array_elem(oc_string t);
 int32_t ng_type_stride(oc_string t);
 bool ng_is_byte_type(oc_string t);
 bool is_unsigned_type_name(oc_string t);
+oc_string ng_float_result_type(oc_string lt, oc_string rt);
 int32_t ng_int_class(oc_string t);
 oc_string ng_expr_type(NativeGen* ng, AstNode* expr);
 bool ng_is_unsigned_expr(NativeGen* ng, AstNode* expr);
@@ -575,7 +606,20 @@ int32_t ng_value_words(NativeGen* ng, oc_string t);
 bool ng_emit_load_struct_at_rax(NativeGen* ng, CodeBuffer* code, oc_string s_name);
 void ng_emit_truncate(CodeBuffer* code, oc_string t);
 void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width);
+uint64_t ng_literal_bits(NativeGen* ng, oc_string text, bool single);
+void ng_emit_rax_to_xmm0(CodeBuffer* code, bool wide);
+void ng_emit_rbx_to_xmm1(CodeBuffer* code, bool wide);
+void ng_emit_xmm0_to_rax(CodeBuffer* code, bool wide);
+uint8_t ng_sse_prefix(bool wide);
+void ng_emit_convert(NativeGen* ng, CodeBuffer* code, oc_string from_t, oc_string to_t);
+uint64_t ng_float_cast_lo(oc_string t);
+uint64_t ng_float_cast_hi(oc_string t);
+void ng_emit_xmm1_const(CodeBuffer* code, uint64_t bits);
+void ng_emit_float_to_int(NativeGen* ng, CodeBuffer* code, oc_string src, oc_string dst);
+void ng_emit_fp_check(NativeGen* ng, CodeBuffer* code, bool wide);
+oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
+void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_print_lit(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string raw);
@@ -589,9 +633,9 @@ size_t pe_align(size_t v, size_t a);
 void pe_append_zeros(CodeBuffer* buf, size_t n);
 void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size_t rva, size_t raw_size, size_t raw_off, uint32_t flags);
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
-bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target);
-bool emit_native_elf(AstNode* root, oc_string out_file_str);
-bool emit_native_pe(AstNode* root, oc_string out_file_str);
+bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap);
+bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap);
+bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap);
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
 oc_string cstr_to_string(uint8_t* cstr);
 bool is_safe_path(oc_string s, bool allow_backslash);
@@ -608,6 +652,7 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
 oc_string env_str(oc_string name);
 oc_string make_private_tmp_dir(Arena* arena, bool allow_backslash);
 void remove_private_tmp_dir(Arena* arena, oc_string dir);
+bool source_uses_floats(oc_string src);
 void print_usage(void);
 int32_t run_sys_cmd(oc_string cmd);
 oc_string exe_path(Arena* arena, oc_string argv0);
@@ -615,6 +660,10 @@ int32_t handle_update(int32_t host, oc_string repo);
 int32_t handle_install(int32_t host, oc_string exe, oc_string exe_dir);
 int32_t handle_self_cmd(bool is_install, oc_string argv0);
 int main(int argc, char** argv);
+size_t fmt_put_u64(uint8_t* buf, size_t n, uint64_t v);
+size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v);
+void fmt_print_f64(double x);
+size_t fmt_put_sci(uint8_t* buf, size_t n, double v);
 
 int32_t read_int(void) {
     uint8_t buf[32] = {0};
@@ -1049,8 +1098,55 @@ Token lexer_next(Lexer* lex) {
     }
     }
     }
+    bool is_float = false;
+    if ((__OC_ADD(((lex)->index), 1) < ((((lex)->source)).len))) {
+    if ((__oc_index_str(((lex)->source), ((lex)->index)) == 46)) {
+    if (is_digit(__oc_index_str(((lex)->source), __OC_ADD(((lex)->index), 1)))) {
+    is_float = true;
+    ((lex)->index) = __OC_ADD(((lex)->index), 1);
+    ((lex)->col) = __OC_ADD(((lex)->col), 1);
+    while ((((lex)->index) < ((((lex)->source)).len))) {
+    if ((!is_digit(__oc_index_str(((lex)->source), ((lex)->index))))) {
+    break;
+    }
+    ((lex)->index) = __OC_ADD(((lex)->index), 1);
+    ((lex)->col) = __OC_ADD(((lex)->col), 1);
+    }
+    }
+    }
+    }
+    if ((__OC_ADD(((lex)->index), 1) < ((((lex)->source)).len))) {
+    if (((__oc_index_str(((lex)->source), ((lex)->index)) | 32) == 101)) {
+    size_t exp_at = __OC_ADD(((lex)->index), 1);
+    uint8_t sign = __oc_index_str(((lex)->source), exp_at);
+    if ((sign == 43)) {
+    exp_at = __OC_ADD(exp_at, 1);
+    }
+    if ((sign == 45)) {
+    exp_at = __OC_ADD(exp_at, 1);
+    }
+    if ((exp_at < ((((lex)->source)).len))) {
+    if (is_digit(__oc_index_str(((lex)->source), exp_at))) {
+    is_float = true;
+    ((lex)->col) = __OC_ADD(((lex)->col), ({ __auto_type _v = (__OC_SUB(exp_at, ((lex)->index))); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    ((lex)->index) = exp_at;
+    while ((((lex)->index) < ((((lex)->source)).len))) {
+    if ((!is_digit(__oc_index_str(((lex)->source), ((lex)->index))))) {
+    break;
+    }
+    ((lex)->index) = __OC_ADD(((lex)->index), 1);
+    ((lex)->col) = __OC_ADD(((lex)->col), 1);
+    }
+    }
+    }
+    }
+    }
     oc_string slice = __oc_slice_str(((lex)->source), start_idx, ((lex)->index));
-    return (Token){ .tag = TOK_INT, .slice = slice, .line = tok_line, .col = tok_col };
+    uint32_t num_tag = TOK_INT;
+    if (is_float) {
+    num_tag = TOK_FLOAT;
+    }
+    return (Token){ .tag = num_tag, .slice = slice, .line = tok_line, .col = tok_col };
     }
     if ((c == 34)) {
     ((lex)->index) = __OC_ADD(((lex)->index), 1);
@@ -1417,6 +1513,10 @@ AstNode* parse_primary(Parser* p) {
     if ((((tok).tag) == TOK_STRING)) {
     parser_advance(p);
     return ast_alloc_node(((p)->arena), NODE_STRING, tok);
+    }
+    if ((((tok).tag) == TOK_FLOAT)) {
+    parser_advance(p);
+    return ast_alloc_node(((p)->arena), NODE_FLOAT, tok);
     }
     if ((((tok).tag) == TOK_TRUE)) {
     parser_advance(p);
@@ -2482,6 +2582,195 @@ oc_string validator_stack_place_type(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
+bool is_float_type_name(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return true;
+    }
+    return str_eq(t, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 });
+}
+
+bool is_int_type_name(oc_string t) {
+    if ((!is_scalar_value_type(t))) {
+    return false;
+    }
+    return (!str_eq(t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 }));
+}
+
+oc_string strip_ptr_type(oc_string t) {
+    if ((((t).len) < 2)) {
+    return t;
+    }
+    bool is_ptr = (__oc_index_str(t, 0) == 42);
+    if ((__oc_index_str(t, 0) == 38)) {
+    is_ptr = true;
+    }
+    if ((!is_ptr)) {
+    return t;
+    }
+    if ((((t).len) > 5)) {
+    if (str_eq(__oc_slice_str(t, 1, 5), (oc_string){ .ptr = (const uint8_t*)("mut "), .len = sizeof("mut ") - 1 })) {
+    return __oc_slice_str(t, 5, ((t).len));
+    }
+    }
+    return __oc_slice_str(t, 1, ((t).len));
+}
+
+AstNode* validator_find_fn(Validator* v, oc_string name) {
+    AstNode* decl = ((((v)->program))->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_FN)) {
+    if (str_eq(((((decl)->tok)).slice), name)) {
+    return decl;
+    }
+    }
+    decl = ((decl)->next);
+    }
+    return ((AstNode*)(0));
+}
+
+oc_string validator_expr_type(Validator* v, AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    if ((((expr)->tag) == NODE_BOOL)) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    if ((((expr)->tag) == NODE_STRING)) {
+    return (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 };
+    }
+    if ((((expr)->tag) == NODE_CAST)) {
+    return ((expr)->type_name);
+    }
+    if ((((expr)->tag) == NODE_STRUCT_INIT)) {
+    return ((((expr)->tok)).slice);
+    }
+    if ((((expr)->tag) == NODE_IDENT)) {
+    int32_t idx = validator_find_var(v, ((((expr)->tok)).slice));
+    if ((idx >= 0)) {
+    return ((__OC_AT((((v)->vars)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).type_name);
+    }
+    AstNode* decl = ((((v)->program))->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_LET)) {
+    if (str_eq(((((decl)->tok)).slice), ((((expr)->tok)).slice))) {
+    return ((decl)->type_name);
+    }
+    }
+    decl = ((decl)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    AstNode* callee = validator_find_fn(v, ((((expr)->tok)).slice));
+    if ((callee == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return ((callee)->type_name);
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_BANG)) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    return validator_expr_type(v, ((expr)->left));
+    }
+    if ((((expr)->tag) == NODE_DEREF)) {
+    return strip_ptr_type(validator_expr_type(v, ((expr)->left)));
+    }
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    return validator_field_type(v, strip_ptr_type(validator_expr_type(v, ((expr)->left))), ((((expr)->tok)).slice));
+    }
+    if ((((expr)->tag) == NODE_INDEX)) {
+    oc_string base = validator_expr_type(v, ((expr)->left));
+    if (str_eq(base, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 };
+    }
+    if (starts_with(base, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 })) {
+    size_t close = 1;
+    while ((close < ((base).len))) {
+    if ((__oc_index_str(base, close) == 93)) {
+    break;
+    }
+    close = __OC_ADD(close, 1);
+    }
+    if ((__OC_ADD(close, 1) >= ((base).len))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return __oc_slice_str(base, __OC_ADD(close, 1), ((base).len));
+    }
+    if (starts_with(base, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    return strip_ptr_type(base);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_BINARY)) {
+    uint32_t op = ((((expr)->tok)).tag);
+    bool is_cmp = (op == TOK_EQEQ);
+    if ((op == TOK_NEQ)) {
+    is_cmp = true;
+    }
+    if ((op == TOK_LT)) {
+    is_cmp = true;
+    }
+    if ((op == TOK_LTE)) {
+    is_cmp = true;
+    }
+    if ((op == TOK_GT)) {
+    is_cmp = true;
+    }
+    if ((op == TOK_GTE)) {
+    is_cmp = true;
+    }
+    if (is_cmp) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    oc_string lt = validator_expr_type(v, ((expr)->left));
+    oc_string rt = validator_expr_type(v, ((expr)->right));
+    if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return lt;
+    }
+    if (str_eq(rt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return rt;
+    }
+    if (is_float_type_name(lt)) {
+    return lt;
+    }
+    if (is_float_type_name(rt)) {
+    return rt;
+    }
+    if ((((lt).len) > 0)) {
+    return lt;
+    }
+    return rt;
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool validator_is_float(Validator* v, AstNode* expr) {
+    return is_float_type_name(validator_expr_type(v, expr));
+}
+
+bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place) {
+    if ((!is_int_type_name(target))) {
+    return true;
+    }
+    if ((!validator_is_float(v, value))) {
+    return true;
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: implicit conversion from float to integer in "), .len = sizeof("error: implicit conversion from float to integer in ") - 1 });
+    print_str_raw(place);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("; write .as("), .len = sizeof("; write .as(") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("), which checks that the value fits\n"), .len = sizeof("), which checks that the value fits\n") - 1 });
+    ((v)->has_error) = true;
+    return false;
+}
+
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -2726,6 +3015,21 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     }
     a = ((a)->next);
     }
+    AstNode* callee = validator_find_fn(v, ((((expr)->tok)).slice));
+    if ((callee != ((AstNode*)(0)))) {
+    AstNode* prm = ((callee)->left);
+    AstNode* arg_v = ((expr)->left);
+    while ((prm != ((AstNode*)(0)))) {
+    if ((arg_v == ((AstNode*)(0)))) {
+    break;
+    }
+    if ((!validator_check_no_float_to_int(v, ((prm)->type_name), arg_v, (oc_string){ .ptr = (const uint8_t*)("a function argument"), .len = sizeof("a function argument") - 1 }))) {
+    return false;
+    }
+    prm = ((prm)->next);
+    arg_v = ((arg_v)->next);
+    }
+    }
     AstNode* ea = ((expr)->left);
     size_t ei = 0;
     while ((ea != ((AstNode*)(0)))) {
@@ -2786,9 +3090,50 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if ((!check_expr_use(v, ((expr)->left)))) {
     return false;
     }
+    if (validator_is_float(v, ((expr)->right))) {
+    printf("%s\n", "error: an index must be an integer; convert the float with .as(usize)");
+    ((v)->has_error) = true;
+    return false;
+    }
     return check_expr_use(v, ((expr)->right));
     }
     if ((((expr)->tag) == NODE_BINARY)) {
+    bool float_operand = validator_is_float(v, ((expr)->left));
+    if (validator_is_float(v, ((expr)->right))) {
+    float_operand = true;
+    }
+    if (float_operand) {
+    bool is_equality = (((((expr)->tok)).tag) == TOK_EQEQ);
+    if ((((((expr)->tok)).tag) == TOK_NEQ)) {
+    is_equality = true;
+    }
+    if (is_equality) {
+    printf("%s\n", "error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN");
+    ((v)->has_error) = true;
+    return false;
+    }
+    bool int_only = (((((expr)->tok)).tag) == TOK_PERCENT);
+    if ((((((expr)->tok)).tag) == TOK_AMP)) {
+    int_only = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_PIPE)) {
+    int_only = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_CARET)) {
+    int_only = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_SHL)) {
+    int_only = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_SHR)) {
+    int_only = true;
+    }
+    if (int_only) {
+    printf("%s\n", "error: the operators % & | ^ << >> are defined for integers only, not for floats");
+    ((v)->has_error) = true;
+    return false;
+    }
+    }
     if ((!check_expr_use(v, ((expr)->left)))) {
     return false;
     }
@@ -2890,7 +3235,13 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((((stmt)->left))->tag) == NODE_STRUCT_INIT)) {
     inferred_type = ((((((stmt)->left))->tok)).slice);
     }
+    if (validator_is_float(v, ((stmt)->left))) {
+    inferred_type = validator_expr_type(v, ((stmt)->left));
     }
+    }
+    }
+    if ((!validator_check_no_float_to_int(v, inferred_type, ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a variable initializer"), .len = sizeof("a variable initializer") - 1 }))) {
+    return false;
     }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
     if ((((((stmt)->left))->tag) == NODE_IDENT)) {
@@ -2974,6 +3325,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     if ((((stmt)->tag) == NODE_ASSIGN)) {
     if ((!check_expr_use(v, ((stmt)->right)))) {
+    return false;
+    }
+    if ((!validator_check_no_float_to_int(v, validator_expr_type(v, ((stmt)->left)), ((stmt)->right), (oc_string){ .ptr = (const uint8_t*)("an assignment"), .len = sizeof("an assignment") - 1 }))) {
     return false;
     }
     bool is_direct_ident = false;
@@ -3154,6 +3508,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
+    if ((!validator_check_no_float_to_int(v, ((v)->ret_type), ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a return value"), .len = sizeof("a return value") - 1 }))) {
+    return false;
+    }
     oc_string src_name = contains_stack_ref(v, ((stmt)->left));
     if ((((src_name).len) > 0)) {
     print_err_ret_local(src_name);
@@ -3246,7 +3603,7 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program) {
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .fx = fx, .program = program, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -3420,7 +3777,7 @@ AstNode* parse_program(Parser* p) {
 
 CodeBuffer buf_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, 3, 34, (-1), 0);
-    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0 };
+    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0, .flt_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_count = 0, .fp_trap = false };
 }
 
 void buf_append_u8(CodeBuffer* buf, uint8_t byte) {
@@ -3481,6 +3838,12 @@ oc_string to_c_type(oc_string type_name) {
     }
     if (str_eq(type_name, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    if (str_eq(type_name, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("double"), .len = sizeof("double") - 1 };
+    }
+    if (str_eq(type_name, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 };
     }
     if (str_eq(type_name, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("oc_string"), .len = sizeof("oc_string") - 1 };
@@ -3673,6 +4036,192 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     return false;
 }
 
+bool is_float_type(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return true;
+    }
+    return str_eq(t, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 });
+}
+
+void cg_flt_add(CodeBuffer* out, oc_string name, oc_string t) {
+    if ((!is_float_type(t))) {
+    return;
+    }
+    if ((((out)->flt_count) < 256)) {
+    __OC_AT((((out)->flt_names)), (((out)->flt_count))) = name;
+    __OC_AT((((out)->flt_types)), (((out)->flt_count))) = t;
+    ((out)->flt_count) = __OC_ADD(((out)->flt_count), 1);
+    }
+}
+
+oc_string cg_flt_lookup(CodeBuffer* out, oc_string name) {
+    size_t i = 0;
+    while ((i < ((out)->flt_count))) {
+    if (str_eq(__OC_AT((((out)->flt_names)), (i)), name)) {
+    return __OC_AT((((out)->flt_types)), (i));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string cg_elem_type(oc_string t) {
+    if ((((t).len) < 2)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((__oc_index_str(t, 0) == 91)) {
+    size_t close = 1;
+    while ((close < ((t).len))) {
+    if ((__oc_index_str(t, close) == 93)) {
+    break;
+    }
+    close = __OC_ADD(close, 1);
+    }
+    if ((__OC_ADD(close, 1) >= ((t).len))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return __oc_slice_str(t, __OC_ADD(close, 1), ((t).len));
+    }
+    if ((__oc_index_str(t, 0) == 42)) {
+    if ((((t).len) > 5)) {
+    if (str_eq(__oc_slice_str(t, 0, 5), (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 })) {
+    return __oc_slice_str(t, 5, ((t).len));
+    }
+    }
+    return __oc_slice_str(t, 1, ((t).len));
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string cg_float_type(AstNode* expr, CodeBuffer* out) {
+    if ((expr == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    if ((((expr)->tag) == NODE_CAST)) {
+    if (is_float_type(((expr)->type_name))) {
+    return ((expr)->type_name);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_IDENT)) {
+    oc_string vt = cg_var_type(out, ((((expr)->tok)).slice));
+    if ((((vt).len) > 0)) {
+    if (is_float_type(vt)) {
+    return vt;
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return cg_flt_lookup(out, ((((expr)->tok)).slice));
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    return cg_float_type(((expr)->left), out);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_BINARY)) {
+    oc_string lf = cg_float_type(((expr)->left), out);
+    oc_string rf = cg_float_type(((expr)->right), out);
+    if ((((((expr)->tok)).tag) == TOK_EQEQ)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->tok)).tag) == TOK_NEQ)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->tok)).tag) == TOK_LT)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->tok)).tag) == TOK_LTE)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->tok)).tag) == TOK_GT)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((((expr)->tok)).tag) == TOK_GTE)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (str_eq(lf, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return lf;
+    }
+    if (str_eq(rf, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return rf;
+    }
+    if ((((lf).len) > 0)) {
+    return lf;
+    }
+    return rf;
+    }
+    if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    return cg_flt_lookup(out, ((((expr)->tok)).slice));
+    }
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    return cg_flt_lookup(out, ((((expr)->tok)).slice));
+    }
+    bool via_elem = (((expr)->tag) == NODE_INDEX);
+    if ((((expr)->tag) == NODE_DEREF)) {
+    via_elem = true;
+    }
+    if (via_elem) {
+    if ((((expr)->left) != ((AstNode*)(0)))) {
+    if ((((((expr)->left))->tag) == NODE_IDENT)) {
+    oc_string et = cg_elem_type(cg_var_type(out, ((((((expr)->left))->tok)).slice)));
+    if (is_float_type(et)) {
+    return et;
+    }
+    }
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string float_cast_lo(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("-129.0"), .len = sizeof("-129.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("-32769.0"), .len = sizeof("-32769.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("-2147483649.0"), .len = sizeof("-2147483649.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("-9223372036854777856.0"), .len = sizeof("-9223372036854777856.0") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)("-1.0"), .len = sizeof("-1.0") - 1 };
+}
+
+oc_string float_cast_hi(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("128.0"), .len = sizeof("128.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("32768.0"), .len = sizeof("32768.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("2147483648.0"), .len = sizeof("2147483648.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("9223372036854775808.0"), .len = sizeof("9223372036854775808.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("256.0"), .len = sizeof("256.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("65536.0"), .len = sizeof("65536.0") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("4294967296.0"), .len = sizeof("4294967296.0") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)("18446744073709551616.0"), .len = sizeof("18446744073709551616.0") - 1 };
+}
+
 oc_string wrapping_op(oc_string fn_name) {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("add"), .len = sizeof("add") - 1 };
@@ -3727,6 +4276,10 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     return;
     }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    buf_append(out, ((((expr)->tok)).slice));
+    return;
+    }
     if ((((expr)->tag) == NODE_STRING)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(oc_string){ .ptr = (const uint8_t*)("), .len = sizeof("(oc_string){ .ptr = (const uint8_t*)(") - 1 });
     buf_append(out, ((((expr)->tok)).slice));
@@ -3747,6 +4300,14 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     bool is_literal = false;
     if ((((expr)->left) != ((AstNode*)(0)))) {
     is_literal = (((((expr)->left))->tag) == NODE_INT);
+    }
+    if ((((expr)->left) != ((AstNode*)(0)))) {
+    if ((((((expr)->left))->tag) == NODE_FLOAT)) {
+    is_literal = true;
+    }
+    }
+    if ((((cg_float_type(((expr)->left), out)).len) > 0)) {
+    is_literal = true;
     }
     if ((((((expr)->tok)).tag) == TOK_MINUS)) {
     if ((!is_literal)) {
@@ -3785,6 +4346,33 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     if ((((expr)->tag) == NODE_CAST)) {
     bool is_unsigned_num = false;
     bool is_signed_num = false;
+    bool from_float = (((cg_float_type(((expr)->left), out)).len) > 0);
+    if (is_float_type(((expr)->type_name))) {
+    from_float = false;
+    }
+    if (is_type_ptr(((expr)->type_name))) {
+    from_float = false;
+    }
+    if (str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    from_float = false;
+    }
+    if (from_float) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("({ double _f = (double)("), .len = sizeof("({ double _f = (double)(") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("); if (!(_f > "), .len = sizeof("); if (!(_f > ") - 1 });
+    buf_append(out, float_cast_lo(((expr)->type_name)));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" && _f < "), .len = sizeof(" && _f < ") - 1 });
+    buf_append(out, float_cast_hi(((expr)->type_name)));
+    if (str_eq(float_cast_lo(((expr)->type_name)), (oc_string){ .ptr = (const uint8_t*)("-1.0"), .len = sizeof("-1.0") - 1 })) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } (") - 1 });
+    }
+    else {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } (") - 1 });
+    }
+    emit_c_type(((expr)->type_name), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")_f; })"), .len = sizeof(")_f; })") - 1 });
+    return;
+    }
     if ((!is_type_ptr(((expr)->type_name)))) {
     if ((!is_expr_pointer(((expr)->left), out))) {
     if (str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
@@ -3992,6 +4580,18 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    if (((out)->fp_trap)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_FCHK("), .len = sizeof("__OC_FCHK(") - 1 });
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__builtin_sqrt((double)("), .len = sizeof("__builtin_sqrt((double)(") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("))"), .len = sizeof("))") - 1 });
+    if (((out)->fp_trap)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    }
+    return;
+    }
     oc_string w_op = wrapping_op(((((expr)->tok)).slice));
     if ((((w_op).len) > 0)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_WRAP("), .len = sizeof("__OC_WRAP(") - 1 });
@@ -4020,6 +4620,27 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_BINARY)) {
+    bool float_op = (((cg_float_type(((expr)->left), out)).len) > 0);
+    if ((((cg_float_type(((expr)->right), out)).len) > 0)) {
+    float_op = true;
+    }
+    if (float_op) {
+    bool checked = ((out)->fp_trap);
+    if (is_comparison_tok(((((expr)->tok)).tag))) {
+    checked = false;
+    }
+    if (checked) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_FCHK"), .len = sizeof("__OC_FCHK") - 1 });
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
+    codegen_expr(((expr)->left), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
+    buf_append(out, ((((expr)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
+    codegen_expr(((expr)->right), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    return;
+    }
     if ((((((expr)->tok)).tag) == TOK_SLASH)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_DIV("), .len = sizeof("__OC_DIV(") - 1 });
     codegen_expr(((expr)->left), out);
@@ -4160,6 +4781,13 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     }
     }
     }
+    oc_string print_ft = cg_float_type(arg, out);
+    if ((((print_ft).len) > 0)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    fmt_print_f64((double)("), .len = sizeof("    fmt_print_f64((double)(") - 1 });
+    codegen_expr(arg, out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("));\n"), .len = sizeof("));\n") - 1 });
+    return;
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    __oc_print("), .len = sizeof("    __oc_print(") - 1 });
     if (is_bool_expr(arg)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(bool)("), .len = sizeof("(bool)(") - 1 });
@@ -4192,8 +4820,12 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     if ((((stmt)->tag) == NODE_LET)) {
     if ((((out)->var_types_len) < 512)) {
+    oc_string let_type = ((stmt)->type_name);
+    if ((((let_type).len) == 0)) {
+    let_type = cg_float_type(((stmt)->left), out);
+    }
     __OC_AT((((out)->var_names)), (((out)->var_types_len))) = ((((stmt)->tok)).slice);
-    __OC_AT((((out)->var_types)), (((out)->var_types_len))) = ((stmt)->type_name);
+    __OC_AT((((out)->var_types)), (((out)->var_types_len))) = let_type;
     ((out)->var_types_len) = __OC_ADD(((out)->var_types_len), 1);
     }
     if (is_type_ptr(((stmt)->type_name))) {
@@ -4400,6 +5032,12 @@ bool is_builtin_c_fn(oc_string fn_name) {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_exe_path"), .len = sizeof("sys_exe_path") - 1 })) {
     return true;
     }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_f64_bits"), .len = sizeof("sys_f64_bits") - 1 })) {
+    return true;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_f32_bits"), .len = sizeof("sys_f32_bits") - 1 })) {
+    return true;
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("exit"), .len = sizeof("exit") - 1 })) {
     return true;
     }
@@ -4518,6 +5156,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n"), .len = sizeof("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n"), .len = sizeof("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\n"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n"), .len = sizeof("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n"), .len = sizeof("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n") - 1 });
@@ -4554,6 +5194,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite\\n\"); exit(1); } _r; })\n\n"), .len = sizeof("#define __OC_FCHK(x) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite\\n\"); exit(1); } _r; })\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
@@ -4582,6 +5223,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     if ((((scan_decl)->tag) == NODE_STRUCT_DECL)) {
     AstNode* sf = ((scan_decl)->left);
     while ((sf != ((AstNode*)(0)))) {
+    cg_flt_add(out, ((((sf)->tok)).slice), ((sf)->type_name));
     if (is_type_ptr(((sf)->type_name))) {
     if ((((out)->ptr_fields_count) < 256)) {
     __OC_AT((((out)->ptr_fields)), (((out)->ptr_fields_count))) = ((((sf)->tok)).slice);
@@ -4600,7 +5242,12 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     }
     }
     else {
+    if ((((scan_decl)->tag) == NODE_LET)) {
+    cg_flt_add(out, ((((scan_decl)->tok)).slice), ((scan_decl)->type_name));
+    }
+    else {
     if ((((scan_decl)->tag) == NODE_FN)) {
+    cg_flt_add(out, ((((scan_decl)->tok)).slice), ((scan_decl)->type_name));
     if (is_type_ptr(((scan_decl)->type_name))) {
     if ((((out)->ptr_fns_count) < 256)) {
     __OC_AT((((out)->ptr_fns)), (((out)->ptr_fns_count))) = ((((scan_decl)->tok)).slice);
@@ -4612,6 +5259,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     if ((((out)->str_fns_count) < 256)) {
     __OC_AT((((out)->str_fns)), (((out)->str_fns_count))) = ((((scan_decl)->tok)).slice);
     ((out)->str_fns_count) = __OC_ADD(((out)->str_fns_count), 1);
+    }
     }
     }
     }
@@ -5172,6 +5820,9 @@ int32_t ng_scalar_width(oc_string t) {
     if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
     return 4;
     }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    return 4;
+    }
     return 8;
 }
 
@@ -5330,6 +5981,22 @@ bool is_unsigned_type_name(oc_string t) {
     return false;
 }
 
+oc_string ng_float_result_type(oc_string lt, oc_string rt) {
+    if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return lt;
+    }
+    if (str_eq(rt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    return rt;
+    }
+    if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    return lt;
+    }
+    if (str_eq(rt, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    return rt;
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
 int32_t ng_int_class(oc_string t) {
     if ((((t).len) == 0)) {
     return 0;
@@ -5374,10 +6041,26 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     if ((((expr)->tag) == NODE_STRUCT_INIT)) {
     return ((((expr)->tok)).slice);
     }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
     if ((((expr)->tag) == NODE_IDENT)) {
+    if ((ng_find_var_idx(ng, ((((expr)->tok)).slice)) >= 0)) {
     return ng_find_var_type(ng, ((((expr)->tok)).slice));
     }
+    size_t ci = 0;
+    while ((ci < ((ng)->const_count))) {
+    if (str_eq(__OC_AT((((ng)->const_names)), (ci)), ((((expr)->tok)).slice))) {
+    return __OC_AT((((ng)->const_types)), (ci));
+    }
+    ci = __OC_ADD(ci, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
     if ((((wrapping_op(((((expr)->tok)).slice))).len) > 0)) {
     oc_string lt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     oc_string rt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -5473,6 +6156,10 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     }
     oc_string lt = ng_expr_type(ng, ((expr)->left));
     oc_string rt = ng_expr_type(ng, ((expr)->right));
+    oc_string float_t = ng_float_result_type(lt, rt);
+    if ((((float_t).len) > 0)) {
+    return float_t;
+    }
     bool is_shift = (((((expr)->tok)).tag) == TOK_SHL);
     if ((((((expr)->tok)).tag) == TOK_SHR)) {
     is_shift = true;
@@ -5958,6 +6645,303 @@ void ng_emit_store_at_rcx(CodeBuffer* code, int32_t width) {
     }
 }
 
+uint64_t ng_literal_bits(NativeGen* ng, oc_string text, bool single) {
+    uint8_t buf[64] = {0};
+    if ((((text).len) > 63)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: float literal longer than 63 characters"), .len = sizeof("native codegen error: float literal longer than 63 characters") - 1 });
+    return 0;
+    }
+    size_t i = 0;
+    while ((i < ((text).len))) {
+    __OC_AT((buf), (i)) = __oc_index_str(text, i);
+    i = __OC_ADD(i, 1);
+    }
+    uint64_t bits = 0;
+    if (single) {
+    bits = sys_f32_bits(((uint8_t*)((&(buf)))));
+    }
+    else {
+    bits = sys_f64_bits(((uint8_t*)((&(buf)))));
+    }
+    return bits;
+}
+
+void ng_emit_rax_to_xmm0(CodeBuffer* code, bool wide) {
+    buf_append_u8(code, 102);
+    if (wide) {
+    buf_append_u8(code, 72);
+    }
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 110);
+    buf_append_u8(code, 192);
+}
+
+void ng_emit_rbx_to_xmm1(CodeBuffer* code, bool wide) {
+    buf_append_u8(code, 102);
+    if (wide) {
+    buf_append_u8(code, 72);
+    }
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 110);
+    buf_append_u8(code, 203);
+}
+
+void ng_emit_xmm0_to_rax(CodeBuffer* code, bool wide) {
+    buf_append_u8(code, 102);
+    if (wide) {
+    buf_append_u8(code, 72);
+    }
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 126);
+    buf_append_u8(code, 192);
+}
+
+uint8_t ng_sse_prefix(bool wide) {
+    if (wide) {
+    return 242;
+    }
+    return 243;
+}
+
+void ng_emit_convert(NativeGen* ng, CodeBuffer* code, oc_string from_t, oc_string to_t) {
+    if ((!is_float_type(to_t))) {
+    return;
+    }
+    if (str_eq(from_t, to_t)) {
+    return;
+    }
+    bool wide = str_eq(to_t, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    if (is_float_type(from_t)) {
+    ng_emit_rax_to_xmm0(code, (!wide));
+    buf_append_u8(code, ng_sse_prefix((!wide)));
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 90);
+    buf_append_u8(code, 192);
+    ng_emit_xmm0_to_rax(code, wide);
+    return;
+    }
+    if ((ng_int_class(from_t) == 3)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 133);
+    buf_append_u8(code, 192);
+    buf_append_u8(code, 120);
+    buf_append_u8(code, 7);
+    buf_append_u8(code, ng_sse_prefix(wide));
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 42);
+    buf_append_u8(code, 192);
+    buf_append_u8(code, 235);
+    buf_append_u8(code, 21);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 193);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 209);
+    buf_append_u8(code, 232);
+    buf_append_u8(code, 131);
+    buf_append_u8(code, 225);
+    buf_append_u8(code, 1);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 9);
+    buf_append_u8(code, 200);
+    buf_append_u8(code, ng_sse_prefix(wide));
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 42);
+    buf_append_u8(code, 192);
+    buf_append_u8(code, ng_sse_prefix(wide));
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 88);
+    buf_append_u8(code, 192);
+    }
+    else {
+    buf_append_u8(code, ng_sse_prefix(wide));
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 42);
+    buf_append_u8(code, 192);
+    }
+    ng_emit_xmm0_to_rax(code, wide);
+}
+
+uint64_t ng_float_cast_lo(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return 13862114837418475520ULL;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return 13898108587504304128ULL;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return 13970166044105375744ULL;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 })) {
+    return 14114281232179134465ULL;
+    }
+    return 13830554455654793216ULL;
+}
+
+uint64_t ng_float_cast_hi(oc_string t) {
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return 4638707616191610880;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return 4674736413210574848;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return 4746794007248502784;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 })) {
+    return 4890909195324358656;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return 4643211215818981376;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    return 4679240012837945344;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    return 4751297606875873280;
+    }
+    return 4895412794951729152;
+}
+
+void ng_emit_xmm1_const(CodeBuffer* code, uint64_t bits) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 185);
+    elf_append_u64(code, bits);
+    buf_append_u8(code, 102);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 110);
+    buf_append_u8(code, 201);
+}
+
+void ng_emit_float_to_int(NativeGen* ng, CodeBuffer* code, oc_string src, oc_string dst) {
+    oc_string trap = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_signed"), .len = sizeof("__trap_cast_signed") - 1 };
+    if (is_unsigned_type_name(dst)) {
+    trap = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
+    }
+    if (str_eq(src, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    ng_emit_rax_to_xmm0(code, false);
+    buf_append_u8(code, 243);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 90);
+    buf_append_u8(code, 192);
+    }
+    else {
+    ng_emit_rax_to_xmm0(code, true);
+    }
+    ng_emit_xmm1_const(code, ng_float_cast_lo(dst));
+    buf_append_u8(code, 102);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 46);
+    buf_append_u8(code, 193);
+    ng_add_fixup(ng, ((code)->len), trap, true);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 134);
+    elf_append_u32(code, 0);
+    ng_emit_xmm1_const(code, ng_float_cast_hi(dst));
+    buf_append_u8(code, 102);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 46);
+    buf_append_u8(code, 200);
+    ng_add_fixup(ng, ((code)->len), trap, true);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 134);
+    elf_append_u32(code, 0);
+    if ((ng_int_class(dst) == 3)) {
+    ng_emit_xmm1_const(code, 4890909195324358656);
+    buf_append_u8(code, 102);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 46);
+    buf_append_u8(code, 193);
+    buf_append_u8(code, 114);
+    buf_append_u8(code, 16);
+    buf_append_u8(code, 242);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 92);
+    buf_append_u8(code, 193);
+    buf_append_u8(code, 242);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 44);
+    buf_append_u8(code, 192);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 186);
+    buf_append_u8(code, 232);
+    buf_append_u8(code, 63);
+    buf_append_u8(code, 235);
+    buf_append_u8(code, 5);
+    }
+    buf_append_u8(code, 242);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 44);
+    buf_append_u8(code, 192);
+}
+
+void ng_emit_fp_check(NativeGen* ng, CodeBuffer* code, bool wide) {
+    if ((!((ng)->fp_trap))) {
+    return;
+    }
+    if (wide) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 193);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 209);
+    buf_append_u8(code, 225);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 186);
+    elf_append_u64(code, 0xffe0000000000000);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 57);
+    buf_append_u8(code, 209);
+    }
+    else {
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 193);
+    buf_append_u8(code, 209);
+    buf_append_u8(code, 225);
+    buf_append_u8(code, 129);
+    buf_append_u8(code, 249);
+    elf_append_u32(code, 0xff000000);
+    }
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_fp"), .len = sizeof("__trap_fp") - 1 }, true);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 131);
+    elf_append_u32(code, 0);
+}
+
+oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx) {
+    AstNode* decl = ((((ng)->root))->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_FN)) {
+    if (str_eq(((((decl)->tok)).slice), fn_name)) {
+    AstNode* prm = ((decl)->left);
+    size_t i = 0;
+    while ((prm != ((AstNode*)(0)))) {
+    if ((i == idx)) {
+    return ((prm)->type_name);
+    }
+    prm = ((prm)->next);
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    decl = ((decl)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t) {
+    ng_emit_expr(ng, code, data, expr);
+    ng_emit_convert(ng, code, ng_expr_type(ng, expr), to_t);
+}
+
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return;
@@ -6081,6 +7065,12 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
     elf_append_u64(code, val);
+    return;
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 184);
+    elf_append_u64(code, ng_literal_bits(ng, ((((expr)->tok)).slice), false));
     return;
     }
     if ((((expr)->tag) == NODE_BOOL)) {
@@ -6209,7 +7199,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     int32_t f_w = ng_field_width(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
-    ng_emit_expr(ng, code, data, ((f)->left));
+    ng_emit_expr_as(ng, code, data, ((f)->left), ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
     int32_t f_words = ng_value_words(ng, ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
     if ((f_words > 1)) {
     if ((__OC_ADD(f_off, __OC_MUL(f_words, 8)) <= 32)) {
@@ -6293,6 +7283,33 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_emit_expr(ng, code, data, ((expr)->left));
     oc_string dst = ((expr)->type_name);
     oc_string src = ng_expr_type(ng, ((expr)->left));
+    if (is_float_type(dst)) {
+    ng_emit_convert(ng, code, src, dst);
+    return;
+    }
+    if (is_float_type(src)) {
+    bool int_dst = (ng_scalar_width(dst) < 8);
+    if ((ng_int_class(dst) >= 2)) {
+    int_dst = true;
+    }
+    if (str_eq(dst, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    int_dst = false;
+    }
+    if ((((dst).len) > 0)) {
+    if ((__oc_index_str(dst, 0) == 42)) {
+    int_dst = false;
+    }
+    if ((__oc_index_str(dst, 0) == 38)) {
+    int_dst = false;
+    }
+    }
+    if ((!int_dst)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a float can only be cast to an integer or float type"), .len = sizeof("native codegen error: a float can only be cast to an integer or float type") - 1 });
+    return;
+    }
+    ng_emit_float_to_int(ng, code, src, dst);
+    return;
+    }
     if ((((dst).len) > 0)) {
     if ((__oc_index_str(dst, 0) == 42)) {
     return;
@@ -6421,6 +7438,22 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     ng_emit_expr(ng, code, data, ((expr)->left));
     oc_string neg_t = ng_expr_type(ng, ((expr)->left));
+    if (is_float_type(neg_t)) {
+    if (str_eq(neg_t, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 186);
+    buf_append_u8(code, 248);
+    buf_append_u8(code, 63);
+    }
+    else {
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 186);
+    buf_append_u8(code, 248);
+    buf_append_u8(code, 31);
+    }
+    return;
+    }
     buf_append_u8(code, 72);
     buf_append_u8(code, 247);
     buf_append_u8(code, 216);
@@ -6637,6 +7670,84 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_BINARY)) {
+    oc_string float_t = ng_float_result_type(ng_expr_type(ng, ((expr)->left)), ng_expr_type(ng, ((expr)->right)));
+    if ((((float_t).len) > 0)) {
+    bool wide = str_eq(float_t, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    ng_emit_expr_as(ng, code, data, ((expr)->left), float_t);
+    buf_append_u8(code, 80);
+    ng_emit_expr_as(ng, code, data, ((expr)->right), float_t);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 195);
+    buf_append_u8(code, 88);
+    ng_emit_rax_to_xmm0(code, wide);
+    ng_emit_rbx_to_xmm1(code, wide);
+    uint32_t op = ((((expr)->tok)).tag);
+    uint8_t arith = 0;
+    if ((op == TOK_PLUS)) {
+    arith = 88;
+    }
+    if ((op == TOK_MINUS)) {
+    arith = 92;
+    }
+    if ((op == TOK_STAR)) {
+    arith = 89;
+    }
+    if ((op == TOK_SLASH)) {
+    arith = 94;
+    }
+    if ((arith != 0)) {
+    buf_append_u8(code, ng_sse_prefix(wide));
+    buf_append_u8(code, 15);
+    buf_append_u8(code, arith);
+    buf_append_u8(code, 193);
+    ng_emit_xmm0_to_rax(code, wide);
+    ng_emit_fp_check(ng, code, wide);
+    return;
+    }
+    bool swapped = (op == TOK_LT);
+    if ((op == TOK_LTE)) {
+    swapped = true;
+    }
+    bool strict = (op == TOK_LT);
+    if ((op == TOK_GT)) {
+    strict = true;
+    }
+    bool is_cmp = swapped;
+    if ((op == TOK_GT)) {
+    is_cmp = true;
+    }
+    if ((op == TOK_GTE)) {
+    is_cmp = true;
+    }
+    if ((!is_cmp)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: operator is not defined for floats (use + - * / and < <= > >=)"), .len = sizeof("native codegen error: operator is not defined for floats (use + - * / and < <= > >=)") - 1 });
+    return;
+    }
+    if (wide) {
+    buf_append_u8(code, 102);
+    }
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 46);
+    if (swapped) {
+    buf_append_u8(code, 200);
+    }
+    else {
+    buf_append_u8(code, 193);
+    }
+    buf_append_u8(code, 15);
+    if (strict) {
+    buf_append_u8(code, 151);
+    }
+    else {
+    buf_append_u8(code, 147);
+    }
+    buf_append_u8(code, 192);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 182);
+    buf_append_u8(code, 192);
+    return;
+    }
     bool is_uns = ng_binary_unsigned(ng, ((expr)->left), ((expr)->right));
     if ((((((expr)->tok)).tag) == TOK_SHR)) {
     is_uns = is_unsigned_type_name(ng_expr_type(ng, ((expr)->left)));
@@ -6899,6 +8010,17 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    ng_emit_expr_as(ng, code, data, ((expr)->left), (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    ng_emit_rax_to_xmm0(code, true);
+    buf_append_u8(code, 242);
+    buf_append_u8(code, 15);
+    buf_append_u8(code, 81);
+    buf_append_u8(code, 192);
+    ng_emit_xmm0_to_rax(code, true);
+    ng_emit_fp_check(ng, code, true);
+    return;
+    }
     oc_string w_op = wrapping_op(((((expr)->tok)).slice));
     if ((((w_op).len) > 0)) {
     size_t w_argc = 0;
@@ -6941,8 +8063,10 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     size_t reg_count = 0;
     AstNode* a = ((expr)->left);
+    size_t a_idx = 0;
     while ((a != ((AstNode*)(0)))) {
-    ng_emit_expr(ng, code, data, a);
+    ng_emit_expr_as(ng, code, data, a, ng_fn_param_type(ng, ((((expr)->tok)).slice), a_idx));
+    a_idx = __OC_ADD(a_idx, 1);
     int32_t a_sz = ng_find_struct_size(ng, ng_expr_type(ng, a));
     if (ng_is_expr_slice(ng, a)) {
     buf_append_u8(code, 80);
@@ -7313,7 +8437,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     AstNode* el = first_el;
     int32_t k = 0;
     while ((el != ((AstNode*)(0)))) {
-    ng_emit_expr(ng, code, data, el);
+    ng_emit_expr_as(ng, code, data, el, elem_t);
     int32_t el_off = __OC_ADD(base_off, __OC_MUL(k, stride));
     if ((stride == 1)) {
     buf_append_u8(code, 136);
@@ -7358,7 +8482,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
     oc_string f_type = ng_find_field_type(ng, t_name, ((((f)->tok)).slice));
-    ng_emit_expr(ng, code, data, ((f)->left));
+    ng_emit_expr_as(ng, code, data, ((f)->left), f_type);
     int32_t f_words = ng_value_words(ng, f_type);
     if ((f_words > 1)) {
     ng_emit_disp_store_rax(code, __OC_ADD(base_off, f_off));
@@ -7395,7 +8519,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     return;
     }
-    ng_emit_expr(ng, code, data, ((stmt)->left));
+    ng_emit_expr_as(ng, code, data, ((stmt)->left), t_name);
     ng_emit_range_check(ng, code, t_name, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     ((ng)->curr_off) = __OC_SUB(((ng)->curr_off), 8);
     int32_t off = ((ng)->curr_off);
@@ -7424,7 +8548,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     oc_string vt = ng_find_var_type(ng, ((((((stmt)->left))->tok)).slice));
     int32_t s_sz = ng_find_struct_size(ng, vt);
     int32_t off = ng_find_var_offset(ng, ((((((stmt)->left))->tok)).slice));
-    ng_emit_expr(ng, code, data, ((stmt)->right));
+    ng_emit_expr_as(ng, code, data, ((stmt)->right), vt);
     if ((s_sz > 0)) {
     ng_emit_disp_store_rax(code, off);
     if ((s_sz >= 16)) {
@@ -7446,7 +8570,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     return;
     }
     oc_string lhs_t = ng_expr_type(ng, ((stmt)->left));
-    ng_emit_expr(ng, code, data, ((stmt)->right));
+    ng_emit_expr_as(ng, code, data, ((stmt)->right), lhs_t);
     int32_t lhs_words = ng_value_words(ng, lhs_t);
     if ((lhs_words > 2)) {
     if ((lhs_words == 4)) {
@@ -7507,7 +8631,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     if ((((stmt)->tag) == NODE_RETURN)) {
     if ((((stmt)->left) != ((AstNode*)(0)))) {
-    ng_emit_expr(ng, code, data, ((stmt)->left));
+    ng_emit_expr_as(ng, code, data, ((stmt)->left), ((ng)->cur_ret));
     }
     else {
     buf_append_u8(code, 72);
@@ -7640,6 +8764,14 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     else {
     oc_string arg_t = ng_expr_type(ng, arg);
+    if (is_float_type(arg_t)) {
+    ng_emit_expr_as(ng, code, data, arg, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 199);
+    ng_emit_call(ng, code, (oc_string){ .ptr = (const uint8_t*)("fmt_print_f64"), .len = sizeof("fmt_print_f64") - 1 });
+    return;
+    }
     if (str_eq(arg_t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
     ng_emit_expr(ng, code, data, arg);
     buf_append_u8(code, 72);
@@ -8182,12 +9314,12 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     return ok;
 }
 
-bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
+bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap) {
     CodeBuffer code_buf = buf_init(262144);
     CodeBuffer data_buf = buf_init(65536);
     CodeBuffer* code = (&(code_buf));
     CodeBuffer* data = (&(data_buf));
-    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_packed = { false }, .field_count = 0, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
+    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_packed = { false }, .field_count = 0, .root = root, .fp_trap = fp_trap, .cur_ret = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .const_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
     NativeGen* ng = (&(ng_state));
     bool is_win = (target == OC_TARGET_WINDOWS_X86_64);
     AstNode* scan = ((root)->left);
@@ -8254,8 +9386,46 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     if ((((scan)->tag) == NODE_LET)) {
     if ((((scan)->left) != ((AstNode*)(0)))) {
     if ((((ng)->const_count) < 128)) {
+    AstNode* lit = ((scan)->left);
+    bool negative = false;
+    if ((((lit)->tag) == NODE_UNARY)) {
+    if ((((((lit)->tok)).tag) == TOK_MINUS)) {
+    if ((((lit)->left) != ((AstNode*)(0)))) {
+    negative = true;
+    lit = ((lit)->left);
+    }
+    }
+    }
+    oc_string c_type = ((scan)->type_name);
+    if ((((c_type).len) == 0)) {
+    if ((((lit)->tag) == NODE_FLOAT)) {
+    c_type = (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    }
+    uint64_t c_val = 0;
+    if (str_eq(c_type, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    c_val = ng_literal_bits(ng, ((((lit)->tok)).slice), false);
+    if (negative) {
+    c_val = (c_val ^ 0x8000000000000000);
+    }
+    }
+    else {
+    if (str_eq(c_type, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    c_val = ng_literal_bits(ng, ((((lit)->tok)).slice), true);
+    if (negative) {
+    c_val = (c_val ^ 0x80000000);
+    }
+    }
+    else {
+    c_val = parse_u64(((((lit)->tok)).slice));
+    if (negative) {
+    c_val = __OC_WRAP(sub, (0), (c_val));
+    }
+    }
+    }
     __OC_AT((((ng)->const_names)), (((ng)->const_count))) = ((((scan)->tok)).slice);
-    __OC_AT((((ng)->const_vals)), (((ng)->const_count))) = parse_u64(((((((scan)->left))->tok)).slice));
+    __OC_AT((((ng)->const_types)), (((ng)->const_count))) = c_type;
+    __OC_AT((((ng)->const_vals)), (((ng)->const_count))) = c_val;
     ((ng)->const_count) = __OC_ADD(((ng)->const_count), 1);
     }
     }
@@ -8324,6 +9494,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     ((ng)->var_count) = 0;
     ((ng)->curr_off) = 0;
     ((ng)->scope_depth) = 0;
+    ((ng)->cur_ret) = ((decl)->type_name);
     AstNode* p = ((decl)->left);
     int32_t param_bytes = 0;
     while ((p != ((AstNode*)(0)))) {
@@ -8590,22 +9761,24 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     buf_append_u8(code, 236);
     buf_append_u8(code, 93);
     buf_append_u8(code, 195);
-    oc_string traps[6] = {0};
+    oc_string traps[7] = {0};
     __OC_AT((traps), (0)) = (oc_string){ .ptr = (const uint8_t*)("__trap_null_deref"), .len = sizeof("__trap_null_deref") - 1 };
     __OC_AT((traps), (1)) = (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 };
     __OC_AT((traps), (2)) = (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 };
     __OC_AT((traps), (3)) = (oc_string){ .ptr = (const uint8_t*)("__trap_div_zero"), .len = sizeof("__trap_div_zero") - 1 };
     __OC_AT((traps), (4)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_signed"), .len = sizeof("__trap_cast_signed") - 1 };
     __OC_AT((traps), (5)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
-    oc_string trap_msgs[6] = {0};
+    __OC_AT((traps), (6)) = (oc_string){ .ptr = (const uint8_t*)("__trap_fp"), .len = sizeof("__trap_fp") - 1 };
+    oc_string trap_msgs[7] = {0};
     __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\n"), .len = sizeof("panic: null pointer dereference\n") - 1 };
     __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\n"), .len = sizeof("panic: slice index out of bounds\n") - 1 };
     __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\n"), .len = sizeof("panic: integer overflow\n") - 1 };
     __OC_AT((trap_msgs), (3)) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\n"), .len = sizeof("panic: division by zero\n") - 1 };
     __OC_AT((trap_msgs), (4)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid signed cast\n"), .len = sizeof("panic: invalid signed cast\n") - 1 };
     __OC_AT((trap_msgs), (5)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid unsigned cast\n"), .len = sizeof("panic: invalid unsigned cast\n") - 1 };
+    __OC_AT((trap_msgs), (6)) = (oc_string){ .ptr = (const uint8_t*)("panic: floating-point result is NaN or infinite\n"), .len = sizeof("panic: floating-point result is NaN or infinite\n") - 1 };
     size_t ti = 0;
-    while ((ti < 6)) {
+    while ((ti < 7)) {
     ng_define_helper(ng, has_offset, __OC_AT((traps), (ti)), ((code)->len));
     oc_string tmsg = __OC_AT((trap_msgs), (ti));
     size_t t_data_off = ((data)->len);
@@ -8723,12 +9896,12 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target) {
     return true;
 }
 
-bool emit_native_elf(AstNode* root, oc_string out_file_str) {
-    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64);
+bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap) {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap);
 }
 
-bool emit_native_pe(AstNode* root, oc_string out_file_str) {
-    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64);
+bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap) {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap);
 }
 
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
@@ -9251,8 +10424,45 @@ void remove_private_tmp_dir(Arena* arena, oc_string dir) {
     sys_rmdir(cstr_path(dir, ((uint8_t*)((&(pbuf))))));
 }
 
+bool source_uses_floats(oc_string src) {
+    size_t i = 0;
+    while ((__OC_ADD(i, 2) < ((src).len))) {
+    uint8_t c = __oc_index_str(src, i);
+    if ((c == 102)) {
+    if ((__oc_index_str(src, __OC_ADD(i, 1)) == 54)) {
+    if ((__oc_index_str(src, __OC_ADD(i, 2)) == 52)) {
+    return true;
+    }
+    }
+    if ((__oc_index_str(src, __OC_ADD(i, 1)) == 51)) {
+    if ((__oc_index_str(src, __OC_ADD(i, 2)) == 50)) {
+    return true;
+    }
+    }
+    }
+    if (is_digit(c)) {
+    if ((__oc_index_str(src, __OC_ADD(i, 1)) == 46)) {
+    if (is_digit(__oc_index_str(src, __OC_ADD(i, 2)))) {
+    return true;
+    }
+    }
+    if (((__oc_index_str(src, __OC_ADD(i, 1)) | 32) == 101)) {
+    if (is_digit(__oc_index_str(src, __OC_ADD(i, 2)))) {
+    return true;
+    }
+    if ((__oc_index_str(src, __OC_ADD(i, 2)) == 45)) {
+    return true;
+    }
+    }
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+}
+
 void print_usage(void) {
-    printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>]");
+    printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]");
+    printf("%s\n", "       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)");
     printf("%s\n", "       occ install | update | version | help   (also: --version, -v, --help, -h)");
     printf("%s\n", "install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
     printf("%s\n", "Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
@@ -9407,6 +10617,7 @@ int main(int argc, char** argv) {
     oc_string opt_flag = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     bool is_run = false;
     bool is_native = false;
+    bool fp_trap = false;
     oc_string target_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     bool target_explicit = false;
     int32_t i = 1;
@@ -9506,6 +10717,10 @@ int main(int argc, char** argv) {
     opt_flag = (oc_string){ .ptr = (const uint8_t*)(" -O3"), .len = sizeof(" -O3") - 1 };
     }
     else {
+    if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--fp-trap"), .len = sizeof("--fp-trap") - 1 })) {
+    fp_trap = true;
+    }
+    else {
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--help"), .len = sizeof("--help") - 1 })) {
     print_usage();
     return 0;
@@ -9524,6 +10739,7 @@ int main(int argc, char** argv) {
     return 1;
     }
     in_file_str = arg;
+    }
     }
     }
     }
@@ -9627,6 +10843,15 @@ int main(int argc, char** argv) {
     arena_deinit((&(arena)));
     return 1;
     }
+    if (source_uses_floats(buf_to_string((&(combined_buf))))) {
+    bool fmt_ok = load_module_recursive((oc_string){ .ptr = (const uint8_t*)("std/sys/float.oc"), .len = sizeof("std/sys/float.oc") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
+    if ((!fmt_ok)) {
+    printf("%s\n", "error: the float formatter std/sys/float.oc was not found; set OC_HOME to the directory that contains std/");
+    buf_deinit((&(combined_buf)));
+    arena_deinit((&(arena)));
+    return 1;
+    }
+    }
     if (is_native) {
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
     bool rt_ok = load_module_recursive((oc_string){ .ptr = (const uint8_t*)("std/sys/windows.oc"), .len = sizeof("std/sys/windows.oc") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
@@ -9678,10 +10903,10 @@ int main(int argc, char** argv) {
     if (is_native) {
     bool ok_native = false;
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
-    ok_native = emit_native_pe(prog, out_file_str);
+    ok_native = emit_native_pe(prog, out_file_str, fp_trap);
     }
     else {
-    ok_native = emit_native_elf(prog, out_file_str);
+    ok_native = emit_native_elf(prog, out_file_str, fp_trap);
     }
     buf_deinit((&(combined_buf)));
     if ((!ok_native)) {
@@ -9693,6 +10918,7 @@ int main(int argc, char** argv) {
     }
     else {
     CodeBuffer out = buf_init(4194304);
+    ((out).fp_trap) = fp_trap;
     codegen_program(prog, (&(out)));
     buf_deinit((&(combined_buf)));
     oc_string stage_c_path = str_concat((&(arena)), tmp_dir, (oc_string){ .ptr = (const uint8_t*)("/stage.c"), .len = sizeof("/stage.c") - 1 });
@@ -9713,6 +10939,7 @@ int main(int argc, char** argv) {
     CodeBuffer cmd_buf = buf_init(512);
     buf_append((&(cmd_buf)), cc_cmd);
     buf_append((&(cmd_buf)), opt_flag);
+    buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" -ffp-contract=off -fno-math-errno"), .len = sizeof(" -ffp-contract=off -fno-math-errno") - 1 });
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
     buf_append((&(cmd_buf)), (oc_string){ .ptr = (const uint8_t*)(" -Wl,--no-insert-timestamp"), .len = sizeof(" -Wl,--no-insert-timestamp") - 1 });
     }
@@ -9783,5 +11010,131 @@ int main(int argc, char** argv) {
     arena_deinit((&(arena)));
     return 0;
     return 0;
+}
+
+size_t fmt_put_u64(uint8_t* buf, size_t n, uint64_t v) {
+    uint8_t tmp[20] = {0};
+    size_t count = 0;
+    uint64_t x = v;
+    if ((x == 0)) {
+    __OC_AT((buf), (n)) = 48;
+    return __OC_ADD(n, 1);
+    }
+    while ((x > 0)) {
+    __OC_AT((tmp), (count)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(x, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    x = __OC_DIV(x, 10);
+    count = __OC_ADD(count, 1);
+    }
+    size_t pos = n;
+    while ((count > 0)) {
+    count = __OC_SUB(count, 1);
+    __OC_AT((buf), (pos)) = __OC_AT((tmp), (count));
+    pos = __OC_ADD(pos, 1);
+    }
+    return pos;
+}
+
+size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v) {
+    uint64_t whole = ({ double _f = (double)(v); if (!(_f > -1.0 && _f < 18446744073709551616.0)) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_f; });
+    double frac = (v - ((double)(whole)));
+    uint64_t millionths = ({ double _f = (double)(((frac * 1000000.0) + 0.5)); if (!(_f > -1.0 && _f < 18446744073709551616.0)) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_f; });
+    if ((millionths >= 1000000)) {
+    whole = __OC_ADD(whole, 1);
+    millionths = __OC_SUB(millionths, 1000000);
+    }
+    size_t pos = fmt_put_u64(buf, n, whole);
+    __OC_AT((buf), (pos)) = 46;
+    pos = __OC_ADD(pos, 1);
+    uint64_t div = 100000;
+    while ((div > 0)) {
+    __OC_AT((buf), (pos)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(__OC_DIV(millionths, div), 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    pos = __OC_ADD(pos, 1);
+    div = __OC_DIV(div, 10);
+    }
+    return pos;
+}
+
+void fmt_print_f64(double x) {
+    if ((!(x <= x))) {
+    sys_write(1, (((oc_string){ .ptr = (const uint8_t*)("NaN\n"), .len = sizeof("NaN\n") - 1 }).ptr), 4);
+    return;
+    }
+    uint8_t buf[48] = {0};
+    uint8_t* b = ((uint8_t*)((&(buf))));
+    size_t n = 0;
+    double v = x;
+    if ((v < 0.0)) {
+    __OC_AT((b), (0)) = 45;
+    n = 1;
+    v = (-v);
+    }
+    if ((v > 1.7976931348623157e308)) {
+    __OC_AT((b), (n)) = 105;
+    __OC_AT((b), (__OC_ADD(n, 1))) = 110;
+    __OC_AT((b), (__OC_ADD(n, 2))) = 102;
+    n = __OC_ADD(n, 3);
+    }
+    else {
+    if ((v < 1.0e15)) {
+    if ((v >= 0.0001)) {
+    n = fmt_put_fixed6(b, n, v);
+    }
+    else {
+    if ((v > 0.0)) {
+    n = fmt_put_sci(b, n, v);
+    }
+    else {
+    n = fmt_put_fixed6(b, n, 0.0);
+    }
+    }
+    }
+    else {
+    n = fmt_put_sci(b, n, v);
+    }
+    }
+    __OC_AT((b), (n)) = 10;
+    sys_write(1, ((uint8_t*)(b)), __OC_ADD(n, 1));
+}
+
+size_t fmt_put_sci(uint8_t* buf, size_t n, double v) {
+    double m = v;
+    int32_t e = 0;
+    while ((m >= 1.0e16)) {
+    m = (m / 1.0e16);
+    e = __OC_ADD(e, 16);
+    }
+    while ((m < 1.0e-15)) {
+    m = (m * 1.0e16);
+    e = __OC_SUB(e, 16);
+    }
+    while ((m >= 10.0)) {
+    m = (m / 10.0);
+    e = __OC_ADD(e, 1);
+    }
+    while ((m < 1.0)) {
+    m = (m * 10.0);
+    e = __OC_SUB(e, 1);
+    }
+    if ((m >= 9.9999995)) {
+    m = 1.0;
+    e = __OC_ADD(e, 1);
+    }
+    size_t pos = fmt_put_fixed6(buf, n, m);
+    __OC_AT((buf), (pos)) = 101;
+    pos = __OC_ADD(pos, 1);
+    int32_t mag = e;
+    if ((e < 0)) {
+    __OC_AT((buf), (pos)) = 45;
+    mag = __OC_SUB(0, e);
+    }
+    else {
+    __OC_AT((buf), (pos)) = 43;
+    }
+    pos = __OC_ADD(pos, 1);
+    if ((mag < 10)) {
+    __OC_AT((buf), (pos)) = 48;
+    pos = __OC_ADD(pos, 1);
+    }
+    return fmt_put_u64(buf, pos, ({ __auto_type _v = (mag); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
 }
 
