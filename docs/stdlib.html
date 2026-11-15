@@ -696,7 +696,7 @@ fn main() {
       <section id="std-math">
         <h2>OC-MATH(3) &mdash; `std/math.oc` Checked Mathematical Helpers</h2>
         <p>
-          The <code>std/math.oc</code> module provides integer and fixed-point math. Every function follows oC's rule for arithmetic: a result that does not fit panics. Behaviour that deliberately differs is in the name (<code>sat_*</code> saturates, the checksums wrap). Floating-point types are not part of the language yet.
+          The <code>std/math.oc</code> module provides integer, fixed-point and floating-point math. The integer functions follow oC's rule for arithmetic: a result that does not fit panics. Behaviour that deliberately differs is in the name (<code>sat_*</code> saturates, the checksums wrap). The <code>f64</code> functions follow IEEE 754 instead: they never panic, and an invalid input gives NaN or infinity.
         </p>
 
         <div class="fn-box">
@@ -747,10 +747,29 @@ fn main() {
           </p>
         </div>
 
+        <div class="fn-box">
+          <h3>Floating point: classification, comparison and rounding</h3>
+          <div class="fn-sig">let PI, TAU, E, SQRT2, LN2: f64<br>fn is_nan(x: f64) -&gt; bool &nbsp; fn is_inf(x: f64) -&gt; bool &nbsp; fn is_finite(x: f64) -&gt; bool<br>fn approx_eq(a: f64, b: f64, eps: f64) -&gt; bool<br>fn fabs_f64(x: f64) -&gt; f64 &nbsp; fn fmin_f64 / fmax_f64(a: f64, b: f64) -&gt; f64 &nbsp; fn copysign_f64(x: f64, y: f64) -&gt; f64<br>fn floor_f64 / ceil_f64 / trunc_f64 / round_f64(x: f64) -&gt; f64</div>
+          <p>
+            <code>==</code> is not allowed on floats, so <code>approx_eq</code> is how two floats are compared: it is true when <code>|a - b| &lt;= eps</code>, and false if either is NaN. <code>round_f64</code> rounds halves away from zero (2.5 becomes 3, -2.5 becomes -3). The rounding functions return a float; to get an integer, cast the result with <code>.as(i64)</code>, which panics if it does not fit. <code>fmin_f64</code> and <code>fmax_f64</code> ignore a NaN argument and return the other one. <code>copysign_f64</code> treats a negative zero <code>y</code> as positive.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Floating point: elementary functions</h3>
+          <div class="fn-sig">fn sqrt_f64(x: f64) -&gt; f64 &nbsp; fn hypot_f64(x: f64, y: f64) -&gt; f64<br>fn sin_f64 / cos_f64 / tan_f64(x: f64) -&gt; f64<br>fn atan_f64(x: f64) -&gt; f64 &nbsp; fn atan2_f64(y: f64, x: f64) -&gt; f64<br>fn exp_f64(x: f64) -&gt; f64 &nbsp; fn log_f64(x: f64) -&gt; f64 &nbsp; fn log10_f64(x: f64) -&gt; f64<br>fn pow_f64(x: f64, y: f64) -&gt; f64 &nbsp; fn pow2_f64(n: i64) -&gt; f64</div>
+          <p>
+            Angles are in radians. These are written in oC with <code>+ - * /</code> only (<code>sqrt_f64</code> is the processor's instruction), so both backends give bit-identical results and no C math library is linked. Measured against the C library on 200,000 inputs per function: <code>sin</code>, <code>cos</code>, <code>atan</code>, <code>atan2</code>, <code>exp</code> and <code>log</code> are within 1 ulp (one step of the last binary digit); <code>tan</code>, <code>log10</code> and <code>hypot</code> within 2 ulp; <code>sqrt</code> is exact.
+          </p>
+          <p>
+            Limits worth knowing: <code>sin_f64</code> and <code>cos_f64</code> have that accuracy for <code>|x|</code> up to 10<sup>6</sup>. Beyond it the absolute error grows to about <code>|x| &times; 1.1e-16</code>, and from 2<sup>52</sup> the result is NaN, so keep a running phase wrapped to one turn rather than letting it grow. <code>pow_f64</code> is exact for integer exponents whenever the result is representable (<code>pow_f64(2.0, 10.0)</code> is exactly 1024) and accurate to about 10<sup>-13</sup> relative otherwise; a negative base with a non-integer exponent gives NaN. <code>log10_f64</code> of an exact power of ten can be one step off (<code>log10_f64(1.0e15)</code> is 14.999999999999998), so round it before casting to an integer. <code>log_f64</code> of a negative number is NaN and of zero is <code>-inf</code>; under <code>--fp-trap</code> those panic instead. Reading a float from text (<code>parse_f64</code>) is not provided yet.
+          </p>
+        </div>
+
         <!-- Example Card 6: Math -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title">Example: Memory Alignment &amp; Checked Absolute Values</span>
+            <span class="example-title">Example: Alignment, Checked Absolute Values &amp; a Filter Response</span>
             
           </div>
           <div class="example-grid">
@@ -773,6 +792,12 @@ fn main() {
     let minimum: u32 = min_u32(100, 45);
     print("min_u32(100, 45):");
     print(minimum); // 45
+
+    // RC low-pass filter: R = 1 kOhm, C = 100 nF, input at 5 kHz.
+    let w_rc: f64 = TAU * 5000.0 * 1000.0 * 1.0e-7;
+    print("RC filter gain in dB and phase in degrees at 5 kHz:");
+    print(20.0 * log10_f64(1.0 / hypot_f64(1.0, w_rc))); // -10.362137
+    print(-atan_f64(w_rc) * (180.0 / PI));               // -72.343213
 }</code></pre>
             </div>
             <div class="output-pane">
@@ -786,7 +811,10 @@ fn main() {
 <span class="term-out">Absolute value of -42:</span>
 <span class="term-pass">42</span>
 <span class="term-out">min_u32(100, 45):</span>
-<span class="term-pass">45</span></code></pre>
+<span class="term-pass">45</span>
+<span class="term-out">RC filter gain in dB and phase in degrees at 5 kHz:</span>
+<span class="term-pass">-10.362137</span>
+<span class="term-pass">-72.343213</span></code></pre>
             </div>
           </div>
           <div class="explanation-box">

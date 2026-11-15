@@ -1,0 +1,162 @@
+// f64 functions of std/math.oc: results that must be exact, special values (NaN, infinities,
+// zero) and classification. fmath_exact.expected was computed by Python's math module.
+// Generated; both backends must print it exactly.
+import "std/math.oc";
+
+fn main() {
+    let nan: f64 = 0.0 / 0.0;
+    let inf: f64 = 1.0 / 0.0;
+    print(floor_f64(2.5));                                            // 2.000000
+    print(ceil_f64(2.5));                                             // 3.000000
+    print(trunc_f64(2.5));                                            // 2.000000
+    print(round_f64(2.5));                                            // 3.000000
+    print(floor_f64((-2.5)));                                         // -3.000000
+    print(ceil_f64((-2.5)));                                          // -2.000000
+    print(trunc_f64((-2.5)));                                         // -2.000000
+    print(round_f64((-2.5)));                                         // -3.000000
+    print(floor_f64(2.0));                                            // 2.000000
+    print(ceil_f64(2.0));                                             // 2.000000
+    print(trunc_f64(2.0));                                            // 2.000000
+    print(round_f64(2.0));                                            // 2.000000
+    print(floor_f64((-2.0)));                                         // -2.000000
+    print(ceil_f64((-2.0)));                                          // -2.000000
+    print(trunc_f64((-2.0)));                                         // -2.000000
+    print(round_f64((-2.0)));                                         // -2.000000
+    print(floor_f64(0.5));                                            // 0.000000
+    print(ceil_f64(0.5));                                             // 1.000000
+    print(trunc_f64(0.5));                                            // 0.000000
+    print(round_f64(0.5));                                            // 1.000000
+    print(floor_f64((-0.5)));                                         // -1.000000
+    print(ceil_f64((-0.5)));                                          // 0.000000
+    print(trunc_f64((-0.5)));                                         // 0.000000
+    print(round_f64((-0.5)));                                         // -1.000000
+    print(floor_f64(0.0));                                            // 0.000000
+    print(ceil_f64(0.0));                                             // 0.000000
+    print(trunc_f64(0.0));                                            // 0.000000
+    print(round_f64(0.0));                                            // 0.000000
+    print(floor_f64(1e+20));                                          // 1.000000e+20
+    print(ceil_f64(1e+20));                                           // 1.000000e+20
+    print(trunc_f64(1e+20));                                          // 1.000000e+20
+    print(round_f64(1e+20));                                          // 1.000000e+20
+    print(floor_f64((-7.999999)));                                    // -8.000000
+    print(ceil_f64((-7.999999)));                                     // -7.000000
+    print(trunc_f64((-7.999999)));                                    // -7.000000
+    print(round_f64((-7.999999)));                                    // -8.000000
+    print(floor_f64(4503599627370495.5));                             // 4.503600e+15
+    print(ceil_f64(4503599627370495.5));                              // 4.503600e+15
+    print(trunc_f64(4503599627370495.5));                             // 4.503600e+15
+    print(round_f64(4503599627370495.5));                             // 4.503600e+15
+    print(round_f64(0.49999999999999994));                            // 0.000000
+    print(floor_f64(inf));                                            // inf
+    print(ceil_f64(-inf));                                            // -inf
+    print(trunc_f64(nan));                                            // NaN
+    print(round_f64(nan));                                            // NaN
+    print(fabs_f64(-3.25));                                           // 3.250000
+    print(fabs_f64(3.25));                                            // 3.250000
+    print(fabs_f64(-inf));                                            // inf
+    print(fmin_f64(1.5, -2.0));                                       // -2.000000
+    print(fmax_f64(1.5, -2.0));                                       // 1.500000
+    print(fmin_f64(nan, 4.0));                                        // 4.000000
+    print(fmax_f64(4.0, nan));                                        // 4.000000
+    print(copysign_f64(3.0, -1.0));                                   // -3.000000
+    print(copysign_f64(-3.0, 2.0));                                   // 3.000000
+    print(copysign_f64(-3.0, -inf));                                  // -3.000000
+    print(is_nan(1.0));                                               // false
+    print(is_inf(1.0));                                               // false
+    print(is_finite(1.0));                                            // true
+    print(is_nan(nan));                                               // true
+    print(is_inf(nan));                                               // false
+    print(is_finite(nan));                                            // false
+    print(is_nan(inf));                                               // false
+    print(is_inf(inf));                                               // true
+    print(is_finite(inf));                                            // false
+    print(is_nan(-inf));                                              // false
+    print(is_inf(-inf));                                              // true
+    print(is_finite(-inf));                                           // false
+    print(is_nan(1.7976931348623157e308));                            // false
+    print(is_inf(1.7976931348623157e308));                            // false
+    print(is_finite(1.7976931348623157e308));                         // true
+    print(is_nan(5.0e-324));                                          // false
+    print(is_inf(5.0e-324));                                          // false
+    print(is_finite(5.0e-324));                                       // true
+    print(approx_eq(0.1 + 0.2, 0.3, 1.0e-12));                        // true
+    print(approx_eq(1.0, 1.1, 0.01));                                 // false
+    print(approx_eq(nan, nan, 1.0));                                  // false
+    print(PI);                                                        // 3.141593
+    print(TAU);                                                       // 6.283185
+    print(E);                                                         // 2.718282
+    print(SQRT2);                                                     // 1.414214
+    print(LN2);                                                       // 0.693147
+    print(pow_f64(2.0, 10.0));                                        // 1024.000000
+    print(pow_f64(2.0, (-2.0)));                                      // 0.250000
+    print(pow_f64(10.0, 15.0));                                       // 1.000000e+15
+    print(pow_f64((-2.0), 3.0));                                      // -8.000000
+    print(pow_f64((-2.0), 4.0));                                      // 16.000000
+    print(pow_f64(1.5, 2.0));                                         // 2.250000
+    print(pow_f64(2.0, 1023.0));                                      // 8.988466e+307
+    print(pow_f64(2.0, (-1074.0)));                                   // 4.940656e-324
+    print(pow_f64(0.0, 5.0));                                         // 0.000000
+    print(pow_f64(7.0, 1.0));                                         // 7.000000
+    print(pow_f64(-8.0, 0.5));                                        // NaN
+    print(pow_f64(0.0, -1.0));                                        // inf
+    print(pow_f64(nan, 0.0));                                         // 1.000000
+    print(pow_f64(5.0, 0.0));                                         // 1.000000
+    print(pow_f64(0.0, 0.5));                                         // 0.000000
+    print(pow_f64(2.0, 5000.0));                                      // inf
+    print(pow_f64(2.0, -5000.0));                                     // 0.000000
+    print(pow_f64(-2.0, 2001.0));                                     // -inf
+    print(pow_f64(nan, 2.0));                                         // NaN
+    print(pow_f64(2.0, nan));                                         // NaN
+    print(pow2_f64(52));                                              // 4.503600e+15
+    print(pow2_f64(-3));                                              // 0.125000
+    print(pow2_f64(0));                                               // 1.000000
+    print(hypot_f64(3.0, 4.0));                                       // 5.000000
+    print(hypot_f64(0.0, 0.0));                                       // 0.000000
+    print(hypot_f64(inf, nan));                                       // inf
+    print(hypot_f64(nan, 1.0));                                       // NaN
+    print(hypot_f64(1.0e300, 1.0e300));                               // 1.414214e+300
+    print(sin_f64(0.0));                                              // 0.000000
+    print(cos_f64(0.0));                                              // 1.000000
+    print(tan_f64(0.0));                                              // 0.000000
+    print(atan_f64(0.0));                                             // 0.000000
+    print(exp_f64(0.0));                                              // 1.000000
+    print(log_f64(1.0));                                              // 0.000000
+    print(sin_f64(inf));                                              // NaN
+    print(cos_f64(-inf));                                             // NaN
+    print(sin_f64(nan));                                              // NaN
+    print(tan_f64(inf));                                              // NaN
+    print(sin_f64(4503599627370496.0));                               // NaN
+    print(cos_f64(1.0e300));                                          // NaN
+    print(atan_f64(inf));                                             // 1.570796
+    print(atan_f64(-inf));                                            // -1.570796
+    print(atan_f64(nan));                                             // NaN
+    print(atan2_f64(0.0, 0.0));                                       // 0.000000
+    print(atan2_f64(0.0, -1.0));                                      // 3.141593
+    print(atan2_f64(1.0, 0.0));                                       // 1.570796
+    print(atan2_f64(-1.0, 0.0));                                      // -1.570796
+    print(atan2_f64(inf, inf));                                       // 0.785398
+    print(atan2_f64(-inf, -inf));                                     // -2.356194
+    print(atan2_f64(1.0, -inf));                                      // 3.141593
+    print(atan2_f64(1.0, inf));                                       // 0.000000
+    print(atan2_f64(inf, 1.0));                                       // 1.570796
+    print(atan2_f64(nan, 1.0));                                       // NaN
+    print(atan2_f64(1.0e300, 1.0e-300));                              // 1.570796
+    print(exp_f64(1000.0));                                           // inf
+    print(exp_f64(-1000.0));                                          // 0.000000
+    print(exp_f64(inf));                                              // inf
+    print(exp_f64(-inf));                                             // 0.000000
+    print(exp_f64(nan));                                              // NaN
+    print(exp_f64(709.78));                                           // 1.792823e+308
+    print(exp_f64(-745.0));                                           // 4.940656e-324
+    print(log_f64(0.0));                                              // -inf
+    print(log_f64(-1.0));                                             // NaN
+    print(log_f64(inf));                                              // inf
+    print(log_f64(nan));                                              // NaN
+    print(log_f64(5.0e-324));                                         // -744.440072
+    print(log10_f64(1000.0));                                         // 3.000000
+    print(log10_f64(0.0));                                            // -inf
+    print(approx_eq((sin_f64(0.7) * sin_f64(0.7)) + (cos_f64(0.7) * cos_f64(0.7)), 1.0, 1.0e-15)); // true
+    print(approx_eq(exp_f64(log_f64(42.0)), 42.0, 1.0e-13));          // true
+    print(approx_eq(atan_f64(1.0) * 4.0, PI, 1.0e-15));               // true
+    print(approx_eq(sqrt_f64(2.0) * sqrt_f64(2.0), 2.0, 1.0e-15));    // true
+}
