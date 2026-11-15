@@ -485,9 +485,9 @@ Slice: sub | Length: 14</code></pre>
         <ul>
           <li><strong>Arithmetic does not trap.</strong> <code>+ - * /</code> follow IEEE 754: overflow gives <code>inf</code>, and <code>0.0 / 0.0</code> gives <code>NaN</code>. This is the one place oC arithmetic does not panic. Build with <code>--fp-trap</code> to panic at the first operation whose result is NaN or infinite.</li>
           <li><strong>Floats cannot break memory safety.</strong> The only way from a float to an integer is <code>.as(T)</code>, which truncates toward zero and panics for NaN, infinity and any value outside the range of <code>T</code> (undefined behaviour in C). A float is never converted to an integer implicitly: assigning, passing, returning or indexing with one is a compile error.</li>
-          <li><strong>No <code>==</code> or <code>!=</code> on floats.</strong> Rounding makes exact equality unreliable (<code>0.1 + 0.2</code> is not <code>0.3</code>), so it is a compile error. Use <code>&lt; &lt;= &gt; &gt;=</code>; a comparison with NaN is false. <code>% &amp; | ^ &lt;&lt; &gt;&gt;</code> are integer-only.</li>
+          <li><strong>No <code>==</code> or <code>!=</code> on floats.</strong> Rounding makes exact equality unreliable (<code>0.1 + 0.2</code> is not <code>0.3</code>), so it is a compile error. Use <code>&lt; &lt;= &gt; &gt;=</code>, or <code>approx_eq(a, b, eps)</code> and <code>is_nan(x)</code> from <code>std/math.oc</code>; a comparison with NaN is false. <code>% &amp; | ^ &lt;&lt; &gt;&gt;</code> are integer-only.</li>
           <li><strong><code>print</code></strong> writes six digits after the point (<code>3.750000</code>), switches to scientific notation below 1e-4 and from 1e15 (<code>1.234568e+17</code>), and writes <code>NaN</code>, <code>inf</code> and <code>-inf</code>. The text is identical on both backends.</li>
-          <li><strong><code>sqrt_f64(x)</code></strong> is built in and compiles to the processor's square-root instruction.</li>
+          <li><strong><code>sqrt_f64(x)</code></strong> is built in and compiles to the processor's square-root instruction. The rest (<code>sin_f64</code>, <code>exp_f64</code>, <code>pow_f64</code>, rounding, ...) is in <a href="stdlib.html#std-math"><code>std/math.oc</code></a>.</li>
         </ul>
         <pre><code>fn mean(a: f64, b: f64) -&gt; f64 { return (a + b) / 2; }
 
