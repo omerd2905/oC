@@ -33,6 +33,7 @@ RUNTIME_TRAP=(
   "probe_overflow_u8.oc"
   "probe_overflow_mul_u64.oc"
   "probe_overflow_mul_i32.oc"
+  "probe_overflow_neg_i32.oc"
   "probe_underflow_usize.oc"
   "probe_div_zero.oc"
   "probe_slice_bounds.oc"

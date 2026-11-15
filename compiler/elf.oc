@@ -521,7 +521,11 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return "i64";
     }
     if expr.tag == NODE_UNARY {
-        if expr.tok.tag == TOK_MINUS { return "i64"; }
+        if expr.tok.tag == TOK_MINUS {
+            let neg_t: string = ng_expr_type(ng, expr.left);
+            if neg_t.len > 0 { return neg_t; }
+            return "i64";
+        }
         if expr.tok.tag == TOK_BANG { return "bool"; }
         return ng_expr_type(ng, expr.left);
     }
@@ -827,6 +831,24 @@ fn ng_emit_load_struct_at_rax(ng: *mut NativeGen, code: *mut CodeBuffer, s_name:
     }
     buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0); // mov (%rax), %rax
     return true;
+}
+
+// Keeps the low bits of %rax that fit integer type `t` and re-extends them to 64 bits
+// (zero-extension for unsigned types, sign-extension for signed ones). 64-bit types: no-op.
+fn ng_emit_truncate(code: *mut CodeBuffer, t: string) {
+    if str_eq(t, "u8") {
+        buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 192); // movzbl %al, %eax
+    } else if str_eq(t, "i8") {
+        buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 192); // movsbq %al, %rax
+    } else if str_eq(t, "u16") {
+        buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 192); // movzwl %ax, %eax
+    } else if str_eq(t, "i16") {
+        buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 192); // movswq %ax, %rax
+    } else if str_eq(t, "u32") {
+        buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
+    } else if str_eq(t, "i32") {
+        buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
+    }
 }
 
 // Stores the low `width` bytes of %rax at (%rcx).
@@ -1227,16 +1249,26 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 }
             }
             ng_emit_expr(ng, code, data, expr.left);
+            let neg_t: string = ng_expr_type(ng, expr.left);
             buf_append_u8(code, 72);
             buf_append_u8(code, 247);
-            buf_append_u8(code, 216); // neg %rax
+            buf_append_u8(code, 216); // neg %rax (CF = operand was non-zero, OF = it was INT64_MIN)
             ng_add_fixup(ng, code.len, "__trap_overflow", true);
             buf_append_u8(code, 15);
-            buf_append_u8(code, 128); // jo
+            if is_unsigned_type_name(neg_t) {
+                buf_append_u8(code, 130); // jc: only 0 can be negated in an unsigned type
+            } else {
+                buf_append_u8(code, 128); // jo
+            }
             elf_append_u32(code, 0);
+            ng_emit_range_check(ng, code, neg_t, "__trap_overflow"); // e.g. -(i32 minimum) does not fit i32
             return;
         }
         ng_emit_expr(ng, code, data, expr.left);
+        if expr.tok.tag == TOK_TILDE {
+            buf_append_u8(code, 72); buf_append_u8(code, 247); buf_append_u8(code, 208); // not %rax
+            ng_emit_truncate(code, ng_expr_type(ng, expr.left));
+        }
         if expr.tok.tag == TOK_BANG {
             buf_append_u8(code, 72);
             buf_append_u8(code, 133);
@@ -1697,20 +1729,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 175); buf_append_u8(code, 195); // imul %rbx, %rax
             }
             // No trap: keep the low bits and re-extend them to the operand type's width.
-            let w_t: string = ng_expr_type(ng, expr);
-            if str_eq(w_t, "u8") {
-                buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 192); // movzbl %al, %eax
-            } else if str_eq(w_t, "i8") {
-                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 190); buf_append_u8(code, 192); // movsbq %al, %rax
-            } else if str_eq(w_t, "u16") {
-                buf_append_u8(code, 15); buf_append_u8(code, 183); buf_append_u8(code, 192); // movzwl %ax, %eax
-            } else if str_eq(w_t, "i16") {
-                buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 191); buf_append_u8(code, 192); // movswq %ax, %rax
-            } else if str_eq(w_t, "u32") {
-                buf_append_u8(code, 137); buf_append_u8(code, 192); // mov %eax, %eax
-            } else if str_eq(w_t, "i32") {
-                buf_append_u8(code, 72); buf_append_u8(code, 99); buf_append_u8(code, 192); // movslq %eax, %rax
-            }
+            ng_emit_truncate(code, ng_expr_type(ng, expr));
             return;
         }
 
