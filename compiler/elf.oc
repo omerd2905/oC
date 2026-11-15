@@ -455,6 +455,18 @@ fn is_unsigned_type_name(t: string) -> bool {
     return false;
 }
 
+// 3: 64-bit unsigned (u64, usize, pointers), 2: i64, 1: u32, 0: everything narrower or untyped.
+fn ng_int_class(t: string) -> i32 {
+    if t.len == 0 { return 0; }
+    if str_eq(t, "u64") { return 3; }
+    if str_eq(t, "usize") { return 3; }
+    if t[0] == 42 { return 3; }
+    if t[0] == 38 { return 3; }
+    if str_eq(t, "i64") { return 2; }
+    if str_eq(t, "u32") { return 1; }
+    return 0;
+}
+
 fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_STRING { return "string"; }
@@ -533,6 +545,14 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         if is_comparison_tok(expr.tok.tag) { return "bool"; }
         let lt: string = ng_expr_type(ng, expr.left);
         let rt: string = ng_expr_type(ng, expr.right);
+        let mut is_shift: bool = expr.tok.tag == TOK_SHL;
+        if expr.tok.tag == TOK_SHR { is_shift = true; }
+        if !is_shift {
+            // The wider operand decides, as in C: 64-bit unsigned, then i64, then u32.
+            let cl: i32 = ng_int_class(lt);
+            let cr: i32 = ng_int_class(rt);
+            if cr > cl { return rt; }
+        }
         if lt.len > 0 { return lt; }
         return rt;
     }
@@ -544,13 +564,28 @@ fn ng_is_unsigned_expr(ng: *mut NativeGen, expr: *mut AstNode) -> bool {
     if expr.tag == NODE_UNARY {
         if expr.tok.tag == TOK_MINUS { return false; }
     }
-    let t: string = ng_expr_type(ng, expr);
-    if is_unsigned_type_name(t) { return true; }
     if expr.tag == NODE_BINARY {
-        if ng_is_unsigned_expr(ng, expr.left) { return true; }
-        if ng_is_unsigned_expr(ng, expr.right) { return true; }
+        if is_comparison_tok(expr.tok.tag) { return false; }
+        let mut is_shift: bool = expr.tok.tag == TOK_SHL;
+        if expr.tok.tag == TOK_SHR { is_shift = true; }
+        if is_shift { return ng_is_unsigned_expr(ng, expr.left); }
+        return ng_binary_unsigned(ng, expr.left, expr.right);
     }
-    return false;
+    return is_unsigned_type_name(ng_expr_type(ng, expr));
+}
+
+// Whether `left op right` is an unsigned operation, by the same rule C applies to the types
+// the C backend emits: a 64-bit unsigned operand makes it unsigned; otherwise a u32 does,
+// unless the other side is i64 (which can hold every u32). Narrower types act as signed.
+fn ng_binary_unsigned(ng: *mut NativeGen, left: *mut AstNode, right: *mut AstNode) -> bool {
+    let cl: i32 = ng_int_class(ng_expr_type(ng, left));
+    let cr: i32 = ng_int_class(ng_expr_type(ng, right));
+    if cl == 3 { return true; }
+    if cr == 3 { return true; }
+    if cl == 2 { return false; }
+    if cr == 2 { return false; }
+    if cl == 1 { return true; }
+    return cr == 1;
 }
 
 fn ng_is_expr_slice(ng: *mut NativeGen, expr: *mut AstNode) -> bool {
@@ -1454,9 +1489,11 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_BINARY {
-        let mut is_uns: bool = false;
-        if ng_is_unsigned_expr(ng, expr.left) { is_uns = true; }
-        if ng_is_unsigned_expr(ng, expr.right) { is_uns = true; }
+        let mut is_uns: bool = ng_binary_unsigned(ng, expr.left, expr.right);
+        if expr.tok.tag == TOK_SHR {
+            // A right shift is arithmetic or logical by its left operand alone.
+            is_uns = is_unsigned_type_name(ng_expr_type(ng, expr.left));
+        }
         let res_type: string = ng_expr_type(ng, expr);
         let lt: string = ng_expr_type(ng, expr.left);
         let mut is_ptr_arith: bool = false;
