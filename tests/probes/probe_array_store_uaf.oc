@@ -1,0 +1,10 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut ptrs: [2]*mut u8 = [(0).as(*mut u8), (0).as(*mut u8)];
+    ptrs[1] = arena_alloc(&mut a, 8); // element store: the array now borrows from `a`
+    let q: *mut u8 = ptrs[1];
+    arena_deinit(&mut a);
+    q[0] = 1; // use-after-free
+}
