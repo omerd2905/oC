@@ -1,0 +1,4 @@
+fn main() {
+    let huge: f64 = 1e300;
+    print(huge.as(i64)); // far outside i64: must trap (undefined behaviour in C)
+}

@@ -270,9 +270,48 @@ fn lexer_next(lex: *mut Lexer) -> Token {
                 break;
             }
         }
+        // Float literal: digits '.' digits, and/or an exponent (1.5, 1e-3, 2.0e10). A '.' that
+        // is not followed by a digit belongs to something else (1..5, 1.as(u8)).
+        let mut is_float: bool = false;
+        if lex.index + 1 < lex.source.len {
+            if lex.source[lex.index] == 46 {
+                if is_digit(lex.source[lex.index + 1]) {
+                    is_float = true;
+                    lex.index = lex.index + 1;
+                    lex.col = lex.col + 1;
+                    while lex.index < lex.source.len {
+                        if !is_digit(lex.source[lex.index]) { break; }
+                        lex.index = lex.index + 1;
+                        lex.col = lex.col + 1;
+                    }
+                }
+            }
+        }
+        if lex.index + 1 < lex.source.len {
+            if (lex.source[lex.index] | 32) == 101 { // 'e' / 'E'
+                let mut exp_at: usize = lex.index + 1;
+                let mut sign: u8 = lex.source[exp_at];
+                if sign == 43 { exp_at = exp_at + 1; }
+                if sign == 45 { exp_at = exp_at + 1; }
+                if exp_at < lex.source.len {
+                    if is_digit(lex.source[exp_at]) {
+                        is_float = true;
+                        lex.col = lex.col + (exp_at - lex.index).as(u32);
+                        lex.index = exp_at;
+                        while lex.index < lex.source.len {
+                            if !is_digit(lex.source[lex.index]) { break; }
+                            lex.index = lex.index + 1;
+                            lex.col = lex.col + 1;
+                        }
+                    }
+                }
+            }
+        }
         let slice: string = lex.source[start_idx..lex.index];
+        let mut num_tag: u32 = TOK_INT;
+        if is_float { num_tag = TOK_FLOAT; }
         return Token {
-            tag: TOK_INT,
+            tag: num_tag,
             slice: slice,
             line: tok_line,
             col: tok_col,

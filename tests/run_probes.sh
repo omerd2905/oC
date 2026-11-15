@@ -26,6 +26,8 @@ COMPILE_REJECT=(
   "probe_helper_alloc_uaf.oc|use-after-free: variable 'p' used after arena 'a' was deinitialized"
   "probe_array_ptr_uaf.oc|use-after-free: variable 'ptrs' used after arena 'a' was reset"
   "probe_array_store_uaf.oc|use-after-free: variable 'q' used after arena 'a' was deinitialized"
+  "probe_float_eq.oc|== and != are not allowed on floats"
+  "probe_float_to_int_implicit.oc|implicit conversion from float to integer"
 )
 
 RUNTIME_TRAP=(
@@ -44,6 +46,9 @@ RUNTIME_TRAP=(
   "probe_math_abs_min.oc"
   "probe_math_pow_overflow.oc"
   "probe_math_ilog2_zero.oc"
+  "probe_float_cast_nan.oc"
+  "probe_float_cast_huge.oc"
+  "probe_float_cast_neg_u32.oc"
 )
 
 PASS=0
@@ -126,6 +131,26 @@ for p in "${RUNTIME_TRAP[@]}"; do
       exit 1
     fi
   done
+done
+
+echo "=== --fp-trap: NaN / infinity results are IEEE values by default, a panic on request ==="
+for backend in c native; do
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/probes/probe_fp_trap.oc" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null
+  plain="$(/tmp/oc_probe_bin 2>&1)"
+  "$OCC" build "$ROOT/tests/probes/probe_fp_trap.oc" -o /tmp/oc_probe_bin --backend "$backend" --fp-trap >/dev/null
+  set +e
+  trapped="$(/tmp/oc_probe_bin 2>&1)"
+  RC=$?
+  set -e
+  rm -f /tmp/oc_probe_bin
+  if [ "$plain" = "inf" ] && [ "$RC" -ne 0 ] && [ "$trapped" = "panic: floating-point result is NaN or infinite" ]; then
+    echo "  [PASS] probe_fp_trap.oc (--backend $backend): prints inf by default, panics with --fp-trap"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] probe_fp_trap.oc (--backend $backend): default printed '$plain'; --fp-trap exit $RC, printed '$trapped'"
+    exit 1
+  fi
 done
 
 echo "=== [3/4] Positive Examples Verification (C & Native Backends) ==="

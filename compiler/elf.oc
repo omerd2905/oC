@@ -4,6 +4,9 @@ import "compiler/token.oc";
 import "compiler/ast.oc";
 import "compiler/codegen.oc";
 
+extern fn sys_f64_bits(text: *u8) -> u64;
+extern fn sys_f32_bits(text: *u8) -> u64;
+
 fn elf_append_u16(buf: *mut CodeBuffer, v: u32) {
     buf_append_u8(buf, (v % 256).as(u8));
     buf_append_u8(buf, ((v / 256) % 256).as(u8));
@@ -96,6 +99,10 @@ struct NativeGen {
     field_packed: [256]bool,
     field_count: usize,
 
+    root: *mut AstNode,
+    fp_trap: bool,   // --fp-trap: trap when a float operation produces NaN or infinity
+    cur_ret: string, // return type of the function being emitted
+    const_types: [128]string,
     const_names: [128]string,
     const_vals: [128]u64,
     const_count: usize,
@@ -352,6 +359,7 @@ fn ng_scalar_width(t: string) -> i32 {
     if str_eq(t, "i16") { return 2; }
     if str_eq(t, "u32") { return 4; }
     if str_eq(t, "i32") { return 4; }
+    if str_eq(t, "f32") { return 4; }
     return 8;
 }
 
@@ -455,6 +463,16 @@ fn is_unsigned_type_name(t: string) -> bool {
     return false;
 }
 
+// Type of an arithmetic operation with a float operand: f64 if either side is f64, else f32
+// (an integer operand is converted, as in C). "" when neither side is a float.
+fn ng_float_result_type(lt: string, rt: string) -> string {
+    if str_eq(lt, "f64") { return lt; }
+    if str_eq(rt, "f64") { return rt; }
+    if str_eq(lt, "f32") { return lt; }
+    if str_eq(rt, "f32") { return rt; }
+    return "";
+}
+
 // 3: 64-bit unsigned (u64, usize, pointers), 2: i64, 1: u32, 0: everything narrower or untyped.
 fn ng_int_class(t: string) -> i32 {
     if t.len == 0 { return 0; }
@@ -474,10 +492,20 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
     if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
+    if expr.tag == NODE_FLOAT { return "f64"; }
     if expr.tag == NODE_IDENT {
-        return ng_find_var_type(ng, expr.tok.slice);
+        if ng_find_var_idx(ng, expr.tok.slice) >= 0 {
+            return ng_find_var_type(ng, expr.tok.slice);
+        }
+        let mut ci: usize = 0;
+        while ci < ng.const_count {
+            if str_eq(ng.const_names[ci], expr.tok.slice) { return ng.const_types[ci]; }
+            ci = ci + 1;
+        }
+        return "";
     }
     if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
         if wrapping_op(expr.tok.slice).len > 0 {
             // Same rule as the C backend: a narrow (< 32-bit) operand decides the width, then
             // 64-bit beats 32-bit and unsigned beats signed. Untyped literals do not decide.
@@ -545,6 +573,8 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         if is_comparison_tok(expr.tok.tag) { return "bool"; }
         let lt: string = ng_expr_type(ng, expr.left);
         let rt: string = ng_expr_type(ng, expr.right);
+        let float_t: string = ng_float_result_type(lt, rt);
+        if float_t.len > 0 { return float_t; }
         let mut is_shift: bool = expr.tok.tag == TOK_SHL;
         if expr.tok.tag == TOK_SHR { is_shift = true; }
         if !is_shift {
@@ -899,7 +929,191 @@ fn ng_emit_store_at_rcx(code: *mut CodeBuffer, width: i32) {
     }
 }
 
+// Floating point. A float lives in %rax as its IEEE 754 bit pattern (an f32 in the low 32
+// bits), so locals, fields, arguments and return values need nothing new. Arithmetic moves
+// the bits into %xmm0 / %xmm1, uses one SSE2 scalar instruction and moves the result back.
+
+// IEEE bits of a decimal literal; f32 bits when `single`.
+fn ng_literal_bits(ng: *mut NativeGen, text: string, single: bool) -> u64 {
+    let mut buf: [64]u8 = [0];
+    if text.len > 63 {
+        ng_fail(ng, "native codegen error: float literal longer than 63 characters");
+        return 0;
+    }
+    let mut i: usize = 0;
+    while i < text.len {
+        buf[i] = text[i];
+        i = i + 1;
+    }
+    let mut bits: u64 = 0;
+    if single {
+        bits = sys_f32_bits((&buf).as(*u8));
+    } else {
+        bits = sys_f64_bits((&buf).as(*u8));
+    }
+    return bits;
+}
+
+fn ng_emit_rax_to_xmm0(code: *mut CodeBuffer, wide: bool) {
+    buf_append_u8(code, 102);
+    if wide { buf_append_u8(code, 72); }
+    buf_append_u8(code, 15); buf_append_u8(code, 110); buf_append_u8(code, 192); // movq/movd %rax, %xmm0
+}
+
+fn ng_emit_rbx_to_xmm1(code: *mut CodeBuffer, wide: bool) {
+    buf_append_u8(code, 102);
+    if wide { buf_append_u8(code, 72); }
+    buf_append_u8(code, 15); buf_append_u8(code, 110); buf_append_u8(code, 203); // movq/movd %rbx, %xmm1
+}
+
+fn ng_emit_xmm0_to_rax(code: *mut CodeBuffer, wide: bool) {
+    buf_append_u8(code, 102);
+    if wide { buf_append_u8(code, 72); }
+    buf_append_u8(code, 15); buf_append_u8(code, 126); buf_append_u8(code, 192); // movq/movd %xmm0, %rax
+}
+
+// Scalar SSE prefix: F2 selects the double instruction, F3 the single one.
+fn ng_sse_prefix(wide: bool) -> u8 {
+    if wide { return 242; }
+    return 243;
+}
+
+// Converts the value in %rax from type `from_t` to float type `to_t`, the way C converts
+// implicitly: f32 <-> f64, or an integer to a float. No-op when `to_t` is not a float type
+// or the types already match.
+fn ng_emit_convert(ng: *mut NativeGen, code: *mut CodeBuffer, from_t: string, to_t: string) {
+    if !is_float_type(to_t) { return; }
+    if str_eq(from_t, to_t) { return; }
+    let wide: bool = str_eq(to_t, "f64");
+    if is_float_type(from_t) {
+        ng_emit_rax_to_xmm0(code, !wide);
+        buf_append_u8(code, ng_sse_prefix(!wide)); buf_append_u8(code, 15); buf_append_u8(code, 90); buf_append_u8(code, 192); // cvtss2sd / cvtsd2ss %xmm0, %xmm0
+        ng_emit_xmm0_to_rax(code, wide);
+        return;
+    }
+    if ng_int_class(from_t) == 3 {
+        // Unsigned 64-bit source: cvtsi2sd is signed, so halve values with the top bit set
+        // (keeping the lost bit sticky for correct rounding), convert, and double.
+        buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 192); // test %rax, %rax
+        buf_append_u8(code, 120); buf_append_u8(code, 7);                            // js big
+        buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 42); buf_append_u8(code, 192); // cvtsi2sd %rax, %xmm0
+        buf_append_u8(code, 235); buf_append_u8(code, 21);                           // jmp done
+        buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 193); // big: mov %rax, %rcx
+        buf_append_u8(code, 72); buf_append_u8(code, 209); buf_append_u8(code, 232); // shr $1, %rax
+        buf_append_u8(code, 131); buf_append_u8(code, 225); buf_append_u8(code, 1);  // and $1, %ecx
+        buf_append_u8(code, 72); buf_append_u8(code, 9); buf_append_u8(code, 200);   // or %rcx, %rax
+        buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 42); buf_append_u8(code, 192); // cvtsi2sd %rax, %xmm0
+        buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 15); buf_append_u8(code, 88); buf_append_u8(code, 192); // addsd %xmm0, %xmm0
+    } else {
+        buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 42); buf_append_u8(code, 192); // cvtsi2sd %rax, %xmm0
+    }
+    ng_emit_xmm0_to_rax(code, wide); // done:
+}
+
+// Bit patterns of the exclusive bounds between which an f64 truncates into integer type `t`.
+fn ng_float_cast_lo(t: string) -> u64 {
+    if str_eq(t, "i8") { return 13862114837418475520; }  // -129.0
+    if str_eq(t, "i16") { return 13898108587504304128; } // -32769.0
+    if str_eq(t, "i32") { return 13970166044105375744; } // -2147483649.0
+    if str_eq(t, "i64") { return 14114281232179134465; } // the double just below -2^63
+    return 13830554455654793216;                         // -1.0 (unsigned targets)
+}
+
+fn ng_float_cast_hi(t: string) -> u64 {
+    if str_eq(t, "i8") { return 4638707616191610880; }   // 128.0
+    if str_eq(t, "i16") { return 4674736413210574848; }  // 32768.0
+    if str_eq(t, "i32") { return 4746794007248502784; }  // 2^31
+    if str_eq(t, "i64") { return 4890909195324358656; }  // 2^63
+    if str_eq(t, "u8") { return 4643211215818981376; }   // 256.0
+    if str_eq(t, "u16") { return 4679240012837945344; }  // 65536.0
+    if str_eq(t, "u32") { return 4751297606875873280; }  // 2^32
+    return 4895412794951729152;                          // 2^64 (u64, usize)
+}
+
+// %xmm1 = the f64 with bit pattern `bits` (clobbers %rcx).
+fn ng_emit_xmm1_const(code: *mut CodeBuffer, bits: u64) {
+    buf_append_u8(code, 72); buf_append_u8(code, 185); elf_append_u64(code, bits); // movabs $bits, %rcx
+    buf_append_u8(code, 102); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 110); buf_append_u8(code, 201); // movq %rcx, %xmm1
+}
+
+// %rax (a float of type `src`) -> integer type `dst`, truncating toward zero. NaN, infinity
+// and values outside the range of `dst` trap: in C this conversion would be undefined.
+fn ng_emit_float_to_int(ng: *mut NativeGen, code: *mut CodeBuffer, src: string, dst: string) {
+    let mut trap: string = "__trap_cast_signed";
+    if is_unsigned_type_name(dst) { trap = "__trap_cast_unsigned"; }
+    if str_eq(src, "f32") {
+        ng_emit_rax_to_xmm0(code, false);
+        buf_append_u8(code, 243); buf_append_u8(code, 15); buf_append_u8(code, 90); buf_append_u8(code, 192); // cvtss2sd %xmm0, %xmm0
+    } else {
+        ng_emit_rax_to_xmm0(code, true);
+    }
+    ng_emit_xmm1_const(code, ng_float_cast_lo(dst));
+    buf_append_u8(code, 102); buf_append_u8(code, 15); buf_append_u8(code, 46); buf_append_u8(code, 193); // ucomisd %xmm1, %xmm0 (value ? lo)
+    ng_add_fixup(ng, code.len, trap, true);
+    buf_append_u8(code, 15); buf_append_u8(code, 134); elf_append_u32(code, 0); // jbe trap (value <= lo, or NaN)
+    ng_emit_xmm1_const(code, ng_float_cast_hi(dst));
+    buf_append_u8(code, 102); buf_append_u8(code, 15); buf_append_u8(code, 46); buf_append_u8(code, 200); // ucomisd %xmm0, %xmm1 (hi ? value)
+    ng_add_fixup(ng, code.len, trap, true);
+    buf_append_u8(code, 15); buf_append_u8(code, 134); elf_append_u32(code, 0); // jbe trap (hi <= value)
+    if ng_int_class(dst) == 3 {
+        // cvttsd2si is signed: values from 2^63 up are converted as value - 2^63, then bit 63 is set.
+        ng_emit_xmm1_const(code, 4890909195324358656);
+        buf_append_u8(code, 102); buf_append_u8(code, 15); buf_append_u8(code, 46); buf_append_u8(code, 193); // ucomisd %xmm1, %xmm0
+        buf_append_u8(code, 114); buf_append_u8(code, 16);                                                    // jb small
+        buf_append_u8(code, 242); buf_append_u8(code, 15); buf_append_u8(code, 92); buf_append_u8(code, 193); // subsd %xmm1, %xmm0
+        buf_append_u8(code, 242); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 44); buf_append_u8(code, 192); // cvttsd2si %xmm0, %rax
+        buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 186); buf_append_u8(code, 232); buf_append_u8(code, 63);  // bts $63, %rax
+        buf_append_u8(code, 235); buf_append_u8(code, 5);                                                     // jmp done
+    }
+    buf_append_u8(code, 242); buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 44); buf_append_u8(code, 192); // small: cvttsd2si %xmm0, %rax
+}
+
+// --fp-trap: traps if the float in %rax (f64 when `wide`) is NaN or infinite, i.e. its
+// exponent bits are all ones. Shifting the sign bit out leaves one unsigned comparison.
+fn ng_emit_fp_check(ng: *mut NativeGen, code: *mut CodeBuffer, wide: bool) {
+    if !ng.fp_trap { return; }
+    if wide {
+        buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 193); // mov %rax, %rcx
+        buf_append_u8(code, 72); buf_append_u8(code, 209); buf_append_u8(code, 225); // shl $1, %rcx
+        buf_append_u8(code, 72); buf_append_u8(code, 186); elf_append_u64(code, 0xffe0000000000000); // movabs $(inf << 1), %rdx
+        buf_append_u8(code, 72); buf_append_u8(code, 57); buf_append_u8(code, 209);  // cmp %rdx, %rcx
+    } else {
+        buf_append_u8(code, 137); buf_append_u8(code, 193);                          // mov %eax, %ecx
+        buf_append_u8(code, 209); buf_append_u8(code, 225);                          // shl $1, %ecx
+        buf_append_u8(code, 129); buf_append_u8(code, 249); elf_append_u32(code, 0xff000000); // cmp $(inf << 1), %ecx
+    }
+    ng_add_fixup(ng, code.len, "__trap_fp", true);
+    buf_append_u8(code, 15); buf_append_u8(code, 131); elf_append_u32(code, 0); // jae trap
+}
+
+// Declared type of parameter `idx` of function `fn_name` ("" if unknown).
+fn ng_fn_param_type(ng: *mut NativeGen, fn_name: string, idx: usize) -> string {
+    let mut decl: *mut AstNode = ng.root.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_FN {
+            if str_eq(decl.tok.slice, fn_name) {
+                let mut prm: *mut AstNode = decl.left;
+                let mut i: usize = 0;
+                while prm != (0).as(*mut AstNode) {
+                    if i == idx { return prm.type_name; }
+                    prm = prm.next;
+                    i = i + 1;
+                }
+                return "";
+            }
+        }
+        decl = decl.next;
+    }
+    return "";
+}
+
 extern fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode);
+
+// Evaluates `expr` and converts it to `to_t` when that is a float type (see ng_emit_convert).
+fn ng_emit_expr_as(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode, to_t: string) {
+    ng_emit_expr(ng, code, data, expr);
+    ng_emit_convert(ng, code, ng_expr_type(ng, expr), to_t);
+}
 
 fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode) {
     if expr == (0).as(*mut AstNode) { return; }
@@ -1014,6 +1228,13 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         return;
     }
 
+    if expr.tag == NODE_FLOAT {
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 184); // movabs $bits, %rax
+        elf_append_u64(code, ng_literal_bits(ng, expr.tok.slice, false));
+        return;
+    }
+
     if expr.tag == NODE_BOOL {
         let mut val: u64 = 0;
         if str_eq(expr.tok.slice, "true") {
@@ -1125,7 +1346,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         while f != (0).as(*mut AstNode) {
             let f_off: i32 = ng_find_field_offset(ng, expr.tok.slice, f.tok.slice);
             let f_w: i32 = ng_field_width(ng, expr.tok.slice, f.tok.slice);
-            ng_emit_expr(ng, code, data, f.left);
+            ng_emit_expr_as(ng, code, data, f.left, ng_find_field_type(ng, expr.tok.slice, f.tok.slice));
             let f_words: i32 = ng_value_words(ng, ng_find_field_type(ng, expr.tok.slice, f.tok.slice));
             if f_words > 1 {
                 if f_off + (f_words * 8) <= 32 {
@@ -1183,6 +1404,25 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         ng_emit_expr(ng, code, data, expr.left);
         let dst: string = expr.type_name;
         let src: string = ng_expr_type(ng, expr.left);
+        if is_float_type(dst) {
+            ng_emit_convert(ng, code, src, dst);
+            return;
+        }
+        if is_float_type(src) {
+            let mut int_dst: bool = ng_scalar_width(dst) < 8;
+            if ng_int_class(dst) >= 2 { int_dst = true; }
+            if str_eq(dst, "bool") { int_dst = false; }
+            if dst.len > 0 {
+                if dst[0] == 42 { int_dst = false; }
+                if dst[0] == 38 { int_dst = false; }
+            }
+            if !int_dst {
+                ng_fail(ng, "native codegen error: a float can only be cast to an integer or float type");
+                return;
+            }
+            ng_emit_float_to_int(ng, code, src, dst);
+            return;
+        }
         if dst.len > 0 {
             if dst[0] == 42 { return; }
             if dst[0] == 38 { return; }
@@ -1285,6 +1525,15 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             ng_emit_expr(ng, code, data, expr.left);
             let neg_t: string = ng_expr_type(ng, expr.left);
+            if is_float_type(neg_t) {
+                // Flip the sign bit; no trap (IEEE 754).
+                if str_eq(neg_t, "f64") {
+                    buf_append_u8(code, 72); buf_append_u8(code, 15); buf_append_u8(code, 186); buf_append_u8(code, 248); buf_append_u8(code, 63); // btc $63, %rax
+                } else {
+                    buf_append_u8(code, 15); buf_append_u8(code, 186); buf_append_u8(code, 248); buf_append_u8(code, 31); // btc $31, %eax
+                }
+                return;
+            }
             buf_append_u8(code, 72);
             buf_append_u8(code, 247);
             buf_append_u8(code, 216); // neg %rax (CF = operand was non-zero, OF = it was INT64_MIN)
@@ -1489,6 +1738,58 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_BINARY {
+        let float_t: string = ng_float_result_type(ng_expr_type(ng, expr.left), ng_expr_type(ng, expr.right));
+        if float_t.len > 0 {
+            let wide: bool = str_eq(float_t, "f64");
+            ng_emit_expr_as(ng, code, data, expr.left, float_t);
+            buf_append_u8(code, 80); // push %rax
+            ng_emit_expr_as(ng, code, data, expr.right, float_t);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx
+            buf_append_u8(code, 88); // pop %rax
+            ng_emit_rax_to_xmm0(code, wide);
+            ng_emit_rbx_to_xmm1(code, wide);
+            let op: u32 = expr.tok.tag;
+            let mut arith: u8 = 0;
+            if op == TOK_PLUS { arith = 88; }   // addsd / addss
+            if op == TOK_MINUS { arith = 92; }  // subsd / subss
+            if op == TOK_STAR { arith = 89; }   // mulsd / mulss
+            if op == TOK_SLASH { arith = 94; }  // divsd / divss
+            if arith != 0 {
+                // No overflow or division trap: IEEE 754 defines inf and NaN results.
+                buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 15); buf_append_u8(code, arith); buf_append_u8(code, 193); // op %xmm1, %xmm0
+                ng_emit_xmm0_to_rax(code, wide);
+                ng_emit_fp_check(ng, code, wide);
+                return;
+            }
+            // Ordered comparisons; anything compared with NaN is false. a < b is tested as b > a.
+            let mut swapped: bool = op == TOK_LT;
+            if op == TOK_LTE { swapped = true; }
+            let mut strict: bool = op == TOK_LT;
+            if op == TOK_GT { strict = true; }
+            let mut is_cmp: bool = swapped;
+            if op == TOK_GT { is_cmp = true; }
+            if op == TOK_GTE { is_cmp = true; }
+            if !is_cmp {
+                ng_fail(ng, "native codegen error: operator is not defined for floats (use + - * / and < <= > >=)");
+                return;
+            }
+            if wide { buf_append_u8(code, 102); }
+            buf_append_u8(code, 15); buf_append_u8(code, 46); // ucomisd / ucomiss
+            if swapped {
+                buf_append_u8(code, 200); // %xmm0, %xmm1: flags for b ? a
+            } else {
+                buf_append_u8(code, 193); // %xmm1, %xmm0: flags for a ? b
+            }
+            buf_append_u8(code, 15);
+            if strict {
+                buf_append_u8(code, 151); // seta
+            } else {
+                buf_append_u8(code, 147); // setae
+            }
+            buf_append_u8(code, 192);
+            buf_append_u8(code, 15); buf_append_u8(code, 182); buf_append_u8(code, 192); // movzbl %al, %eax
+            return;
+        }
         let mut is_uns: bool = ng_binary_unsigned(ng, expr.left, expr.right);
         if expr.tok.tag == TOK_SHR {
             // A right shift is arithmetic or logical by its left operand alone.
@@ -1741,6 +2042,15 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") {
+            // Built-in: one correctly rounded instruction (the C backend uses __builtin_sqrt).
+            ng_emit_expr_as(ng, code, data, expr.left, "f64");
+            ng_emit_rax_to_xmm0(code, true);
+            buf_append_u8(code, 242); buf_append_u8(code, 15); buf_append_u8(code, 81); buf_append_u8(code, 192); // sqrtsd %xmm0, %xmm0
+            ng_emit_xmm0_to_rax(code, true);
+            ng_emit_fp_check(ng, code, true);
+            return;
+        }
         let w_op: string = wrapping_op(expr.tok.slice);
         if w_op.len > 0 {
             let mut w_argc: usize = 0;
@@ -1772,8 +2082,10 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
         let mut reg_count: usize = 0;
         let mut a: *mut AstNode = expr.left;
+        let mut a_idx: usize = 0;
         while a != (0).as(*mut AstNode) {
-            ng_emit_expr(ng, code, data, a);
+            ng_emit_expr_as(ng, code, data, a, ng_fn_param_type(ng, expr.tok.slice, a_idx));
+            a_idx = a_idx + 1;
             let a_sz: i32 = ng_find_struct_size(ng, ng_expr_type(ng, a));
             if ng_is_expr_slice(ng, a) {
                 buf_append_u8(code, 80); // push %rax (ptr)
@@ -2052,7 +2364,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                             let mut el: *mut AstNode = first_el;
                             let mut k: i32 = 0;
                             while el != (0).as(*mut AstNode) {
-                                ng_emit_expr(ng, code, data, el);
+                                ng_emit_expr_as(ng, code, data, el, elem_t);
                                 let el_off: i32 = base_off + (k * stride);
                                 if stride == 1 {
                                     buf_append_u8(code, 136);
@@ -2095,7 +2407,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     while f != (0).as(*mut AstNode) {
                         let f_off: i32 = ng_find_field_offset(ng, t_name, f.tok.slice);
                         let f_type: string = ng_find_field_type(ng, t_name, f.tok.slice);
-                        ng_emit_expr(ng, code, data, f.left);
+                        ng_emit_expr_as(ng, code, data, f.left, f_type);
                         let f_words: i32 = ng_value_words(ng, f_type);
                         if f_words > 1 {
                             ng_emit_disp_store_rax(code, base_off + f_off);
@@ -2121,7 +2433,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         }
 
         // Scalar or slice local variable
-        ng_emit_expr(ng, code, data, stmt.left);
+        ng_emit_expr_as(ng, code, data, stmt.left, t_name);
         ng_emit_range_check(ng, code, t_name, "__trap_overflow");
 
         ng.curr_off = ng.curr_off - 8;
@@ -2152,7 +2464,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 let vt: string = ng_find_var_type(ng, stmt.left.tok.slice);
                 let s_sz: i32 = ng_find_struct_size(ng, vt);
                 let off: i32 = ng_find_var_offset(ng, stmt.left.tok.slice);
-                ng_emit_expr(ng, code, data, stmt.right);
+                ng_emit_expr_as(ng, code, data, stmt.right, vt);
                 if s_sz > 0 {
                     ng_emit_disp_store_rax(code, off);
                     if s_sz >= 16 { ng_emit_disp_store_rdx(code, off + 8); }
@@ -2168,7 +2480,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             }
             let lhs_t: string = ng_expr_type(ng, stmt.left);
-            ng_emit_expr(ng, code, data, stmt.right);
+            ng_emit_expr_as(ng, code, data, stmt.right, lhs_t);
             let lhs_words: i32 = ng_value_words(ng, lhs_t);
             if lhs_words > 2 {
                 // 3- or 4-word struct: park the words on the stack while the address is computed.
@@ -2217,7 +2529,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
 
     if stmt.tag == NODE_RETURN {
         if stmt.left != (0).as(*mut AstNode) {
-            ng_emit_expr(ng, code, data, stmt.left);
+            ng_emit_expr_as(ng, code, data, stmt.left, ng.cur_ret);
         } else {
             buf_append_u8(code, 72);
             buf_append_u8(code, 49);
@@ -2359,6 +2671,13 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             } else {
                 let arg_t: string = ng_expr_type(ng, arg);
+                if is_float_type(arg_t) {
+                    // The formatter is oC code (std/sys/float.oc), shared with the C backend.
+                    ng_emit_expr_as(ng, code, data, arg, "f64");
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 199); // mov %rax, %rdi
+                    ng_emit_call(ng, code, "fmt_print_f64");
+                    return;
+                }
                 if str_eq(arg_t, "bool") {
                     ng_emit_expr(ng, code, data, arg);
                     buf_append_u8(code, 72); buf_append_u8(code, 133); buf_append_u8(code, 192); // test %rax, %rax
@@ -2811,7 +3130,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     return ok;
 }
 
-fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> bool {
+fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_trap: bool) -> bool {
     let mut code_buf: CodeBuffer = buf_init(262144);
     let mut data_buf: CodeBuffer = buf_init(65536);
     let code: *mut CodeBuffer = &mut code_buf;
@@ -2848,6 +3167,10 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
         field_types: [""],
         field_packed: [false],
         field_count: 0,
+        root: root,
+        fp_trap: fp_trap,
+        cur_ret: "",
+        const_types: [""],
         const_names: [""],
         const_vals: [0],
         const_count: 0,
@@ -2914,8 +3237,34 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
         } else if scan.tag == NODE_LET {
             if scan.left != (0).as(*mut AstNode) {
                 if ng.const_count < 128 {
+                    let mut lit: *mut AstNode = scan.left;
+                    let mut negative: bool = false;
+                    if lit.tag == NODE_UNARY {
+                        if lit.tok.tag == TOK_MINUS {
+                            if lit.left != (0).as(*mut AstNode) {
+                                negative = true;
+                                lit = lit.left;
+                            }
+                        }
+                    }
+                    let mut c_type: string = scan.type_name;
+                    if c_type.len == 0 {
+                        if lit.tag == NODE_FLOAT { c_type = "f64"; }
+                    }
+                    let mut c_val: u64 = 0;
+                    if str_eq(c_type, "f64") {
+                        c_val = ng_literal_bits(ng, lit.tok.slice, false);
+                        if negative { c_val = c_val ^ 0x8000000000000000; }
+                    } else if str_eq(c_type, "f32") {
+                        c_val = ng_literal_bits(ng, lit.tok.slice, true);
+                        if negative { c_val = c_val ^ 0x80000000; }
+                    } else {
+                        c_val = parse_u64(lit.tok.slice);
+                        if negative { c_val = wrapping_sub(0, c_val); }
+                    }
                     ng.const_names[ng.const_count] = scan.tok.slice;
-                    ng.const_vals[ng.const_count] = parse_u64(scan.left.tok.slice);
+                    ng.const_types[ng.const_count] = c_type;
+                    ng.const_vals[ng.const_count] = c_val;
                     ng.const_count = ng.const_count + 1;
                 }
             }
@@ -2986,6 +3335,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
                 ng.var_count = 0;
                 ng.curr_off = 0;
                 ng.scope_depth = 0;
+                ng.cur_ret = decl.type_name;
 
                 let mut p: *mut AstNode = decl.left;
                 let mut param_bytes: i32 = 0;
@@ -3194,22 +3544,24 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
 
     // Trap functions
     // Same panic texts as the C backend, so a trap reads the same whichever backend built it.
-    let mut traps: [6]string = [""];
+    let mut traps: [7]string = [""];
     traps[0] = "__trap_null_deref";
     traps[1] = "__trap_slice_bounds";
     traps[2] = "__trap_overflow";
     traps[3] = "__trap_div_zero";
     traps[4] = "__trap_cast_signed";
     traps[5] = "__trap_cast_unsigned";
-    let mut trap_msgs: [6]string = [""];
+    traps[6] = "__trap_fp";
+    let mut trap_msgs: [7]string = [""];
     trap_msgs[0] = "panic: null pointer dereference\n";
     trap_msgs[1] = "panic: slice index out of bounds\n";
     trap_msgs[2] = "panic: integer overflow\n";
     trap_msgs[3] = "panic: division by zero\n";
     trap_msgs[4] = "panic: invalid signed cast\n";
     trap_msgs[5] = "panic: invalid unsigned cast\n";
+    trap_msgs[6] = "panic: floating-point result is NaN or infinite\n";
     let mut ti: usize = 0;
-    while ti < 6 {
+    while ti < 7 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;
@@ -3313,12 +3665,12 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32) -> b
     return true;
 }
 
-fn emit_native_elf(root: *mut AstNode, out_file_str: string) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64);
+fn emit_native_elf(root: *mut AstNode, out_file_str: string, fp_trap: bool) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap);
 }
 
-fn emit_native_pe(root: *mut AstNode, out_file_str: string) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64);
+fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap);
 }
 
 fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {

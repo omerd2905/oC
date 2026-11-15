@@ -1,0 +1,134 @@
+// Text formatting for f32 / f64.
+//
+// The compiler appends this file to every program that uses floating point, and print() of a
+// float calls fmt_print_f64. Because the formatter is ordinary oC, both backends run the same
+// algorithm and print exactly the same text.
+//
+// Format:
+//   NaN, inf, -inf            for the special values
+//   d.dddddd                  six digits after the point, for 0 and for 1e-4 <= |x| < 1e15
+//   d.dddddde+XX / e-XX       scientific notation with a six-digit fraction otherwise
+// Negative zero prints as 0.000000.
+
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+
+// Writes the decimal digits of v into buf starting at position n; returns the next position.
+fn fmt_put_u64(buf: *mut u8, n: usize, v: u64) -> usize {
+    let mut tmp: [20]u8 = [0];
+    let mut count: usize = 0;
+    let mut x: u64 = v;
+    if x == 0 {
+        buf[n] = 48;
+        return n + 1;
+    }
+    while x > 0 {
+        tmp[count] = (48 + (x % 10)).as(u8);
+        x = x / 10;
+        count = count + 1;
+    }
+    let mut pos: usize = n;
+    while count > 0 {
+        count = count - 1;
+        buf[pos] = tmp[count];
+        pos = pos + 1;
+    }
+    return pos;
+}
+
+// Writes v (0 <= v < 1e15) with six digits after the point, rounded to nearest.
+fn fmt_put_fixed6(buf: *mut u8, n: usize, v: f64) -> usize {
+    let mut whole: u64 = v.as(u64);
+    let frac: f64 = v - whole.as(f64);
+    let mut millionths: u64 = ((frac * 1000000.0) + 0.5).as(u64);
+    if millionths >= 1000000 {
+        whole = whole + 1;
+        millionths = millionths - 1000000;
+    }
+    let mut pos: usize = fmt_put_u64(buf, n, whole);
+    buf[pos] = 46; // '.'
+    pos = pos + 1;
+    let mut div: u64 = 100000;
+    while div > 0 {
+        buf[pos] = (48 + ((millionths / div) % 10)).as(u8);
+        pos = pos + 1;
+        div = div / 10;
+    }
+    return pos;
+}
+
+fn fmt_print_f64(x: f64) {
+    if !(x <= x) { // only NaN is not <= itself
+        sys_write(1, "NaN\n".ptr, 4);
+        return;
+    }
+    let mut buf: [48]u8 = [0];
+    let b: *mut u8 = (&mut buf).as(*mut u8);
+    let mut n: usize = 0;
+    let mut v: f64 = x;
+    if v < 0.0 {
+        b[0] = 45; // '-'
+        n = 1;
+        v = -v;
+    }
+    if v > 1.7976931348623157e308 {
+        b[n] = 105;     // 'i'
+        b[n + 1] = 110; // 'n'
+        b[n + 2] = 102; // 'f'
+        n = n + 3;
+    } else if v < 1.0e15 {
+        if v >= 0.0001 {
+            n = fmt_put_fixed6(b, n, v);
+        } else if v > 0.0 {
+            n = fmt_put_sci(b, n, v);
+        } else {
+            n = fmt_put_fixed6(b, n, 0.0);
+        }
+    } else {
+        n = fmt_put_sci(b, n, v);
+    }
+    b[n] = 10; // '\n'
+    sys_write(1, b.as(*u8), n + 1);
+}
+
+// Writes v (finite, > 0) as d.dddddde+XX.
+fn fmt_put_sci(buf: *mut u8, n: usize, v: f64) -> usize {
+    let mut m: f64 = v;
+    let mut e: i32 = 0;
+    // Bring m into [1, 10). Large steps first keep the rounding error of the scaling small.
+    while m >= 1.0e16 {
+        m = m / 1.0e16;
+        e = e + 16;
+    }
+    while m < 1.0e-15 {
+        m = m * 1.0e16;
+        e = e - 16;
+    }
+    while m >= 10.0 {
+        m = m / 10.0;
+        e = e + 1;
+    }
+    while m < 1.0 {
+        m = m * 10.0;
+        e = e - 1;
+    }
+    if m >= 9.9999995 { // would print as 10.000000
+        m = 1.0;
+        e = e + 1;
+    }
+    let mut pos: usize = fmt_put_fixed6(buf, n, m);
+    buf[pos] = 101; // 'e'
+    pos = pos + 1;
+    let mut mag: i32 = e;
+    if e < 0 {
+        buf[pos] = 45; // '-'
+        mag = -e;
+    } else {
+        buf[pos] = 43; // '+'
+    }
+    pos = pos + 1;
+    if mag < 10 {
+        buf[pos] = 48;
+        pos = pos + 1;
+    }
+    return fmt_put_u64(buf, pos, mag.as(u64));
+}

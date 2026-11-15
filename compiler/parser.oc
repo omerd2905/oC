@@ -134,6 +134,10 @@ fn parse_primary(p: *mut Parser) -> *mut AstNode {
         parser_advance(p);
         return ast_alloc_node(p.arena, NODE_STRING, tok);
     }
+    if tok.tag == TOK_FLOAT {
+        parser_advance(p);
+        return ast_alloc_node(p.arena, NODE_FLOAT, tok);
+    }
     if tok.tag == TOK_TRUE {
         parser_advance(p);
         return ast_alloc_node(p.arena, NODE_BOOL, tok);
@@ -801,6 +805,7 @@ struct FnEffects {
 struct Validator {
     fx: *mut FnEffects,
     program: *mut AstNode,
+    ret_type: string, // declared return type of the function being checked
     vars: [512]VarInfo,
     vars_count: usize,
     deinit_arenas: [128]string,
@@ -1115,6 +1120,130 @@ fn validator_stack_place_type(v: *mut Validator, expr: *mut AstNode) -> string {
     return "";
 }
 
+fn is_float_type_name(t: string) -> bool {
+    if str_eq(t, "f64") { return true; }
+    return str_eq(t, "f32");
+}
+
+fn is_int_type_name(t: string) -> bool {
+    if !is_scalar_value_type(t) { return false; }
+    return !str_eq(t, "bool");
+}
+
+// "*T", "*mut T", "&T", "&mut T" -> "T"; anything else unchanged.
+fn strip_ptr_type(t: string) -> string {
+    if t.len < 2 { return t; }
+    let mut is_ptr: bool = t[0] == 42;
+    if t[0] == 38 { is_ptr = true; }
+    if !is_ptr { return t; }
+    if t.len > 5 {
+        if str_eq(t[1..5], "mut ") { return t[5..t.len]; }
+    }
+    return t[1..t.len];
+}
+
+// First declaration of function `name` in the program (null if there is none).
+fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
+    let mut decl: *mut AstNode = v.program.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_FN {
+            if str_eq(decl.tok.slice, name) { return decl; }
+        }
+        decl = decl.next;
+    }
+    return (0).as(*mut AstNode);
+}
+
+// Best-effort static type of an expression ("" when unknown). The validator is not a full
+// type checker; this is enough to tell floats from integers.
+fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_BOOL { return "bool"; }
+    if expr.tag == NODE_STRING { return "string"; }
+    if expr.tag == NODE_CAST { return expr.type_name; }
+    if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
+    if expr.tag == NODE_IDENT {
+        let idx: i32 = validator_find_var(v, expr.tok.slice);
+        if idx >= 0 { return v.vars[idx.as(usize)].type_name; }
+        let mut decl: *mut AstNode = v.program.left;
+        while decl != (0).as(*mut AstNode) {
+            if decl.tag == NODE_LET {
+                if str_eq(decl.tok.slice, expr.tok.slice) { return decl.type_name; }
+            }
+            decl = decl.next;
+        }
+        return "";
+    }
+    if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; } // built-in
+        let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
+        if callee == (0).as(*mut AstNode) { return ""; }
+        return callee.type_name;
+    }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_BANG { return "bool"; }
+        return validator_expr_type(v, expr.left);
+    }
+    if expr.tag == NODE_DEREF { return strip_ptr_type(validator_expr_type(v, expr.left)); }
+    if expr.tag == NODE_FIELD_ACCESS {
+        return validator_field_type(v, strip_ptr_type(validator_expr_type(v, expr.left)), expr.tok.slice);
+    }
+    if expr.tag == NODE_INDEX {
+        let base: string = validator_expr_type(v, expr.left);
+        if str_eq(base, "string") { return "u8"; }
+        if starts_with(base, "[") {
+            let mut close: usize = 1;
+            while close < base.len {
+                if base[close] == 93 { break; }
+                close = close + 1;
+            }
+            if close + 1 >= base.len { return ""; }
+            return base[close + 1..base.len];
+        }
+        if starts_with(base, "*") { return strip_ptr_type(base); }
+        return "";
+    }
+    if expr.tag == NODE_BINARY {
+        let op: u32 = expr.tok.tag;
+        let mut is_cmp: bool = op == TOK_EQEQ;
+        if op == TOK_NEQ { is_cmp = true; }
+        if op == TOK_LT { is_cmp = true; }
+        if op == TOK_LTE { is_cmp = true; }
+        if op == TOK_GT { is_cmp = true; }
+        if op == TOK_GTE { is_cmp = true; }
+        if is_cmp { return "bool"; }
+        let lt: string = validator_expr_type(v, expr.left);
+        let rt: string = validator_expr_type(v, expr.right);
+        if str_eq(lt, "f64") { return lt; }
+        if str_eq(rt, "f64") { return rt; }
+        if is_float_type_name(lt) { return lt; }
+        if is_float_type_name(rt) { return rt; }
+        if lt.len > 0 { return lt; }
+        return rt;
+    }
+    return "";
+}
+
+fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
+    return is_float_type_name(validator_expr_type(v, expr));
+}
+
+// A float never becomes an integer silently: in C that conversion is undefined behaviour
+// when the value does not fit, so it has to go through .as(T), which checks the range.
+// Returns false (after reporting) if `value` is a float going into integer type `target`.
+fn validator_check_no_float_to_int(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if !is_int_type_name(target) { return true; }
+    if !validator_is_float(v, value) { return true; }
+    print_str_raw("error: implicit conversion from float to integer in ");
+    print_str_raw(place);
+    print_str_raw("; write .as(");
+    print_str_raw(target);
+    print_str_raw("), which checks that the value fits\n");
+    v.has_error = true;
+    return false;
+}
+
 // `buf[a..b]` on a fixed-size array stored in a local variable (directly, or as a field or
 // element of one) borrows the stack frame, like `&buf`. Returns the local's name, or "" when
 // `expr` is not such a slice.
@@ -1295,6 +1424,18 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
             a = a.next;
         }
 
+        let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
+        if callee != (0).as(*mut AstNode) {
+            let mut prm: *mut AstNode = callee.left;
+            let mut arg_v: *mut AstNode = expr.left;
+            while prm != (0).as(*mut AstNode) {
+                if arg_v == (0).as(*mut AstNode) { break; }
+                if !validator_check_no_float_to_int(v, prm.type_name, arg_v, "a function argument") { return false; }
+                prm = prm.next;
+                arg_v = arg_v.next;
+            }
+        }
+
         // The call may reset or deinit an arena passed to it, directly or through its callees.
         let mut ea: *mut AstNode = expr.left;
         let mut ei: usize = 0;
@@ -1344,9 +1485,36 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
     if expr.tag == NODE_INDEX {
         if !check_expr_use(v, expr.left) { return false; }
+        if validator_is_float(v, expr.right) {
+            print("error: an index must be an integer; convert the float with .as(usize)");
+            v.has_error = true;
+            return false;
+        }
         return check_expr_use(v, expr.right);
     }
     if expr.tag == NODE_BINARY {
+        let mut float_operand: bool = validator_is_float(v, expr.left);
+        if validator_is_float(v, expr.right) { float_operand = true; }
+        if float_operand {
+            let mut is_equality: bool = expr.tok.tag == TOK_EQEQ;
+            if expr.tok.tag == TOK_NEQ { is_equality = true; }
+            if is_equality {
+                print("error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN");
+                v.has_error = true;
+                return false;
+            }
+            let mut int_only: bool = expr.tok.tag == TOK_PERCENT;
+            if expr.tok.tag == TOK_AMP { int_only = true; }
+            if expr.tok.tag == TOK_PIPE { int_only = true; }
+            if expr.tok.tag == TOK_CARET { int_only = true; }
+            if expr.tok.tag == TOK_SHL { int_only = true; }
+            if expr.tok.tag == TOK_SHR { int_only = true; }
+            if int_only {
+                print("error: the operators % & | ^ << >> are defined for integers only, not for floats");
+                v.has_error = true;
+                return false;
+            }
+        }
         if !check_expr_use(v, expr.left) { return false; }
         return check_expr_use(v, expr.right);
     }
@@ -1424,8 +1592,12 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 if stmt.left.tag == NODE_STRUCT_INIT {
                     inferred_type = stmt.left.tok.slice; // `let m = Msg { ... }` has type Msg
                 }
+                if validator_is_float(v, stmt.left) {
+                    inferred_type = validator_expr_type(v, stmt.left); // `let x = 1.5` is an f64
+                }
             }
         }
+        if !validator_check_no_float_to_int(v, inferred_type, stmt.left, "a variable initializer") { return false; }
 
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1518,6 +1690,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_ASSIGN {
         if !check_expr_use(v, stmt.right) { return false; }
+        if !validator_check_no_float_to_int(v, validator_expr_type(v, stmt.left), stmt.right, "an assignment") { return false; }
         let mut is_direct_ident: bool = false;
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1683,6 +1856,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     if stmt.tag == NODE_RETURN {
         if stmt.left != (0).as(*mut AstNode) {
             if !check_expr_use(v, stmt.left) { return false; }
+            if !validator_check_no_float_to_int(v, v.ret_type, stmt.left, "a return value") { return false; }
             let src_name: string = contains_stack_ref(v, stmt.left);
             if src_name.len > 0 {
                 print_err_ret_local(src_name);
@@ -1769,6 +1943,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode)
     let mut v: Validator = Validator {
         fx: fx,
         program: program,
+        ret_type: f.type_name,
         vars: [VarInfo {
             name: "",
             type_name: "",
