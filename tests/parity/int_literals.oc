@@ -1,6 +1,16 @@
+// Integer literal forms: digit separators, binary and hex, and decimal values above the i64
+// maximum (which are u64 and must not make the C compiler warn).
 fn main() {
-    let a: u32 = 0b0010_1010;
-    let b: u64 = 1_000_000;
-    print(a);
-    print(b + 1);
+    let a: u64 = 9223372036854775807;
+    let b: u64 = 9223372036854775808;
+    let c: u64 = 18446744073709551615;
+    let d: u64 = 0xffffffffffffffff;
+    let e: u64 = 1_000_000;
+    let f: u32 = 0b0010_1010;
+    print(a);       // 9223372036854775807
+    print(b);       // 9223372036854775808
+    print(c);       // 18446744073709551615
+    print(d);       // 18446744073709551615
+    print(e + 1);   // 1000001
+    print(f);       // 42
 }

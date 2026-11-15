@@ -554,8 +554,10 @@ oc_string ng_parse_array_elem(oc_string t);
 int32_t ng_type_stride(oc_string t);
 bool ng_is_byte_type(oc_string t);
 bool is_unsigned_type_name(oc_string t);
+int32_t ng_int_class(oc_string t);
 oc_string ng_expr_type(NativeGen* ng, AstNode* expr);
 bool ng_is_unsigned_expr(NativeGen* ng, AstNode* expr);
+bool ng_binary_unsigned(NativeGen* ng, AstNode* left, AstNode* right);
 bool ng_is_expr_slice(NativeGen* ng, AstNode* expr);
 void ng_emit_disp_store_rax(CodeBuffer* code, int32_t off);
 void ng_emit_disp_store_rdx(CodeBuffer* code, int32_t off);
@@ -3689,12 +3691,39 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_INT)) {
+    size_t lit_start = ((out)->len);
     size_t di = 0;
     while ((di < ((((((expr)->tok)).slice)).len))) {
     if ((__oc_index_str(((((expr)->tok)).slice), di) != 95)) {
     buf_append_u8(out, __oc_index_str(((((expr)->tok)).slice), di));
     }
     di = __OC_ADD(di, 1);
+    }
+    oc_string digits = (oc_string){ .ptr = ((uint8_t*)((((out)->buffer) + lit_start))), .len = __OC_SUB(((out)->len), lit_start) };
+    bool is_decimal = true;
+    if ((((digits).len) > 1)) {
+    if ((__oc_index_str(digits, 0) == 48)) {
+    if ((__oc_index_str(digits, 1) > 57)) {
+    is_decimal = false;
+    }
+    }
+    }
+    if (is_decimal) {
+    bool too_big = (((digits).len) > 19);
+    if ((((digits).len) == 19)) {
+    oc_string limit = (oc_string){ .ptr = (const uint8_t*)("9223372036854775807"), .len = sizeof("9223372036854775807") - 1 };
+    size_t k = 0;
+    while ((k < 19)) {
+    if ((__oc_index_str(digits, k) != __oc_index_str(limit, k))) {
+    too_big = (__oc_index_str(digits, k) > __oc_index_str(limit, k));
+    break;
+    }
+    k = __OC_ADD(k, 1);
+    }
+    }
+    if (too_big) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("ULL"), .len = sizeof("ULL") - 1 });
+    }
     }
     return;
     }
@@ -5301,6 +5330,31 @@ bool is_unsigned_type_name(oc_string t) {
     return false;
 }
 
+int32_t ng_int_class(oc_string t) {
+    if ((((t).len) == 0)) {
+    return 0;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 })) {
+    return 3;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 })) {
+    return 3;
+    }
+    if ((__oc_index_str(t, 0) == 42)) {
+    return 3;
+    }
+    if ((__oc_index_str(t, 0) == 38)) {
+    return 3;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 })) {
+    return 2;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 })) {
+    return 1;
+    }
+    return 0;
+}
+
 oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -5419,6 +5473,17 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     }
     oc_string lt = ng_expr_type(ng, ((expr)->left));
     oc_string rt = ng_expr_type(ng, ((expr)->right));
+    bool is_shift = (((((expr)->tok)).tag) == TOK_SHL);
+    if ((((((expr)->tok)).tag) == TOK_SHR)) {
+    is_shift = true;
+    }
+    if ((!is_shift)) {
+    int32_t cl = ng_int_class(lt);
+    int32_t cr = ng_int_class(rt);
+    if ((cr > cl)) {
+    return rt;
+    }
+    }
     if ((((lt).len) > 0)) {
     return lt;
     }
@@ -5436,19 +5501,41 @@ bool ng_is_unsigned_expr(NativeGen* ng, AstNode* expr) {
     return false;
     }
     }
-    oc_string t = ng_expr_type(ng, expr);
-    if (is_unsigned_type_name(t)) {
-    return true;
-    }
     if ((((expr)->tag) == NODE_BINARY)) {
-    if (ng_is_unsigned_expr(ng, ((expr)->left))) {
-    return true;
-    }
-    if (ng_is_unsigned_expr(ng, ((expr)->right))) {
-    return true;
-    }
-    }
+    if (is_comparison_tok(((((expr)->tok)).tag))) {
     return false;
+    }
+    bool is_shift = (((((expr)->tok)).tag) == TOK_SHL);
+    if ((((((expr)->tok)).tag) == TOK_SHR)) {
+    is_shift = true;
+    }
+    if (is_shift) {
+    return ng_is_unsigned_expr(ng, ((expr)->left));
+    }
+    return ng_binary_unsigned(ng, ((expr)->left), ((expr)->right));
+    }
+    return is_unsigned_type_name(ng_expr_type(ng, expr));
+}
+
+bool ng_binary_unsigned(NativeGen* ng, AstNode* left, AstNode* right) {
+    int32_t cl = ng_int_class(ng_expr_type(ng, left));
+    int32_t cr = ng_int_class(ng_expr_type(ng, right));
+    if ((cl == 3)) {
+    return true;
+    }
+    if ((cr == 3)) {
+    return true;
+    }
+    if ((cl == 2)) {
+    return false;
+    }
+    if ((cr == 2)) {
+    return false;
+    }
+    if ((cl == 1)) {
+    return true;
+    }
+    return (cr == 1);
 }
 
 bool ng_is_expr_slice(NativeGen* ng, AstNode* expr) {
@@ -6550,12 +6637,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_BINARY)) {
-    bool is_uns = false;
-    if (ng_is_unsigned_expr(ng, ((expr)->left))) {
-    is_uns = true;
-    }
-    if (ng_is_unsigned_expr(ng, ((expr)->right))) {
-    is_uns = true;
+    bool is_uns = ng_binary_unsigned(ng, ((expr)->left), ((expr)->right));
+    if ((((((expr)->tok)).tag) == TOK_SHR)) {
+    is_uns = is_unsigned_type_name(ng_expr_type(ng, ((expr)->left)));
     }
     oc_string res_type = ng_expr_type(ng, expr);
     oc_string lt = ng_expr_type(ng, ((expr)->left));

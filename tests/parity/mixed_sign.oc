@@ -1,0 +1,24 @@
+// Operations that mix signed and unsigned operands follow one rule on both backends: a
+// 64-bit unsigned operand makes the operation unsigned; otherwise a u32 does, unless the
+// other side is i64. A right shift is arithmetic or logical by its left operand alone.
+fn main() {
+    let y: i64 = -1000;
+    let i: u32 = 3;
+    print(y >> i);        // -125 (arithmetic shift: the left operand is signed)
+    let d: u32 = 7;
+    print(y / d);         // -142
+    print(y % d);         // -6
+    print(y < d);         // true
+    print(y + d);         // -993
+    let e: i64 = -1;
+    print(e + d);         // 6
+    let u: u64 = 18446744073709551615;
+    let one: u32 = 1;
+    print(u > one);       // true
+    print(u >> one);      // 9223372036854775807
+    let a: u8 = 200;
+    let b: u8 = 100;
+    print(a > b);         // true
+    let s: i32 = -4;
+    print(s >> one);      // -2
+}

@@ -258,12 +258,37 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
 
     if expr.tag == NODE_INT {
         // `_` digit separators (1_000, 0b0010_1010) are oC syntax; C does not accept them.
+        let lit_start: usize = out.len;
         let mut di: usize = 0;
         while di < expr.tok.slice.len {
             if expr.tok.slice[di] != 95 {
                 buf_append_u8(out, expr.tok.slice[di]);
             }
             di = di + 1;
+        }
+        // A decimal literal above the i64 maximum is a u64 in oC; C wants that said out loud
+        // ("integer constant is so large that it is unsigned"). Hex and binary need nothing.
+        let digits: string = string { ptr: (out.buffer + lit_start).as(*u8), len: out.len - lit_start };
+        let mut is_decimal: bool = true;
+        if digits.len > 1 {
+            if digits[0] == 48 {
+                if digits[1] > 57 { is_decimal = false; } // 0x.. / 0b..
+            }
+        }
+        if is_decimal {
+            let mut too_big: bool = digits.len > 19;
+            if digits.len == 19 {
+                let limit: string = "9223372036854775807";
+                let mut k: usize = 0;
+                while k < 19 {
+                    if digits[k] != limit[k] {
+                        too_big = digits[k] > limit[k];
+                        break;
+                    }
+                    k = k + 1;
+                }
+            }
+            if too_big { buf_append(out, "ULL"); }
         }
         return;
     }
