@@ -842,6 +842,7 @@ struct Validator {
     scope_depth: u32,
     has_error: bool,
     initializing_var: string,
+    srcmap: *SourceMap, // for file:line:col in diagnostics
 }
 
 fn validator_find_var(v: *mut Validator, name: string) -> i32 {
@@ -1311,6 +1312,134 @@ fn validator_check_no_float_to_int(v: *mut Validator, target: string, value: *mu
     return false;
 }
 
+// Integer types whose every value f64 (53-bit significand) or f32 (24-bit) holds exactly.
+fn int_converts_exactly(int_t: string, float_t: string) -> bool {
+    if str_eq(int_t, "i8") { return true; }
+    if str_eq(int_t, "u8") { return true; }
+    if str_eq(int_t, "i16") { return true; }
+    if str_eq(int_t, "u16") { return true; }
+    if str_eq(float_t, "f32") { return false; }
+    if str_eq(int_t, "i32") { return true; }
+    return str_eq(int_t, "u32");
+}
+
+// True if integer literal `text` (decimal, 0x or 0b, `_` separators) is exactly representable
+// in a float with a `bits`-bit significand: once its trailing zero bits are removed, the
+// rest has to fit in `bits` bits. (Every u64 is within the exponent range of f32 and f64.)
+fn int_literal_converts_exactly(text: string, bits: u64) -> bool {
+    let mut base: u64 = 10;
+    let mut i: usize = 0;
+    if text.len > 2 {
+        if text[0] == 48 {
+            if text[1] == 120 { base = 16; i = 2; }
+            if text[1] == 88 { base = 16; i = 2; }
+            if text[1] == 98 { base = 2; i = 2; }
+        }
+    }
+    let mut val: u64 = 0;
+    while i < text.len {
+        let c: u8 = text[i];
+        let mut d: u64 = 99; // `_` and anything else is skipped
+        if c >= 48 { if c <= 57 { d = (c - 48).as(u64); } }
+        if c >= 97 { if c <= 102 { d = (c - 87).as(u64); } }
+        if c >= 65 { if c <= 70 { d = (c - 55).as(u64); } }
+        if d < base {
+            if val > (18446744073709551615 - d) / base { return false; }
+            val = (val * base) + d;
+        }
+        i = i + 1;
+    }
+    while val > 0 {
+        if (val & 1) == 1 { break; }
+        val = val >> 1;
+    }
+    return (val >> bits) == 0;
+}
+
+// An integer becomes a float, or an f64 an f32, implicitly only when no information can be
+// lost; otherwise it has to be written as .as(T), which rounds to the nearest value.
+// Float literals are exempt: `let k: f32 = 0.1;` means the f32 nearest to 0.1.
+fn validator_check_lossless_to_float(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if !is_float_type_name(target) { return true; }
+    if value == (0).as(*mut AstNode) { return true; }
+    let mut lit: *mut AstNode = value;
+    if lit.tag == NODE_UNARY {
+        if lit.tok.tag == TOK_MINUS { lit = lit.left; }
+    }
+    if lit.tag == NODE_FLOAT { return true; }
+    if lit.tag == NODE_INT {
+        let mut bits: u64 = 53;
+        if str_eq(target, "f32") { bits = 24; }
+        if int_literal_converts_exactly(lit.tok.slice, bits) { return true; }
+        print_src_loc(v.srcmap, lit.tok);
+        print_str_raw("error: integer literal ");
+        print_str_raw(lit.tok.slice);
+        print_str_raw(" in ");
+        print_str_raw(place);
+        print_str_raw(" is not exactly representable as ");
+        print_str_raw(target);
+        print_str_raw("; write (");
+        print_str_raw(lit.tok.slice);
+        print_str_raw(").as(");
+        print_str_raw(target);
+        print_str_raw(") to accept the rounding\n");
+        v.has_error = true;
+        return false;
+    }
+    let from: string = validator_expr_type(v, value);
+    if is_int_type_name(from) {
+        if int_converts_exactly(from, target) { return true; }
+    } else if str_eq(from, "f64") {
+        if !str_eq(target, "f32") { return true; }
+    } else {
+        return true; // f32, or a type the validator cannot see
+    }
+    print_src_loc(v.srcmap, value.tok);
+    print_str_raw("error: implicit conversion from ");
+    print_str_raw(from);
+    print_str_raw(" to ");
+    print_str_raw(target);
+    print_str_raw(" in ");
+    print_str_raw(place);
+    print_str_raw(" can lose precision; write .as(");
+    print_str_raw(target);
+    print_str_raw("), which rounds to the nearest ");
+    print_str_raw(target);
+    print_str_raw("\n");
+    v.has_error = true;
+    return false;
+}
+
+// Element type of an array type "[N]T" ("" for anything else).
+fn array_elem_type(t: string) -> string {
+    if !starts_with(t, "[") { return ""; }
+    let mut i: usize = 1;
+    while i < t.len {
+        if t[i] == 93 { return t[i + 1..t.len]; }
+        i = i + 1;
+    }
+    return "";
+}
+
+// All implicit-conversion rules for `value` going into a place of type `target`, including
+// the elements of an array literal.
+fn validator_check_conversion(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if value == (0).as(*mut AstNode) { return true; }
+    if value.tag == NODE_ARRAY_INIT {
+        let elem: string = array_elem_type(target);
+        if elem.len > 0 {
+            let mut el: *mut AstNode = value.left;
+            while el != (0).as(*mut AstNode) {
+                if !validator_check_conversion(v, elem, el, "an array element") { return false; }
+                el = el.next;
+            }
+        }
+        return true;
+    }
+    if !validator_check_no_float_to_int(v, target, value, place) { return false; }
+    return validator_check_lossless_to_float(v, target, value, place);
+}
+
 // `buf[a..b]` on a fixed-size array stored in a local variable (directly, or as a field or
 // element of one) borrows the stack frame, like `&buf`. Returns the local's name, or "" when
 // `expr` is not such a slice.
@@ -1497,7 +1626,7 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
             let mut arg_v: *mut AstNode = expr.left;
             while prm != (0).as(*mut AstNode) {
                 if arg_v == (0).as(*mut AstNode) { break; }
-                if !validator_check_no_float_to_int(v, prm.type_name, arg_v, "a function argument") { return false; }
+                if !validator_check_conversion(v, prm.type_name, arg_v, "a function argument") { return false; }
                 prm = prm.next;
                 arg_v = arg_v.next;
             }
@@ -1581,6 +1710,19 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                 v.has_error = true;
                 return false;
             }
+            // The integer side of a mixed operation is converted to the float type.
+            let lt: string = validator_expr_type(v, expr.left);
+            let rt: string = validator_expr_type(v, expr.right);
+            if is_float_type_name(lt) {
+                if !is_float_type_name(rt) {
+                    if !validator_check_lossless_to_float(v, lt, expr.right, "a float operation") { return false; }
+                }
+            }
+            if is_float_type_name(rt) {
+                if !is_float_type_name(lt) {
+                    if !validator_check_lossless_to_float(v, rt, expr.left, "a float operation") { return false; }
+                }
+            }
         }
         if !check_expr_use(v, expr.left) { return false; }
         return check_expr_use(v, expr.right);
@@ -1593,6 +1735,8 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
             if !check_expr_use(v, f.left) { return false; }
+            let f_type: string = validator_field_type(v, expr.tok.slice, f.tok.slice);
+            if !validator_check_conversion(v, f_type, f.left, "a struct field") { return false; }
             f = f.next;
         }
         return true;
@@ -1664,7 +1808,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 }
             }
         }
-        if !validator_check_no_float_to_int(v, inferred_type, stmt.left, "a variable initializer") { return false; }
+        if !validator_check_conversion(v, inferred_type, stmt.left, "a variable initializer") { return false; }
 
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1757,7 +1901,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_ASSIGN {
         if !check_expr_use(v, stmt.right) { return false; }
-        if !validator_check_no_float_to_int(v, validator_expr_type(v, stmt.left), stmt.right, "an assignment") { return false; }
+        if !validator_check_conversion(v, validator_expr_type(v, stmt.left), stmt.right, "an assignment") { return false; }
         let mut is_direct_ident: bool = false;
         if stmt.left != (0).as(*mut AstNode) {
             if stmt.left.tag == NODE_IDENT {
@@ -1923,7 +2067,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     if stmt.tag == NODE_RETURN {
         if stmt.left != (0).as(*mut AstNode) {
             if !check_expr_use(v, stmt.left) { return false; }
-            if !validator_check_no_float_to_int(v, v.ret_type, stmt.left, "a return value") { return false; }
+            if !validator_check_conversion(v, v.ret_type, stmt.left, "a return value") { return false; }
             let src_name: string = contains_stack_ref(v, stmt.left);
             if src_name.len > 0 {
                 print_err_ret_local(src_name);
@@ -2004,7 +2148,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     return check_expr_use(v, stmt);
 }
 
-fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode) -> bool {
+fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode, m: *SourceMap) -> bool {
     if f.right == (0).as(*mut AstNode) { return true; } // extern/prototype
 
     let mut v: Validator = Validator {
@@ -2028,6 +2172,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode)
         scope_depth: 1,
         has_error: false,
         initializing_var: "",
+        srcmap: m,
     };
 
     let mut p: *mut AstNode = f.left;
@@ -2116,7 +2261,7 @@ fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
     decl = root.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
-            if !validate_function(decl, &mut fx, root) {
+            if !validate_function(decl, &mut fx, root, m) {
                 return false;
             }
         }

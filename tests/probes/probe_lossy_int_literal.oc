@@ -1,0 +1,5 @@
+// An integer literal that no f64 holds exactly is not converted silently either.
+fn main() {
+    let x: f64 = 9007199254740993;
+    print(x);
+}
