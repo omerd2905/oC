@@ -572,6 +572,14 @@ fn main() {
         </div>
 
         <div class="fn-box">
+          <h3>print_f64 (<code>std/fmt.oc</code>)</h3>
+          <div class="fn-sig">fn print_f64(x: f64, digits: u32)</div>
+          <p>
+            <code>print</code> shows a float with six decimals (<code>3.750000</code>, or <code>9.007199e+15</code> in scientific form). <code>print_f64</code> prints <code>x</code> with <code>digits</code> significant digits (1 to 40) in the format of C's <code>printf("%.<em>digits</em>g\n", x)</code>: fixed notation when the decimal exponent is between -4 and <code>digits</code>, scientific otherwise, trailing zeros removed. 17 digits always identify an <code>f64</code> exactly: <code>print_f64(0.1, 17)</code> prints <code>0.10000000000000001</code>. The digits are correctly rounded (halves to even) because they come from the exact decimal value of <code>x</code>. NaN, infinities and negative zero print as with <code>print</code>. It lives in its own module because the exact conversion adds about 10 KB to a native binary.
+          </p>
+        </div>
+
+        <div class="fn-box">
           <h3>read_int</h3>
           <div class="fn-sig">fn read_int() i32</div>
           <p>
