@@ -657,6 +657,8 @@ void ng_emit_print_lit(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_str
 void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* stmt);
 int32_t calc_locals_bytes_stmt(NativeGen* ng, AstNode* stmt);
 void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off);
+void ng_emit_load_arg_reg(CodeBuffer* code, size_t reg_idx, uint32_t disp);
+void ng_emit_store_param(CodeBuffer* code, size_t reg_idx, size_t total, int32_t off);
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off);
 void ng_emit_write_fd(NativeGen* ng, CodeBuffer* code);
 void ng_emit_win_runtime(NativeGen* ng, CodeBuffer* code, bool* has_offset);
@@ -7657,6 +7659,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     int32_t s_sz = ng_find_struct_size(ng, vt);
+    if ((s_sz > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct larger than 32 bytes cannot be copied by value; use a pointer to it"), .len = sizeof("native codegen error: a struct larger than 32 bytes cannot be copied by value; use a pointer to it") - 1 });
+    }
     if ((s_sz > 0)) {
     ng_emit_disp_load_rax(code, off);
     if ((s_sz >= 16)) {
@@ -7732,6 +7737,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 194);
     buf_append_u8(code, 88);
     return;
+    }
+    if ((ng_find_struct_size(ng, ((((expr)->tok)).slice)) > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly"), .len = sizeof("native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly") - 1 });
     }
     buf_append_u8(code, 72);
     buf_append_u8(code, 131);
@@ -8656,10 +8664,18 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     a = ((a)->next);
     }
-    if ((reg_count > 6)) {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
+    bool stack_args = (reg_count > 6);
+    if (stack_args) {
+    size_t r = 0;
+    while ((r < 6)) {
+    ng_emit_load_arg_reg(code, r, ({ __auto_type _v = (__OC_MUL(__OC_SUB(__OC_SUB(reg_count, 1), r), 8)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    r = __OC_ADD(r, 1);
+    }
     }
     size_t idx = reg_count;
+    if (stack_args) {
+    idx = 0;
+    }
     while ((idx > 0)) {
     idx = __OC_SUB(idx, 1);
     if ((idx == 0)) {
@@ -8766,6 +8782,18 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     }
+    if (stack_args) {
+    bool direct = (!is_sys);
+    if ((((fn_name).len) > 6)) {
+    if (str_eq(__oc_slice_str(fn_name, 0, 6), (oc_string){ .ptr = (const uint8_t*)("win32_"), .len = sizeof("win32_") - 1 })) {
+    direct = false;
+    }
+    }
+    if ((!direct)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: system calls and win32_* imports take at most 6 register words"), .len = sizeof("native codegen error: system calls and win32_* imports take at most 6 register words") - 1 });
+    return;
+    }
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_host_target"), .len = sizeof("sys_host_target") - 1 })) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 199);
@@ -8836,6 +8864,12 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_add_fixup(ng, ((code)->len), ((((expr)->tok)).slice), false);
     buf_append_u8(code, 232);
     elf_append_u32(code, 0);
+    if (stack_args) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 129);
+    buf_append_u8(code, 196);
+    elf_append_u32(code, ({ __auto_type _v = (__OC_MUL(reg_count, 8)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    }
     return;
     }
 }
@@ -9500,6 +9534,50 @@ void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off) {
     }
 }
 
+void ng_emit_load_arg_reg(CodeBuffer* code, size_t reg_idx, uint32_t disp) {
+    uint8_t rex = 72;
+    uint8_t modrm = 188;
+    if ((reg_idx == 1)) {
+    modrm = 180;
+    }
+    else {
+    if ((reg_idx == 2)) {
+    modrm = 148;
+    }
+    else {
+    if ((reg_idx == 3)) {
+    modrm = 140;
+    }
+    else {
+    if ((reg_idx == 4)) {
+    rex = 76;
+    modrm = 132;
+    }
+    else {
+    if ((reg_idx == 5)) {
+    rex = 76;
+    modrm = 140;
+    }
+    }
+    }
+    }
+    }
+    buf_append_u8(code, rex);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, modrm);
+    buf_append_u8(code, 36);
+    elf_append_u32(code, disp);
+}
+
+void ng_emit_store_param(CodeBuffer* code, size_t reg_idx, size_t total, int32_t off) {
+    if ((reg_idx < 6)) {
+    ng_emit_store_param_reg(code, reg_idx, off);
+    return;
+    }
+    ng_emit_disp_load_rax(code, ({ __auto_type _v = (__OC_ADD(16, __OC_MUL(__OC_SUB(__OC_SUB(total, 1), reg_idx), 8))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    ng_emit_disp_store_rax(code, off);
+}
+
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off) {
     if ((((ng)->fn_count) < 256)) {
     __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = name;
@@ -10049,6 +10127,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     ((ng)->curr_off) = 0;
     ((ng)->scope_depth) = 0;
     ((ng)->cur_ret) = ((decl)->type_name);
+    if ((ng_find_struct_size(ng, ((decl)->type_name)) > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a function cannot return a struct larger than 32 bytes; return it through a pointer parameter"), .len = sizeof("native codegen error: a function cannot return a struct larger than 32 bytes; return it through a pointer parameter") - 1 });
+    }
     AstNode* p = ((decl)->left);
     int32_t param_bytes = 0;
     while ((p != ((AstNode*)(0)))) {
@@ -10105,28 +10186,40 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     has_frame = true;
     elf_append_u32(code, stack_sz);
     }
+    size_t total_words = 0;
+    size_t tw = 0;
+    p = ((decl)->left);
+    while ((p != ((AstNode*)(0)))) {
+    total_words = __OC_ADD(total_words, 1);
+    if (__OC_AT((((ng)->var_is_slice)), (tw))) {
+    total_words = __OC_ADD(total_words, 1);
+    }
+    int32_t tw_sz = ng_find_struct_size(ng, __OC_AT((((ng)->var_types)), (tw)));
+    if ((tw_sz > 8)) {
+    total_words = __OC_ADD(total_words, ({ __auto_type _v = (__OC_DIV(__OC_SUB(tw_sz, 1), 8)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    tw = __OC_ADD(tw, 1);
+    p = ((p)->next);
+    }
     p = ((decl)->left);
     size_t reg_idx = 0;
     size_t p_var_idx = 0;
     while ((p != ((AstNode*)(0)))) {
     int32_t off = __OC_AT((((ng)->var_offsets)), (p_var_idx));
-    ng_emit_store_param_reg(code, reg_idx, off);
+    ng_emit_store_param(code, reg_idx, total_words, off);
     reg_idx = __OC_ADD(reg_idx, 1);
     if (__OC_AT((((ng)->var_is_slice)), (p_var_idx))) {
-    ng_emit_store_param_reg(code, reg_idx, __OC_SUB(off, 8));
+    ng_emit_store_param(code, reg_idx, total_words, __OC_SUB(off, 8));
     reg_idx = __OC_ADD(reg_idx, 1);
     }
     int32_t p_word = 8;
     while ((p_word < ng_find_struct_size(ng, __OC_AT((((ng)->var_types)), (p_var_idx))))) {
-    ng_emit_store_param_reg(code, reg_idx, __OC_ADD(off, p_word));
+    ng_emit_store_param(code, reg_idx, total_words, __OC_ADD(off, p_word));
     reg_idx = __OC_ADD(reg_idx, 1);
     p_word = __OC_ADD(p_word, 8);
     }
     p_var_idx = __OC_ADD(p_var_idx, 1);
     p = ((p)->next);
-    }
-    if ((reg_idx > 6)) {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
     }
     if ((body_block != ((AstNode*)(0)))) {
     AstNode* stmt = ((body_block)->left);

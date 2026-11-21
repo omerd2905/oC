@@ -1,0 +1,9 @@
+// Copying a struct larger than 32 bytes by value: compile error on the native backend (it
+// used to copy only the first 32 bytes), plain copy on the C backend.
+struct Big { a: i64, b: i64, c: i64, d: i64, e: i64, }
+
+fn main() {
+    let x: Big = Big { a: 1, b: 2, c: 3, d: 4, e: 5 };
+    let y: Big = x;
+    print(y.e);
+}
