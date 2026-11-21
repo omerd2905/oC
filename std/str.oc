@@ -299,3 +299,144 @@ fn str_to_lower(arena: *mut Arena, s: string) -> string {
     }
     return string { ptr: buf.as(*u8), len: s.len };
 }
+
+// ---------------------------------------------------------------------------------------
+// Parsing and formatting integers
+//
+// Parsers take the whole string: an optional sign ('+', or '-' for signed types) and at
+// least one digit, nothing else (no spaces, prefixes or separators; trim first). Empty
+// input, any other character and a value that does not fit all give ok = false.
+// ---------------------------------------------------------------------------------------
+
+struct ParsedU64 {
+    ok: bool,
+    value: u64,
+}
+
+struct ParsedI64 {
+    ok: bool,
+    value: i64,
+}
+
+// Value of an ASCII digit in bases up to 16 ('a'-'f' and 'A'-'F' are 10-15), or 99.
+fn digit_value(c: u8) -> u64 {
+    if is_digit(c) { return (c - 48).as(u64); }
+    if c >= 97 { if c <= 102 { return (c - 87).as(u64); } }
+    if c >= 65 { if c <= 70 { return (c - 55).as(u64); } }
+    return 99;
+}
+
+// Digits only (no sign), base 2 to 16.
+fn parse_digits_u64(s: string, radix: u64) -> ParsedU64 {
+    let fail: ParsedU64 = ParsedU64 { ok: false, value: 0 };
+    if s.len == 0 { return fail; }
+    if radix < 2 { return fail; }
+    if radix > 16 { return fail; }
+    let mut v: u64 = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        let d: u64 = digit_value(s[i]);
+        if d >= radix { return fail; }
+        if v > (18446744073709551615 - d) / radix { return fail; } // would not fit
+        v = (v * radix) + d;
+        i = i + 1;
+    }
+    return ParsedU64 { ok: true, value: v };
+}
+
+fn parse_u64_radix(s: string, radix: u32) -> ParsedU64 {
+    let mut digits: string = s;
+    if s.len > 0 {
+        if s[0] == 43 { digits = s[1..s.len]; } // '+'
+    }
+    return parse_digits_u64(digits, radix.as(u64));
+}
+
+fn parse_i64_radix(s: string, radix: u32) -> ParsedI64 {
+    let fail: ParsedI64 = ParsedI64 { ok: false, value: 0 };
+    let mut neg: bool = false;
+    let mut digits: string = s;
+    if s.len > 0 {
+        if s[0] == 45 { // '-'
+            neg = true;
+            digits = s[1..s.len];
+        } else if s[0] == 43 {
+            digits = s[1..s.len];
+        }
+    }
+    let mag: ParsedU64 = parse_digits_u64(digits, radix.as(u64));
+    if !mag.ok { return fail; }
+    if neg {
+        if mag.value > 9223372036854775808 { return fail; }
+        if mag.value == 9223372036854775808 { return ParsedI64 { ok: true, value: -9223372036854775808 }; }
+        return ParsedI64 { ok: true, value: -(mag.value.as(i64)) };
+    }
+    if mag.value > 9223372036854775807 { return fail; }
+    return ParsedI64 { ok: true, value: mag.value.as(i64) };
+}
+
+fn parse_u64(s: string) -> ParsedU64 { return parse_u64_radix(s, 10); }
+fn parse_i64(s: string) -> ParsedI64 { return parse_i64_radix(s, 10); }
+
+// Writes the digits of v in base `radix` (2 to 16, lowercase) ending just before buf[end];
+// returns the index of the first digit.
+fn fmt_digits_back(buf: *mut u8, end: usize, v: u64, radix: u64) -> usize {
+    let mut pos: usize = end;
+    let mut x: u64 = v;
+    while pos > 0 {
+        pos = pos - 1;
+        let d: u64 = x % radix;
+        if d < 10 { buf[pos] = (48 + d).as(u8); } else { buf[pos] = (87 + d).as(u8); }
+        x = x / radix;
+        if x == 0 { break; }
+    }
+    return pos;
+}
+
+// Text of n (base 10, or 16 for the hex variants: lowercase, no 0x prefix, no padding).
+fn int_text(arena: *mut Arena, neg: bool, mag: u64, radix: u64) -> string {
+    let mut tmp: [24]u8 = [0];
+    let start: usize = fmt_digits_back((&mut tmp).as(*mut u8), 24, mag, radix);
+    let mut len: usize = 24 - start;
+    if neg { len = len + 1; }
+    let buf: *mut u8 = str_alloc(arena, len);
+    let mut pos: usize = 0;
+    if neg {
+        buf[0] = 45;
+        pos = 1;
+    }
+    let mut i: usize = start;
+    while i < 24 {
+        buf[pos] = tmp[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: len };
+}
+
+// Magnitude of n as u64, correct for the most negative i64 too.
+fn i64_magnitude(n: i64) -> u64 {
+    if n >= 0 { return n.as(u64); }
+    return (-(n + 1)).as(u64) + 1;
+}
+
+fn u64_to_str(arena: *mut Arena, n: u64) -> string { return int_text(arena, false, n, 10); }
+fn i64_to_str(arena: *mut Arena, n: i64) -> string { return int_text(arena, n < 0, i64_magnitude(n), 10); }
+fn u64_to_hex(arena: *mut Arena, n: u64) -> string { return int_text(arena, false, n, 16); }
+
+// Writing without a newline, to build a line piece by piece (print() always adds one).
+fn print_str(s: string) {
+    sys_write(1, s.ptr, s.len);
+}
+
+fn print_int_text(neg: bool, mag: u64, radix: u64) {
+    let mut tmp: [24]u8 = [0];
+    let start: usize = fmt_digits_back((&mut tmp).as(*mut u8), 24, mag, radix);
+    if neg { sys_write(1, "-".ptr, 1); }
+    let all: string = string { ptr: (&tmp).as(*u8), len: 24 };
+    print_str(all[start..24]);
+}
+
+fn print_u64(n: u64) { print_int_text(false, n, 10); }
+fn print_i64(n: i64) { print_int_text(n < 0, i64_magnitude(n), 10); }
+fn print_hex(n: u64) { print_int_text(false, n, 16); }

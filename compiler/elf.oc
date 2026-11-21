@@ -202,7 +202,7 @@ fn ng_emit_iat_call(ng: *mut NativeGen, code: *mut CodeBuffer, slot: usize) {
     elf_append_u32(code, 0);
 }
 
-fn parse_u64(s: string) -> u64 {
+fn parse_literal_u64(s: string) -> u64 {
     let mut res: u64 = 0;
     if s.len > 2 {
         if s[0] == 48 { // '0'
@@ -423,7 +423,7 @@ fn ng_parse_array_len(t: string) -> usize {
         close_idx = close_idx + 1;
     }
     if close_idx >= t.len { return 0; }
-    return parse_u64(t[1..close_idx]).as(usize);
+    return parse_literal_u64(t[1..close_idx]).as(usize);
 }
 
 fn ng_parse_array_elem(t: string) -> string {
@@ -1246,7 +1246,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     if expr == (0).as(*mut AstNode) { return; }
 
     if expr.tag == NODE_INT {
-        let val: u64 = parse_u64(expr.tok.slice);
+        let val: u64 = parse_literal_u64(expr.tok.slice);
         buf_append_u8(code, 72);
         buf_append_u8(code, 184);
         elf_append_u64(code, val);
@@ -1536,7 +1536,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         if expr.tok.tag == TOK_MINUS {
             if expr.left != (0).as(*mut AstNode) {
                 if expr.left.tag == NODE_INT {
-                    let mag: u64 = parse_u64(expr.left.tok.slice);
+                    let mag: u64 = parse_literal_u64(expr.left.tok.slice);
                     if mag == 2147483648 {
                         buf_append_u8(code, 72);
                         buf_append_u8(code, 184);
@@ -3347,7 +3347,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                         c_val = ng_literal_bits(ng, lit.tok.slice, true);
                         if negative { c_val = c_val ^ 0x80000000; }
                     } else {
-                        c_val = parse_u64(lit.tok.slice);
+                        c_val = parse_literal_u64(lit.tok.slice);
                         if negative { c_val = wrapping_sub(0, c_val); }
                     }
                     ng.const_names[ng.const_count] = scan.tok.slice;
