@@ -124,6 +124,38 @@ fn cg_fchk_close(out: *mut CodeBuffer, tok: Token) {
     buf_append(out, "\")");
 }
 
+// Words C reserves (keywords, and the typedefs the generated code relies on). An oC name
+// that is one of them gets a suffix in the generated C: `let long: i32` would not compile.
+fn is_c_reserved(name: string) -> bool {
+    let mut words: [56]string = [""];
+    words[0] = "auto"; words[1] = "break"; words[2] = "case"; words[3] = "char";
+    words[4] = "const"; words[5] = "continue"; words[6] = "default"; words[7] = "do";
+    words[8] = "double"; words[9] = "else"; words[10] = "enum"; words[11] = "extern";
+    words[12] = "float"; words[13] = "for"; words[14] = "goto"; words[15] = "if";
+    words[16] = "inline"; words[17] = "int"; words[18] = "long"; words[19] = "register";
+    words[20] = "restrict"; words[21] = "return"; words[22] = "short"; words[23] = "signed";
+    words[24] = "sizeof"; words[25] = "static"; words[26] = "struct"; words[27] = "switch";
+    words[28] = "typedef"; words[29] = "union"; words[30] = "unsigned"; words[31] = "void";
+    words[32] = "volatile"; words[33] = "while"; words[34] = "bool"; words[35] = "alignas";
+    words[36] = "alignof"; words[37] = "constexpr"; words[38] = "nullptr"; words[39] = "static_assert";
+    words[40] = "thread_local"; words[41] = "typeof"; words[42] = "typeof_unqual"; words[43] = "asm";
+    words[44] = "int8_t"; words[45] = "int16_t"; words[46] = "int32_t"; words[47] = "int64_t";
+    words[48] = "uint8_t"; words[49] = "uint16_t"; words[50] = "uint32_t"; words[51] = "uint64_t";
+    words[52] = "size_t"; words[53] = "oc_string"; words[54] = "NULL"; words[55] = "errno";
+    let mut i: usize = 0;
+    while i < 56 {
+        if str_eq(words[i], name) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+// Appends an oC identifier to generated C, renamed if C reserves it.
+fn buf_append_ident(buf: *mut CodeBuffer, name: string) {
+    buf_append(buf, name);
+    if is_c_reserved(name) { buf_append(buf, "__oc"); }
+}
+
 fn buf_to_string(buf: *mut CodeBuffer) -> string {
     return string {
         ptr: buf.buffer.as(*u8),
@@ -209,11 +241,24 @@ fn emit_c_type(type_name: string, out: *mut CodeBuffer) {
             }
         }
         let base: string = type_name[base_start..type_name.len];
-        buf_append(out, to_c_type(base));
+        buf_append_c_type(out, base);
         buf_append(out, "*");
         return;
     }
-    buf_append(out, to_c_type(type_name));
+    buf_append_c_type(out, type_name);
+}
+
+// The C name of an oC type; a struct whose name C reserves is renamed like any identifier.
+fn buf_append_c_type(out: *mut CodeBuffer, t: string) {
+    let c: string = to_c_type(t);
+    let mut user_type: bool = str_eq(c, t);
+    if str_eq(t, "bool") { user_type = false; }
+    if str_eq(t, "void") { user_type = false; }
+    if user_type {
+        buf_append_ident(out, t);
+    } else {
+        buf_append(out, c);
+    }
 }
 
 fn is_type_ptr(t: string) -> bool {
@@ -498,7 +543,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     }
 
     if expr.tag == NODE_IDENT {
-        buf_append(out, expr.tok.slice);
+        buf_append_ident(out, expr.tok.slice);
         return;
     }
 
@@ -697,19 +742,19 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
         } else {
             buf_append(out, ").");
         }
-        buf_append(out, expr.tok.slice);
+        buf_append_ident(out, expr.tok.slice);
         buf_append(out, ")");
         return;
     }
 
     if expr.tag == NODE_STRUCT_INIT {
         buf_append(out, "(");
-        buf_append(out, to_c_type(expr.tok.slice));
+        buf_append_c_type(out, expr.tok.slice);
         buf_append(out, "){ ");
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
             buf_append(out, ".");
-            buf_append(out, f.tok.slice);
+            buf_append_ident(out, f.tok.slice);
             buf_append(out, " = ");
             codegen_expr(f.left, out);
             if f.next != (0).as(*mut AstNode) {
@@ -759,7 +804,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, ")");
             return;
         }
-        buf_append(out, expr.tok.slice);
+        buf_append_ident(out, expr.tok.slice);
         buf_append(out, "(");
         let mut arg: *mut AstNode = expr.left;
         while arg != (0).as(*mut AstNode) {
@@ -895,9 +940,9 @@ fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
             if is_u8_array_type(cg_var_type(out, arg.tok.slice)) {
                 // A [N]u8 prints as text up to the first NUL, and never past its N bytes.
                 buf_append(out, "    printf(\"%.*s\\n\", (int)sizeof(");
-                buf_append(out, arg.tok.slice);
+                buf_append_ident(out, arg.tok.slice);
                 buf_append(out, "), (const char*)");
-                buf_append(out, arg.tok.slice);
+                buf_append_ident(out, arg.tok.slice);
                 buf_append(out, ");\n");
                 return;
             }
@@ -988,7 +1033,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                 let elem_str: string = stmt.type_name[close_idx + 1..stmt.type_name.len];
                 emit_c_type(elem_str, out);
                 buf_append(out, " ");
-                buf_append(out, stmt.tok.slice);
+                buf_append_ident(out, stmt.tok.slice);
                 buf_append(out, "[");
                 buf_append(out, sz_str);
                 let mut use_zero_init: bool = true;
@@ -1028,7 +1073,7 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, "__auto_type");
         }
         buf_append(out, " ");
-        buf_append(out, stmt.tok.slice);
+        buf_append_ident(out, stmt.tok.slice);
         buf_append(out, " = ");
         codegen_expr(stmt.left, out);
         buf_append(out, ";\n");
@@ -1361,7 +1406,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                 buf_append(out, "uint32_t");
             }
             buf_append(out, " ");
-            buf_append(out, g_decl.tok.slice);
+            buf_append_ident(out, g_decl.tok.slice);
             buf_append(out, " = ");
             codegen_expr(g_decl.left, out);
             buf_append(out, ";\n");
@@ -1375,9 +1420,9 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     while s_decl != (0).as(*mut AstNode) {
         if s_decl.tag == NODE_STRUCT_DECL {
             buf_append(out, "typedef struct ");
-            buf_append(out, s_decl.tok.slice);
+            buf_append_ident(out, s_decl.tok.slice);
             buf_append(out, " ");
-            buf_append(out, s_decl.tok.slice);
+            buf_append_ident(out, s_decl.tok.slice);
             buf_append(out, ";\n");
         }
         s_decl = s_decl.next;
@@ -1391,7 +1436,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
             if str_eq(s_decl.type_name, "packed") {
                 buf_append(out, "__attribute__((packed)) ");
             }
-            buf_append(out, s_decl.tok.slice);
+            buf_append_ident(out, s_decl.tok.slice);
             buf_append(out, " {\n");
             let mut f: *mut AstNode = s_decl.left;
             while f != (0).as(*mut AstNode) {
@@ -1412,14 +1457,14 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                     let elem_str: string = f.type_name[close_idx + 1..f.type_name.len];
                     emit_c_type(elem_str, out);
                     buf_append(out, " ");
-                    buf_append(out, f.tok.slice);
+                    buf_append_ident(out, f.tok.slice);
                     buf_append(out, "[");
                     buf_append(out, sz_str);
                     buf_append(out, "];\n");
                 } else {
                     emit_c_type(f.type_name, out);
                     buf_append(out, " ");
-                    buf_append(out, f.tok.slice);
+                    buf_append_ident(out, f.tok.slice);
                     buf_append(out, ";\n");
                 }
                 f = f.next;
@@ -1445,7 +1490,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
             } else {
                 emit_c_type(decl.type_name, out);
                 buf_append(out, " ");
-                buf_append(out, fn_name);
+                buf_append_ident(out, fn_name);
                 buf_append(out, "(");
                 let mut param: *mut AstNode = decl.left;
                 if param == (0).as(*mut AstNode) {
@@ -1454,7 +1499,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                     while param != (0).as(*mut AstNode) {
                         emit_c_type(param.type_name, out);
                         buf_append(out, " ");
-                        buf_append(out, param.tok.slice);
+                        buf_append_ident(out, param.tok.slice);
                         if param.next != (0).as(*mut AstNode) {
                             buf_append(out, ", ");
                         }
@@ -1522,7 +1567,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
             } else {
                 emit_c_type(decl.type_name, out);
                 buf_append(out, " ");
-                buf_append(out, fn_name);
+                buf_append_ident(out, fn_name);
                 buf_append(out, "(");
                 let mut param: *mut AstNode = decl.left;
                 if param == (0).as(*mut AstNode) {
@@ -1531,7 +1576,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
                     while param != (0).as(*mut AstNode) {
                         emit_c_type(param.type_name, out);
                         buf_append(out, " ");
-                        buf_append(out, param.tok.slice);
+                        buf_append_ident(out, param.tok.slice);
                         if param.next != (0).as(*mut AstNode) {
                             buf_append(out, ", ");
                         }

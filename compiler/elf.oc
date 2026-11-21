@@ -1111,6 +1111,58 @@ fn ng_emit_stderr_write(ng: *mut NativeGen, code: *mut CodeBuffer, is_win: bool)
     }
 }
 
+// mov %rax / %rdx (reg 0 / 2) or %al (width 1) to disp(%rbp), or to disp(%rsp) with at_rsp.
+fn ng_emit_store_disp(code: *mut CodeBuffer, reg: u8, width: i32, disp: i32, at_rsp: bool) {
+    if width == 1 {
+        buf_append_u8(code, 136); // mov r8, r/m8
+    } else {
+        buf_append_u8(code, 72);
+        buf_append_u8(code, 137); // mov r64, r/m64
+    }
+    if at_rsp {
+        buf_append_u8(code, 132 + (reg * 8)); // mod 10, r/m 100: SIB follows
+        buf_append_u8(code, 36);              // base %rsp
+    } else {
+        buf_append_u8(code, 133 + (reg * 8)); // mod 10, r/m 101: disp32(%rbp)
+    }
+    elf_append_i32(code, disp);
+}
+
+// Stores array literal `init` into the array of type `arr_t` at off(%rbp), or off(%rsp) with
+// at_rsp (a struct literal being built on the stack): zeroes it, then writes the given
+// elements (fewer than the length leave the rest at 0).
+fn ng_emit_array_init_at(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, off: i32, arr_t: string, init: *mut AstNode, at_rsp: bool) {
+    let alen: i32 = ng_parse_array_len(arr_t).as(i32);
+    let elem_t: string = ng_parse_array_elem(arr_t);
+    let stride: i32 = ng_type_stride(elem_t);
+    let bytes: i32 = alen * stride;
+    buf_append_u8(code, 72); buf_append_u8(code, 49); buf_append_u8(code, 192); // xor %rax, %rax
+    let mut z: i32 = 0;
+    while z + 8 <= bytes {
+        ng_emit_store_disp(code, 0, 8, off + z, at_rsp);
+        z = z + 8;
+    }
+    while z < bytes {
+        ng_emit_store_disp(code, 0, 1, off + z, at_rsp);
+        z = z + 1;
+    }
+    let mut el: *mut AstNode = init.left;
+    let mut k: i32 = 0;
+    while el != (0).as(*mut AstNode) {
+        if k >= alen { break; }
+        ng_emit_expr_as(ng, code, data, el, elem_t);
+        let el_off: i32 = off + (k * stride);
+        if stride == 1 {
+            ng_emit_store_disp(code, 0, 1, el_off, at_rsp);
+        } else {
+            ng_emit_store_disp(code, 0, 8, el_off, at_rsp);
+            if stride == 16 { ng_emit_store_disp(code, 2, 8, el_off + 8, at_rsp); }
+        }
+        k = k + 1;
+        el = el.next;
+    }
+}
+
 // Declared type of parameter `idx` of function `fn_name` ("" if unknown).
 fn ng_fn_param_type(ng: *mut NativeGen, fn_name: string, idx: usize) -> string {
     let mut decl: *mut AstNode = ng.root.left;
@@ -1378,7 +1430,17 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         while f != (0).as(*mut AstNode) {
             let f_off: i32 = ng_find_field_offset(ng, expr.tok.slice, f.tok.slice);
             let f_w: i32 = ng_field_width(ng, expr.tok.slice, f.tok.slice);
-            ng_emit_expr_as(ng, code, data, f.left, ng_find_field_type(ng, expr.tok.slice, f.tok.slice));
+            let f_type: string = ng_find_field_type(ng, expr.tok.slice, f.tok.slice);
+            if f_type.len > 0 {
+                if f_type[0] == 91 {
+                    if f.left.tag == NODE_ARRAY_INIT {
+                        ng_emit_array_init_at(ng, code, data, f_off, f_type, f.left, true);
+                        f = f.next;
+                        continue;
+                    }
+                }
+            }
+            ng_emit_expr_as(ng, code, data, f.left, f_type);
             let f_words: i32 = ng_value_words(ng, ng_find_field_type(ng, expr.tok.slice, f.tok.slice));
             if f_words > 1 {
                 if f_off + (f_words * 8) <= 32 {
@@ -2465,6 +2527,15 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     while f != (0).as(*mut AstNode) {
                         let f_off: i32 = ng_find_field_offset(ng, t_name, f.tok.slice);
                         let f_type: string = ng_find_field_type(ng, t_name, f.tok.slice);
+                        if f_type.len > 0 {
+                            if f_type[0] == 91 { // '[': an array field takes its literal element by element
+                                if f.left.tag == NODE_ARRAY_INIT {
+                                    ng_emit_array_init_at(ng, code, data, base_off + f_off, f_type, f.left, false);
+                                    f = f.next;
+                                    continue;
+                                }
+                            }
+                        }
                         ng_emit_expr_as(ng, code, data, f.left, f_type);
                         let f_words: i32 = ng_value_words(ng, f_type);
                         if f_words > 1 {
