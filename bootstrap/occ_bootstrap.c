@@ -279,6 +279,7 @@ typedef struct Arena Arena;
 typedef struct Token Token;
 typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
+typedef struct SourceMap SourceMap;
 typedef struct Parser Parser;
 typedef struct VarInfo VarInfo;
 typedef struct FnEffects FnEffects;
@@ -314,6 +315,12 @@ struct AstNode {
     AstNode* left;
     AstNode* right;
     AstNode* next;
+};
+
+struct SourceMap {
+    size_t count;
+    uint32_t first_line[128];
+    oc_string path[128];
 };
 
 struct Parser {
@@ -435,6 +442,8 @@ struct NativeGen {
 struct ModuleLoader {
     oc_string visited[128];
     size_t visited_count;
+    SourceMap map;
+    uint32_t lines;
 };
 
 int32_t read_int(void);
@@ -457,6 +466,7 @@ bool is_ident_start(uint8_t c);
 bool is_ident_char(uint8_t c);
 uint32_t check_keyword(oc_string s);
 Token lexer_next(Lexer* lex);
+int32_t srcmap_file(SourceMap* m, uint32_t line);
 AstNode* ast_alloc_node(Arena* arena, uint32_t tag, Token tok);
 Parser parser_init(oc_string source, Arena* arena);
 void parser_advance(Parser* p);
@@ -479,6 +489,8 @@ AstNode* parse_stmt(Parser* p);
 AstNode* parse_struct_decl(Parser* p, bool is_packed);
 AstNode* parse_fn_decl(Parser* p);
 void print_str_raw(oc_string s);
+void print_u32_raw(uint32_t n);
+void print_src_loc(SourceMap* m, Token tok);
 void print_err_ref_invalidated(oc_string name, oc_string bv);
 void print_err_uaf_reset(oc_string name, oc_string arena);
 void print_err_uaf_deinit(oc_string name, oc_string arena);
@@ -507,7 +519,10 @@ oc_string validator_stack_place_type(Validator* v, AstNode* expr);
 bool is_float_type_name(oc_string t);
 bool is_int_type_name(oc_string t);
 oc_string strip_ptr_type(oc_string t);
+AstNode* program_find_fn(AstNode* program, oc_string name);
 AstNode* validator_find_fn(Validator* v, oc_string name);
+bool is_builtin_fn(oc_string name);
+bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
@@ -519,7 +534,7 @@ void validator_restore_invalidated(Validator* v, bool* saved);
 bool block_always_returns(AstNode* block);
 bool validate_stmt(Validator* v, AstNode* stmt);
 bool validate_function(AstNode* f, FnEffects* fx, AstNode* program);
-bool validate_program(AstNode* root);
+bool validate_program(AstNode* root, SourceMap* m);
 AstNode* parse_program(Parser* p);
 CodeBuffer buf_init(size_t capacity);
 void buf_append_u8(CodeBuffer* buf, uint8_t byte);
@@ -1357,6 +1372,20 @@ Token lexer_next(Lexer* lex) {
     return (Token){ .tag = tag, .slice = __oc_slice_str(((lex)->source), start_idx, ((lex)->index)), .line = tok_line, .col = tok_col };
 }
 
+int32_t srcmap_file(SourceMap* m, uint32_t line) {
+    if ((m == ((SourceMap*)(0)))) {
+    return (-1);
+    }
+    size_t i = ((m)->count);
+    while ((i > 0)) {
+    i = __OC_SUB(i, 1);
+    if ((__OC_AT((((m)->first_line)), (i)) <= line)) {
+    return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    }
+    }
+    return (-1);
+}
+
 AstNode* ast_alloc_node(Arena* arena, uint32_t tag, Token tok) {
     uint8_t* raw = arena_alloc(arena, 128);
     AstNode* node = ((AstNode*)(raw));
@@ -2104,6 +2133,37 @@ void print_str_raw(oc_string s) {
     sys_write(1, ((s).ptr), ((s).len));
 }
 
+void print_u32_raw(uint32_t n) {
+    uint8_t digits[10] = {0};
+    size_t pos = 10;
+    uint32_t v = n;
+    while ((pos > 0)) {
+    pos = __OC_SUB(pos, 1);
+    __OC_AT((digits), (pos)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(v, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    v = __OC_DIV(v, 10);
+    if ((v == 0)) {
+    break;
+    }
+    }
+    oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(digits)))), .len = 10 };
+    print_str_raw(__oc_slice_str(all, pos, 10));
+}
+
+void print_src_loc(SourceMap* m, Token tok) {
+    int32_t f = srcmap_file(m, ((tok).line));
+    if ((f >= 0)) {
+    print_str_raw(__OC_AT((((m)->path)), (({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(":"), .len = sizeof(":") - 1 });
+    print_u32_raw(__OC_ADD(__OC_SUB(((tok).line), __OC_AT((((m)->first_line)), (({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))), 1));
+    }
+    else {
+    print_u32_raw(((tok).line));
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(":"), .len = sizeof(":") - 1 });
+    print_u32_raw(((tok).col));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(": "), .len = sizeof(": ") - 1 });
+}
+
 void print_err_ref_invalidated(oc_string name, oc_string bv) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: reference '"), .len = sizeof("error: reference '") - 1 });
     print_str_raw(name);
@@ -2615,8 +2675,8 @@ oc_string strip_ptr_type(oc_string t) {
     return __oc_slice_str(t, 1, ((t).len));
 }
 
-AstNode* validator_find_fn(Validator* v, oc_string name) {
-    AstNode* decl = ((((v)->program))->left);
+AstNode* program_find_fn(AstNode* program, oc_string name) {
+    AstNode* decl = ((program)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
     if (str_eq(((((decl)->tok)).slice), name)) {
@@ -2626,6 +2686,52 @@ AstNode* validator_find_fn(Validator* v, oc_string name) {
     decl = ((decl)->next);
     }
     return ((AstNode*)(0));
+}
+
+AstNode* validator_find_fn(Validator* v, oc_string name) {
+    return program_find_fn(((v)->program), name);
+}
+
+bool is_builtin_fn(oc_string name) {
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
+    return true;
+    }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
+    return true;
+    }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_sub"), .len = sizeof("wrapping_sub") - 1 })) {
+    return true;
+    }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_mul"), .len = sizeof("wrapping_mul") - 1 })) {
+    return true;
+    }
+    return false;
+}
+
+bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node) {
+    bool ok = true;
+    AstNode* n = node;
+    while ((n != ((AstNode*)(0)))) {
+    if ((((n)->tag) == NODE_CALL)) {
+    if ((!is_builtin_fn(((((n)->tok)).slice)))) {
+    if ((program_find_fn(program, ((((n)->tok)).slice)) == ((AstNode*)(0)))) {
+    print_src_loc(m, ((n)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: undefined function '"), .len = sizeof("error: undefined function '") - 1 });
+    print_str_raw(((((n)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\n"), .len = sizeof("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\n") - 1 });
+    ok = false;
+    }
+    }
+    }
+    if ((!check_calls_resolved(program, m, ((n)->left)))) {
+    ok = false;
+    }
+    if ((!check_calls_resolved(program, m, ((n)->right)))) {
+    ok = false;
+    }
+    n = ((n)->next);
+    }
+    return ok;
 }
 
 oc_string validator_expr_type(Validator* v, AstNode* expr) {
@@ -3649,7 +3755,10 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program) {
     return true;
 }
 
-bool validate_program(AstNode* root) {
+bool validate_program(AstNode* root, SourceMap* m) {
+    if ((!check_calls_resolved(root, m, ((root)->left)))) {
+    return false;
+    }
     FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .borrows = { false }, .count = 0 };
     AstNode* decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
@@ -9849,8 +9958,12 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     k = __OC_ADD(k, 1);
     }
     if ((!found)) {
-    printf("%s\n", "native codegen error: unresolved symbol:");
-    __oc_print(f_name);
+    CodeBuffer msg = buf_init(4096);
+    buf_append((&(msg)), (oc_string){ .ptr = (const uint8_t*)("native codegen error: unresolved symbol '"), .len = sizeof("native codegen error: unresolved symbol '") - 1 });
+    buf_append((&(msg)), f_name);
+    buf_append((&(msg)), (oc_string){ .ptr = (const uint8_t*)("'"), .len = sizeof("'") - 1 });
+    __oc_print(buf_to_string((&(msg))));
+    buf_deinit((&(msg)));
     buf_deinit(code);
     buf_deinit(data);
     return false;
@@ -10244,6 +10357,7 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     uint8_t* file_buf = arena_alloc(arena, 262144);
     int64_t bytes = (-1);
     oc_string resolved_path = path;
+    oc_string shown_path = path;
     if ((((base_dir).len) > 0)) {
     if ((((path).len) > 0)) {
     if ((!is_abs_path(path))) {
@@ -10251,6 +10365,7 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     bytes = read_file(cand1, file_buf, 262143);
     if ((bytes >= 0)) {
     resolved_path = cand1;
+    shown_path = cand1;
     }
     }
     }
@@ -10372,6 +10487,19 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     }
     }
     }
+    if ((((((loader)->map)).count) < 128)) {
+    __OC_AT((((((loader)->map)).first_line)), (((((loader)->map)).count))) = __OC_ADD(((loader)->lines), 1);
+    __OC_AT((((((loader)->map)).path)), (((((loader)->map)).count))) = arena_dup_str(arena, shown_path);
+    ((((loader)->map)).count) = __OC_ADD(((((loader)->map)).count), 1);
+    }
+    size_t nl = 0;
+    while ((nl < ((src).len))) {
+    if ((__oc_index_str(src, nl) == 10)) {
+    ((loader)->lines) = __OC_ADD(((loader)->lines), 1);
+    }
+    nl = __OC_ADD(nl, 1);
+    }
+    ((loader)->lines) = __OC_ADD(((loader)->lines), 1);
     buf_append(out, src);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
     return true;
@@ -10835,7 +10963,7 @@ int main(int argc, char** argv) {
     if ((((oc_home).len) > 0)) {
     std_root = str_concat((&(arena)), oc_home, (oc_string){ .ptr = (const uint8_t*)("/"), .len = sizeof("/") - 1 });
     }
-    ModuleLoader loader = (ModuleLoader){ .visited = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .visited_count = 0 };
+    ModuleLoader loader = (ModuleLoader){ .visited = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .visited_count = 0, .map = (SourceMap){ .count = 0, .first_line = { 0 }, .path = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } }, .lines = 0 };
     CodeBuffer combined_buf = buf_init(4194304);
     bool load_ok = load_module_recursive(in_file_str, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
     if ((!load_ok)) {
@@ -10872,7 +11000,7 @@ int main(int argc, char** argv) {
     arena_deinit((&(arena)));
     return 1;
     }
-    bool valid = validate_program(prog);
+    bool valid = validate_program(prog, (&(((loader).map))));
     if ((!valid)) {
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));

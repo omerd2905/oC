@@ -1,0 +1,6 @@
+// A misspelled library function (align_up from std/math.oc) is reported by name and location.
+import "std/math.oc";
+
+fn main() {
+    print(align_upp(17, 8));
+}

@@ -3614,8 +3614,12 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
             k = k + 1;
         }
         if !found {
-            print("native codegen error: unresolved symbol:");
-            print(f_name);
+            let mut msg: CodeBuffer = buf_init(4096);
+            buf_append(&mut msg, "native codegen error: unresolved symbol '");
+            buf_append(&mut msg, f_name);
+            buf_append(&mut msg, "'");
+            print(buf_to_string(&mut msg));
+            buf_deinit(&mut msg);
             buf_deinit(code);
             buf_deinit(data);
             return false;

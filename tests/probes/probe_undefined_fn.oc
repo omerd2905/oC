@@ -1,0 +1,4 @@
+// A call to a function that is declared nowhere must be a compile error on both backends.
+fn main() {
+    print(totally_undefined_fn(2.0));
+}

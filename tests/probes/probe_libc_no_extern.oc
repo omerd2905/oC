@@ -1,0 +1,6 @@
+// A C library function is callable only through an `extern fn` declaration, which marks
+// code the validator cannot see into. Without one, the C backend used to link it silently.
+fn main() {
+    let p: i32 = getpid();
+    print(p > 0);
+}

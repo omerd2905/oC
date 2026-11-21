@@ -38,6 +38,25 @@ struct AstNode {
     next: *mut AstNode,
 }
 
+// The driver parses one combined source: every imported file, dependencies first. A token's
+// line is a line of that combined text; this map turns it back into a file and a line in it.
+struct SourceMap {
+    count: usize,
+    first_line: [128]u32, // line of the combined source where file i starts
+    path: [128]string,
+}
+
+// Index of the file that holds combined line `line`, or -1 when the map has no entry for it.
+fn srcmap_file(m: *SourceMap, line: u32) -> i32 {
+    if m == (0).as(*SourceMap) { return -1; }
+    let mut i: usize = m.count;
+    while i > 0 {
+        i = i - 1;
+        if m.first_line[i] <= line { return i.as(i32); }
+    }
+    return -1;
+}
+
 fn ast_alloc_node(arena: *mut Arena, tag: u32, tok: Token) -> *mut AstNode {
     let raw: *mut u8 = arena_alloc(arena, 128);
     let node: *mut AstNode = raw.as(*mut AstNode);
