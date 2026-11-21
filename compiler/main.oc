@@ -14,17 +14,6 @@ extern fn sys_mkdtemp(template: *mut u8) -> i32;
 extern fn sys_rmdir(path: *u8) -> i32;
 extern fn sys_exe_path(buf: *mut u8, cap: usize) -> i64;
 
-fn cstr_to_string(cstr: *u8) -> string {
-    let mut len: usize = 0;
-    while cstr[len] != 0 {
-        len = len + 1;
-    }
-    return string {
-        ptr: cstr,
-        len: len,
-    };
-}
-
 fn is_safe_path(s: string, allow_backslash: bool) -> bool {
     if s.len == 0 { return false; }
     let mut i: usize = 0;
@@ -76,23 +65,6 @@ fn arena_dup_str(arena: *mut Arena, s: string) -> string {
         i = i + 1;
     }
     return string { ptr: buf.as(*u8), len: s.len };
-}
-
-fn str_concat(arena: *mut Arena, a: string, b: string) -> string {
-    let total: usize = a.len + b.len;
-    if total == 0 { return ""; }
-    let buf: *mut u8 = arena_alloc(arena, total);
-    let mut i: usize = 0;
-    while i < a.len {
-        buf[i] = a[i];
-        i = i + 1;
-    }
-    let mut j: usize = 0;
-    while j < b.len {
-        buf[a.len + j] = b[j];
-        j = j + 1;
-    }
-    return string { ptr: buf.as(*u8), len: total };
 }
 
 fn is_path_sep(c: u8) -> bool {

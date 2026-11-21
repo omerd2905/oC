@@ -1,0 +1,6 @@
+// substr is bounds-checked: a range past the end of the string panics on both backends.
+import "std/str.oc";
+
+fn main() {
+    print(substr("hello", 3, 5));
+}

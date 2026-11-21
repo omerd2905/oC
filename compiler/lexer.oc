@@ -1,3 +1,4 @@
+import "std/str.oc";
 import "compiler/token.oc";
 
 let TOK_BREAK: u32 = 25;
@@ -19,36 +20,6 @@ fn lexer_init(source: string) -> Lexer {
         line: 1,
         col: 1,
     };
-}
-
-fn str_eq(a: string, b: string) -> bool {
-    if a.len != b.len {
-        return false;
-    }
-    let mut i: usize = 0;
-    while i < a.len {
-        if a[i] != b[i] {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
-fn is_space(c: u8) -> bool {
-    if c == 32 { return true; }
-    if c == 9 { return true; }
-    if c == 13 { return true; }
-    return false;
-}
-
-fn is_digit(c: u8) -> bool {
-    if c >= 48 {
-        if c <= 57 {
-            return true;
-        }
-    }
-    return false;
 }
 
 fn is_hex_digit(c: u8) -> bool {

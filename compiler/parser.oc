@@ -780,20 +780,6 @@ fn print_err_ret_arena(arena: string) {
     print_str_raw("'\n");
 }
 
-fn starts_with(s: string, prefix: string) -> bool {
-    if s.len < prefix.len {
-        return false;
-    }
-    let mut i: usize = 0;
-    while i < prefix.len {
-        if s[i] != prefix[i] {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
 fn is_scalar_value_type(t: string) -> bool {
     if str_eq(t, "i32") { return true; }
     if str_eq(t, "i64") { return true; }
