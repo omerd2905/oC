@@ -278,6 +278,8 @@ static const size_t NG_IMP_COUNT = 9;
 typedef struct Arena Arena;
 typedef struct Token Token;
 typedef struct Split Split;
+typedef struct ParsedU64 ParsedU64;
+typedef struct ParsedI64 ParsedI64;
 typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
 typedef struct SourceMap SourceMap;
@@ -305,6 +307,16 @@ struct Token {
 struct Split {
     oc_string head;
     oc_string tail;
+};
+
+struct ParsedU64 {
+    bool ok;
+    uint64_t value;
+};
+
+struct ParsedI64 {
+    bool ok;
+    int64_t value;
 };
 
 struct Lexer {
@@ -491,6 +503,23 @@ oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep);
 oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to);
 oc_string str_to_upper(Arena* arena, oc_string s);
 oc_string str_to_lower(Arena* arena, oc_string s);
+uint64_t digit_value(uint8_t c);
+ParsedU64 parse_digits_u64(oc_string s, uint64_t radix);
+ParsedU64 parse_u64_radix(oc_string s, uint32_t radix);
+ParsedI64 parse_i64_radix(oc_string s, uint32_t radix);
+ParsedU64 parse_u64(oc_string s);
+ParsedI64 parse_i64(oc_string s);
+size_t fmt_digits_back(uint8_t* buf, size_t end, uint64_t v, uint64_t radix);
+oc_string int_text(Arena* arena, bool neg, uint64_t mag, uint64_t radix);
+uint64_t i64_magnitude(int64_t n);
+oc_string u64_to_str(Arena* arena, uint64_t n);
+oc_string i64_to_str(Arena* arena, int64_t n);
+oc_string u64_to_hex(Arena* arena, uint64_t n);
+void print_str(oc_string s);
+void print_int_text(bool neg, uint64_t mag, uint64_t radix);
+void print_u64(uint64_t n);
+void print_i64(int64_t n);
+void print_hex(uint64_t n);
 Lexer lexer_init(oc_string source);
 bool is_hex_digit(uint8_t c);
 bool is_ident_start(uint8_t c);
@@ -622,7 +651,7 @@ void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off);
 void ng_add_iat_fixup(NativeGen* ng, size_t code_off, size_t slot);
 void ng_emit_call(NativeGen* ng, CodeBuffer* code, oc_string fn_name);
 void ng_emit_iat_call(NativeGen* ng, CodeBuffer* code, size_t slot);
-uint64_t parse_u64(oc_string s);
+uint64_t parse_literal_u64(oc_string s);
 int32_t ng_find_var_idx(NativeGen* ng, oc_string name);
 int32_t ng_find_var_offset(NativeGen* ng, oc_string name);
 oc_string ng_find_var_type(NativeGen* ng, oc_string name);
@@ -1152,6 +1181,189 @@ oc_string str_to_lower(Arena* arena, oc_string s) {
     i = __OC_ADD(i, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+uint64_t digit_value(uint8_t c) {
+    if (is_digit(c)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 48)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    if ((c >= 97)) {
+    if ((c <= 102)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 87)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    if ((c >= 65)) {
+    if ((c <= 70)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 55)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    return 99;
+}
+
+ParsedU64 parse_digits_u64(oc_string s, uint64_t radix) {
+    ParsedU64 fail = (ParsedU64){ .ok = false, .value = 0 };
+    if ((((s).len) == 0)) {
+    return fail;
+    }
+    if ((radix < 2)) {
+    return fail;
+    }
+    if ((radix > 16)) {
+    return fail;
+    }
+    uint64_t v = 0;
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    uint64_t d = digit_value(__oc_index_str(s, i));
+    if ((d >= radix)) {
+    return fail;
+    }
+    if ((v > __OC_DIV(__OC_SUB(18446744073709551615ULL, d), radix))) {
+    return fail;
+    }
+    v = __OC_ADD(__OC_MUL(v, radix), d);
+    i = __OC_ADD(i, 1);
+    }
+    return (ParsedU64){ .ok = true, .value = v };
+}
+
+ParsedU64 parse_u64_radix(oc_string s, uint32_t radix) {
+    oc_string digits = s;
+    if ((((s).len) > 0)) {
+    if ((__oc_index_str(s, 0) == 43)) {
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    }
+    return parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+}
+
+ParsedI64 parse_i64_radix(oc_string s, uint32_t radix) {
+    ParsedI64 fail = (ParsedI64){ .ok = false, .value = 0 };
+    bool neg = false;
+    oc_string digits = s;
+    if ((((s).len) > 0)) {
+    if ((__oc_index_str(s, 0) == 45)) {
+    neg = true;
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    else {
+    if ((__oc_index_str(s, 0) == 43)) {
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    }
+    }
+    ParsedU64 mag = parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    if ((!((mag).ok))) {
+    return fail;
+    }
+    if (neg) {
+    if ((((mag).value) > 9223372036854775808ULL)) {
+    return fail;
+    }
+    if ((((mag).value) == 9223372036854775808ULL)) {
+    return (ParsedI64){ .ok = true, .value = (-9223372036854775807LL - 1) };
+    }
+    return (ParsedI64){ .ok = true, .value = __OC_SUB(0, ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; })) };
+    }
+    if ((((mag).value) > 9223372036854775807)) {
+    return fail;
+    }
+    return (ParsedI64){ .ok = true, .value = ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }) };
+}
+
+ParsedU64 parse_u64(oc_string s) {
+    return parse_u64_radix(s, 10);
+}
+
+ParsedI64 parse_i64(oc_string s) {
+    return parse_i64_radix(s, 10);
+}
+
+size_t fmt_digits_back(uint8_t* buf, size_t end, uint64_t v, uint64_t radix) {
+    size_t pos = end;
+    uint64_t x = v;
+    while ((pos > 0)) {
+    pos = __OC_SUB(pos, 1);
+    uint64_t d = __OC_MOD(x, radix);
+    if ((d < 10)) {
+    __OC_AT((buf), (pos)) = ({ __auto_type _v = (__OC_ADD(48, d)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    }
+    else {
+    __OC_AT((buf), (pos)) = ({ __auto_type _v = (__OC_ADD(87, d)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    }
+    x = __OC_DIV(x, radix);
+    if ((x == 0)) {
+    break;
+    }
+    }
+    return pos;
+}
+
+oc_string int_text(Arena* arena, bool neg, uint64_t mag, uint64_t radix) {
+    uint8_t tmp[24] = {0};
+    size_t start = fmt_digits_back(((uint8_t*)((&(tmp)))), 24, mag, radix);
+    size_t len = __OC_SUB(24, start);
+    if (neg) {
+    len = __OC_ADD(len, 1);
+    }
+    uint8_t* buf = str_alloc(arena, len);
+    size_t pos = 0;
+    if (neg) {
+    __OC_AT((buf), (0)) = 45;
+    pos = 1;
+    }
+    size_t i = start;
+    while ((i < 24)) {
+    __OC_AT((buf), (pos)) = __OC_AT((tmp), (i));
+    pos = __OC_ADD(pos, 1);
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len };
+}
+
+uint64_t i64_magnitude(int64_t n) {
+    if ((n >= 0)) {
+    return ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    return __OC_ADD(({ __auto_type _v = (__OC_SUB(0, __OC_ADD(n, 1))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1);
+}
+
+oc_string u64_to_str(Arena* arena, uint64_t n) {
+    return int_text(arena, false, n, 10);
+}
+
+oc_string i64_to_str(Arena* arena, int64_t n) {
+    return int_text(arena, (n < 0), i64_magnitude(n), 10);
+}
+
+oc_string u64_to_hex(Arena* arena, uint64_t n) {
+    return int_text(arena, false, n, 16);
+}
+
+void print_str(oc_string s) {
+    sys_write(1, ((s).ptr), ((s).len));
+}
+
+void print_int_text(bool neg, uint64_t mag, uint64_t radix) {
+    uint8_t tmp[24] = {0};
+    size_t start = fmt_digits_back(((uint8_t*)((&(tmp)))), 24, mag, radix);
+    if (neg) {
+    sys_write(1, (((oc_string){ .ptr = (const uint8_t*)("-"), .len = sizeof("-") - 1 }).ptr), 1);
+    }
+    oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(tmp)))), .len = 24 };
+    print_str(__oc_slice_str(all, start, 24));
+}
+
+void print_u64(uint64_t n) {
+    print_int_text(false, n, 10);
+}
+
+void print_i64(int64_t n) {
+    print_int_text((n < 0), i64_magnitude(n), 10);
+}
+
+void print_hex(uint64_t n) {
+    print_int_text(false, n, 16);
 }
 
 Lexer lexer_init(oc_string source) {
@@ -6416,7 +6628,7 @@ void ng_emit_iat_call(NativeGen* ng, CodeBuffer* code, size_t slot) {
     elf_append_u32(code, 0);
 }
 
-uint64_t parse_u64(oc_string s) {
+uint64_t parse_literal_u64(oc_string s) {
     uint64_t res = 0;
     if ((((s).len) > 2)) {
     if ((__oc_index_str(s, 0) == 48)) {
@@ -6692,7 +6904,7 @@ size_t ng_parse_array_len(oc_string t) {
     if ((close_idx >= ((t).len))) {
     return 0;
     }
-    return ({ __auto_type _v = (parse_u64(__oc_slice_str(t, 1, close_idx))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
+    return ({ __auto_type _v = (parse_literal_u64(__oc_slice_str(t, 1, close_idx))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
 }
 
 oc_string ng_parse_array_elem(oc_string t) {
@@ -7880,7 +8092,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_INT)) {
-    uint64_t val = parse_u64(((((expr)->tok)).slice));
+    uint64_t val = parse_literal_u64(((((expr)->tok)).slice));
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
     elf_append_u64(code, val);
@@ -8242,7 +8454,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     if ((((((expr)->tok)).tag) == TOK_MINUS)) {
     if ((((expr)->left) != ((AstNode*)(0)))) {
     if ((((((expr)->left))->tag) == NODE_INT)) {
-    uint64_t mag = parse_u64(((((((expr)->left))->tok)).slice));
+    uint64_t mag = parse_literal_u64(((((((expr)->left))->tok)).slice));
     if ((mag == 2147483648)) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
@@ -10321,7 +10533,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     }
     }
     else {
-    c_val = parse_u64(((((lit)->tok)).slice));
+    c_val = parse_literal_u64(((((lit)->tok)).slice));
     if (negative) {
     c_val = __OC_WRAP(sub, (0), (c_val));
     }
