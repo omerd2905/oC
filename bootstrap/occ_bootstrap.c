@@ -8717,6 +8717,9 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = arr_len;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many variables in one function (256)"), .len = sizeof("native codegen error: too many variables in one function (256)") - 1 });
+    }
     buf_append_u8(code, 72);
     buf_append_u8(code, 141);
     buf_append_u8(code, 189);
@@ -8796,6 +8799,9 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = 0;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
     }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many variables in one function (256)"), .len = sizeof("native codegen error: too many variables in one function (256)") - 1 });
+    }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
     if ((((((stmt)->left))->tag) == NODE_STRUCT_INIT)) {
     AstNode* f = ((((stmt)->left))->left);
@@ -8855,6 +8861,9 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     __OC_AT((((ng)->var_scope)), (((ng)->var_count))) = ((ng)->scope_depth);
     __OC_AT((((ng)->var_arr_len)), (((ng)->var_count))) = 0;
     ((ng)->var_count) = __OC_ADD(((ng)->var_count), 1);
+    }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many variables in one function (256)"), .len = sizeof("native codegen error: too many variables in one function (256)") - 1 });
     }
     ng_emit_disp_store_rax(code, off);
     if (is_slice) {
@@ -9748,6 +9757,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     __OC_AT((((ng)->const_vals)), (((ng)->const_count))) = c_val;
     ((ng)->const_count) = __OC_ADD(((ng)->const_count), 1);
     }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many top-level constants (128)"), .len = sizeof("native codegen error: too many top-level constants (128)") - 1 });
+    }
     }
     }
     else {
@@ -9840,6 +9852,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     param_bytes = __OC_ADD(param_bytes, __OC_SUB(p_sz, 8));
     __OC_AT((((ng)->var_offsets)), (__OC_SUB(((ng)->var_count), 1))) = ((ng)->curr_off);
     }
+    }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many variables in one function (256)"), .len = sizeof("native codegen error: too many variables in one function (256)") - 1 });
     }
     p = ((p)->next);
     }
