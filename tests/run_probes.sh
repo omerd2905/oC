@@ -161,16 +161,19 @@ for backend in c native; do
   fi
 done
 
-echo "=== Native backend tables: overflowing one is an error, not a wrong result ==="
+echo "=== Native backend limits: exceeding one is an error, not a wrong result ==="
 WORK="$(mktemp -d)"
+cp "$ROOT/tests/probes/probe_native_big_struct_return.oc" "$ROOT/tests/probes/probe_native_big_struct_copy.oc" "$WORK/"
 { echo 'fn main() {'; for i in $(seq 0 299); do echo "    let v$i: i64 = $i;"; done; echo '    print(v256);'; echo '}'; } > "$WORK/vars.oc"
 { for i in $(seq 0 139); do echo "let C$i: i64 = $i;"; done; echo 'fn main() { print(C139); }'; } > "$WORK/consts.oc"
-for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)"; do
+for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)" \
+             "probe_native_big_struct_return.oc|5|cannot return a struct larger than 32 bytes" \
+             "probe_native_big_struct_copy.oc|5|struct larger than 32 bytes cannot be copied by value"; do
   IFS='|' read -r f want_c want_err <<<"$entry"
   TOTAL=$((TOTAL + 1))
   got_c="$("$OCC" run "$WORK/$f" --backend c 2>&1)"
   if out="$("$OCC" build "$WORK/$f" -o "$WORK/bin" --backend native 2>&1)"; then
-    echo "  [FAIL] $f: the native backend compiled past its table limit"
+    echo "  [FAIL] $f: the native backend compiled past its limit"
     exit 1
   elif [ "$got_c" = "$want_c" ] && grep -qF -- "$want_err" <<<"$out"; then
     echo "  [PASS] $f: C backend prints $want_c; native backend reports: $want_err"

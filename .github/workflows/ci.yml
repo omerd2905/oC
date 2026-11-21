@@ -129,6 +129,9 @@ jobs:
             fi
             echo "probe_$p.oc trapped as expected"
           done
+          ./bin/occ.exe build tests/parity/many_args.oc -o build/many_args --backend native
+          test "$(./build/many_args.exe | tr -d '\r')" = "$(head -n -1 tests/parity/many_args.expected | tr -d '\r')"
+          echo "many_args.oc: arguments past the sixth word arrive intact"
           ./bin/occ.exe build tests/probes/probe_fp_trap.oc -o build/fptrap --backend native --fp-trap
           if ./build/fptrap.exe 2> build/fptrap.err; then
             echo "probe_fp_trap.oc --fp-trap exited 0 without trapping"

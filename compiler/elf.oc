@@ -1306,6 +1306,9 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 return;
             }
             let s_sz: i32 = ng_find_struct_size(ng, vt);
+            if s_sz > 32 {
+                ng_fail(ng, "native codegen error: a struct larger than 32 bytes cannot be copied by value; use a pointer to it");
+            }
             if s_sz > 0 {
                 ng_emit_disp_load_rax(code, off);
                 if s_sz >= 16 { ng_emit_disp_load_rdx(code, off + 8); }
@@ -1365,6 +1368,10 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 194);
             buf_append_u8(code, 88); // pop %rax (ptr)
             return;
+        }
+        if ng_find_struct_size(ng, expr.tok.slice) > 32 {
+            // Struct values travel in four registers; a bigger one would lose its tail.
+            ng_fail(ng, "native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly");
         }
         buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 32); // sub $32, %rsp
         let mut f: *mut AstNode = expr.left;
@@ -2139,12 +2146,19 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             a = a.next;
         }
-        if reg_count > 6 {
-            // There are six argument registers; anything beyond them used to be dropped silently.
-            ng_fail(ng, "native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)");
+        // Words 0-5 go in %rdi, %rsi, %rdx, %rcx, %r8, %r9. With more, every word stays on the
+        // stack (word k at (reg_count - 1 - k) * 8 above %rsp), the first six are also loaded
+        // into registers, and the callee reads the rest from its caller's frame.
+        let stack_args: bool = reg_count > 6;
+        if stack_args {
+            let mut r: usize = 0;
+            while r < 6 {
+                ng_emit_load_arg_reg(code, r, ((reg_count - 1 - r) * 8).as(u32));
+                r = r + 1;
+            }
         }
-
         let mut idx: usize = reg_count;
+        if stack_args { idx = 0; }
         while idx > 0 {
             idx = idx - 1;
             if idx == 0 { buf_append_u8(code, 95); } // pop %rdi
@@ -2179,6 +2193,17 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         else if str_eq(fn_name, "sys_exit") { is_sys = true; sys_nr = 60; }
         else if str_eq(fn_name, "sys_unlink") { is_sys = true; sys_nr = 87; }
         else if str_eq(fn_name, "sys_chmod") { is_sys = true; sys_nr = 90; }
+
+        if stack_args {
+            let mut direct: bool = !is_sys;
+            if fn_name.len > 6 {
+                if str_eq(fn_name[0..6], "win32_") { direct = false; }
+            }
+            if !direct {
+                ng_fail(ng, "native codegen error: system calls and win32_* imports take at most 6 register words");
+                return;
+            }
+        }
 
         if str_eq(fn_name, "sys_host_target") {
             buf_append_u8(code, 72);
@@ -2247,6 +2272,10 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         ng_add_fixup(ng, code.len, expr.tok.slice, false);
         buf_append_u8(code, 232); // call rel32
         elf_append_u32(code, 0);
+        if stack_args {
+            buf_append_u8(code, 72); buf_append_u8(code, 129); buf_append_u8(code, 196); // add $n, %rsp
+            elf_append_u32(code, (reg_count * 8).as(u32));
+        }
         return;
     }
 }
@@ -2845,6 +2874,33 @@ fn ng_emit_store_param_reg(code: *mut CodeBuffer, reg_idx: usize, off: i32) {
     }
 }
 
+// mov disp(%rsp), <argument register reg_idx>   (reg_idx 0-5: rdi rsi rdx rcx r8 r9)
+fn ng_emit_load_arg_reg(code: *mut CodeBuffer, reg_idx: usize, disp: u32) {
+    let mut rex: u8 = 72;   // REX.W
+    let mut modrm: u8 = 188; // 10 111 100: %rdi, SIB follows
+    if reg_idx == 1 { modrm = 180; }      // %rsi
+    else if reg_idx == 2 { modrm = 148; } // %rdx
+    else if reg_idx == 3 { modrm = 140; } // %rcx
+    else if reg_idx == 4 { rex = 76; modrm = 132; } // %r8
+    else if reg_idx == 5 { rex = 76; modrm = 140; } // %r9
+    buf_append_u8(code, rex);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, modrm);
+    buf_append_u8(code, 36); // SIB: base %rsp
+    elf_append_u32(code, disp);
+}
+
+// Parameter word reg_idx of a function taking `total` words: from its register, or, past
+// the sixth, from the caller's stack (above the return address and saved %rbp).
+fn ng_emit_store_param(code: *mut CodeBuffer, reg_idx: usize, total: usize, off: i32) {
+    if reg_idx < 6 {
+        ng_emit_store_param_reg(code, reg_idx, off);
+        return;
+    }
+    ng_emit_disp_load_rax(code, (16 + ((total - 1 - reg_idx) * 8)).as(i32));
+    ng_emit_disp_store_rax(code, off);
+}
+
 fn ng_define_helper(ng: *mut NativeGen, has_offset: *mut bool, name: string, off: usize) {
     if ng.fn_count < 256 {
         ng.fn_names[ng.fn_count] = name;
@@ -3370,6 +3426,10 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                 ng.curr_off = 0;
                 ng.scope_depth = 0;
                 ng.cur_ret = decl.type_name;
+                if ng_find_struct_size(ng, decl.type_name) > 32 {
+                    // Returned values travel in %rax, %rdx, %rcx, %r8; the rest used to be dropped.
+                    ng_fail(ng, "native codegen error: a function cannot return a struct larger than 32 bytes; return it through a pointer parameter");
+                }
 
                 let mut p: *mut AstNode = decl.left;
                 let mut param_bytes: i32 = 0;
@@ -3431,28 +3491,37 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                     elf_append_u32(code, stack_sz);
                 }
 
+                // Total parameter words, to find the ones passed on the stack.
+                let mut total_words: usize = 0;
+                let mut tw: usize = 0;
+                p = decl.left;
+                while p != (0).as(*mut AstNode) {
+                    total_words = total_words + 1;
+                    if ng.var_is_slice[tw] { total_words = total_words + 1; }
+                    let tw_sz: i32 = ng_find_struct_size(ng, ng.var_types[tw]);
+                    if tw_sz > 8 { total_words = total_words + ((tw_sz - 1) / 8).as(usize); }
+                    tw = tw + 1;
+                    p = p.next;
+                }
                 p = decl.left;
                 let mut reg_idx: usize = 0;
                 let mut p_var_idx: usize = 0;
                 while p != (0).as(*mut AstNode) {
                     let off: i32 = ng.var_offsets[p_var_idx];
-                    ng_emit_store_param_reg(code, reg_idx, off);
+                    ng_emit_store_param(code, reg_idx, total_words, off);
                     reg_idx = reg_idx + 1;
                     if ng.var_is_slice[p_var_idx] {
-                        ng_emit_store_param_reg(code, reg_idx, off - 8);
+                        ng_emit_store_param(code, reg_idx, total_words, off - 8);
                         reg_idx = reg_idx + 1;
                     }
                     let mut p_word: i32 = 8;
                     while p_word < ng_find_struct_size(ng, ng.var_types[p_var_idx]) {
-                        ng_emit_store_param_reg(code, reg_idx, off + p_word);
+                        ng_emit_store_param(code, reg_idx, total_words, off + p_word);
                         reg_idx = reg_idx + 1;
                         p_word = p_word + 8;
                     }
                     p_var_idx = p_var_idx + 1;
                     p = p.next;
-                }
-                if reg_idx > 6 {
-                    ng_fail(ng, "native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)");
                 }
 
                 if body_block != (0).as(*mut AstNode) {
