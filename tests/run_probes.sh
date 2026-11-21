@@ -231,6 +231,37 @@ for t in "$ROOT"/tests/parity/*.oc; do
   rm -f /tmp/oc_parity_c /tmp/oc_parity_native /tmp/oc_parity_c.out /tmp/oc_parity_native.out
 done
 
+echo "=== Standard input: read_line, read_i64, read_int, read_all ==="
+WORK="$(mktemp -d)"
+{ printf '  Ada \r\n-42\n7x\n-2147483649\nabc\r\n\n'; head -c 100000 /dev/zero | tr '\0' x; printf '\ntail1\ntail2'; } > "$WORK/input"
+head -c 2000 /dev/zero | tr '\0' y > "$WORK/long"
+for backend in c native; do
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/read_input.oc" -o "$WORK/read_input" --backend "$backend" >/dev/null
+  if [ "$("$WORK/read_input" < "$WORK/input")" = "$(cat "$ROOT/tests/stdin/read_input.expected")" ]; then
+    echo "  [PASS] read_input.oc (--backend $backend): lines, \\r\\n, numbers, a 100000-byte line, EOF"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] read_input.oc (--backend $backend) printed:"
+    "$WORK/read_input" < "$WORK/input" | head -20
+    exit 1
+  fi
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/read_line_oom.oc" -o "$WORK/read_line_oom" --backend "$backend" >/dev/null
+  set +e
+  out="$("$WORK/read_line_oom" < "$WORK/long" 2>&1)"
+  RC=$?
+  set -e
+  if [ "$RC" -ne 0 ] && [ "$out" = "panic: arena out of memory" ]; then
+    echo "  [PASS] read_line_oom.oc (--backend $backend): a line too long for the arena panics"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] read_line_oom.oc (--backend $backend): exit $RC, printed '$out'"
+    exit 1
+  fi
+done
+rm -rf "$WORK"
+
 echo "=== [4/4] Cross-Target PE32+ Verification (--backend native --target windows-x86_64) ==="
 PE_OUT=/tmp/oc_pe_bin
 pe_check() {

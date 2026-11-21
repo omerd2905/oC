@@ -1345,6 +1345,17 @@ fn bind_to_target(target: string, value: *mut AstNode) {
     if is_untyped_float(value) { bind_float_literals(value, "f32"); }
 }
 
+// buf[i] or s.field of a number or bool type: the value read cannot be a pointer, so it
+// does not inherit the stack or arena borrow of the buffer or struct it comes from.
+// (A cast such as p.as(usize) is not a load and keeps its borrow.)
+fn is_scalar_load(v: *mut Validator, expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    let mut load: bool = expr.tag == NODE_INDEX;
+    if expr.tag == NODE_FIELD_ACCESS { load = true; }
+    if !load { return false; }
+    return is_scalar_value_type(validator_expr_type(v, expr));
+}
+
 fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
     return is_float_type_name(validator_expr_type(v, expr));
 }
@@ -1906,7 +1917,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 }
             }
         } else {
-            let id: string = get_ident_name(stmt.left);
+            let mut id: string = get_ident_name(stmt.left);
+            if is_scalar_load(v, stmt.left) { id = ""; }
             if id.len > 0 {
                 let idx: i32 = validator_find_var(v, id);
                 if idx >= 0 {
@@ -2007,7 +2019,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
         let mut src_opt: string = get_underlying_address_of(stmt.right);
         if src_opt.len == 0 { src_opt = get_local_array_slice_source(v, stmt.right); }
         let tgt_opt: string = get_ident_name(stmt.left);
-        let val_ident: string = get_ident_name(stmt.right);
+        let mut val_ident: string = get_ident_name(stmt.right);
+        if is_scalar_load(v, stmt.right) { val_ident = ""; }
         let rhs_arena: string = get_expr_arena_borrow(v, stmt.right);
 
         if rhs_arena.len > 0 {
@@ -2088,6 +2101,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                             }
                         }
                         if ptr_escape {
+                            print_src_loc(v.srcmap, stmt.tok);
                             print("error: borrowed pointer escapes enclosing scope");
                             v.has_error = true;
                             return false;
@@ -2114,7 +2128,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                                 val_escape = true;
                             }
                             if val_escape {
-                                print("error: borrowed pointer escapes enclosing scope");
+                                print_src_loc(v.srcmap, stmt.tok);
+                            print("error: borrowed pointer escapes enclosing scope");
                                 v.has_error = true;
                                 return false;
                             }

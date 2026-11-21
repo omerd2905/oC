@@ -1,0 +1,30 @@
+// std/io.oc input functions (issue #60, phase 3), fed by tests/run_probes.sh with:
+//   "  Ada \r\n" "-42\n" "7x\n" "-2147483649\n" "abc\r\n" "\n" <100000 x's> "\n" "tail1\ntail2"
+import "std/io.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(1048576);
+    print("Name?");
+    let r: ReadLine = read_line(&mut a);
+    if r.ok { print(str_concat(&mut a, "Hello, ", trim(r.line))); }  // Hello, Ada
+    let n: ParsedI64 = read_i64();
+    print(n.ok);                                                    // true
+    print(n.value);                                                 // -42
+    let m: ParsedI64 = read_i64();
+    print(m.ok);                                                    // false ("7x")
+    print(read_int());                                              // 0 (outside i32)
+    let l: ReadLine = read_line(&mut a);
+    print(l.line);                                                  // abc ("\r\n" stripped)
+    let e: ReadLine = read_line(&mut a);
+    print(e.ok);                                                    // true (an empty line)
+    print(e.line.len);                                              // 0
+    let big: ReadLine = read_line(&mut a);
+    print(big.line.len);                                            // 100000
+    print(big.line[99999]);                                         // 120 ('x')
+    let rest: ReadAll = read_all(&mut a);
+    print(rest.ok);                                                 // true
+    print(rest.data);                                               // tail1, tail2
+    let eof: ReadLine = read_line(&mut a);
+    print(eof.ok);                                                  // false
+    arena_deinit(&mut a);
+}

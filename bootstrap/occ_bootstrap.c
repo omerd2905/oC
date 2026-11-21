@@ -276,10 +276,12 @@ static const size_t NG_IMP_WRITE_FILE = 2;
 static const size_t NG_IMP_COUNT = 9;
 
 typedef struct Arena Arena;
-typedef struct Token Token;
 typedef struct Split Split;
 typedef struct ParsedU64 ParsedU64;
 typedef struct ParsedI64 ParsedI64;
+typedef struct ReadLine ReadLine;
+typedef struct ReadAll ReadAll;
+typedef struct Token Token;
 typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
 typedef struct SourceMap SourceMap;
@@ -297,13 +299,6 @@ struct Arena {
     uint8_t* buffer;
 };
 
-struct Token {
-    uint32_t tag;
-    oc_string slice;
-    uint32_t line;
-    uint32_t col;
-};
-
 struct Split {
     oc_string head;
     oc_string tail;
@@ -317,6 +312,23 @@ struct ParsedU64 {
 struct ParsedI64 {
     bool ok;
     int64_t value;
+};
+
+struct ReadLine {
+    bool ok;
+    oc_string line;
+};
+
+struct ReadAll {
+    bool ok;
+    oc_string data;
+};
+
+struct Token {
+    uint32_t tag;
+    oc_string slice;
+    uint32_t line;
+    uint32_t col;
 };
 
 struct Lexer {
@@ -467,17 +479,10 @@ struct ModuleLoader {
     uint32_t lines;
 };
 
-int32_t read_int(void);
-uint8_t* cstr_path(oc_string path, uint8_t* out_buf);
-int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len);
-bool write_file(oc_string path, oc_string content);
-bool chmod_exec(oc_string path);
-bool unlink_file(oc_string path);
 Arena arena_init(size_t capacity);
 uint8_t* arena_alloc(Arena* arena, size_t size);
 void arena_reset(Arena* arena);
 void arena_deinit(Arena* arena);
-bool is_keyword(uint32_t tag);
 bool str_eq(oc_string a, oc_string b);
 bool starts_with(oc_string s, oc_string prefix);
 bool ends_with(oc_string s, oc_string suffix);
@@ -520,6 +525,17 @@ void print_int_text(bool neg, uint64_t mag, uint64_t radix);
 void print_u64(uint64_t n);
 void print_i64(int64_t n);
 void print_hex(uint64_t n);
+uint8_t* io_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap);
+ReadLine read_line(Arena* arena);
+ReadAll read_all(Arena* arena);
+ParsedI64 read_i64(void);
+int32_t read_int(void);
+uint8_t* cstr_path(oc_string path, uint8_t* out_buf);
+int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len);
+bool write_file(oc_string path, oc_string content);
+bool chmod_exec(oc_string path);
+bool unlink_file(oc_string path);
+bool is_keyword(uint32_t tag);
 Lexer lexer_init(oc_string source);
 bool is_hex_digit(uint8_t c);
 bool is_ident_start(uint8_t c);
@@ -587,6 +603,7 @@ bool is_int_literal(AstNode* expr);
 bool is_untyped_float(AstNode* expr);
 void bind_float_literals(AstNode* expr, oc_string t);
 void bind_to_target(oc_string target, AstNode* value);
+bool is_scalar_load(Validator* v, AstNode* expr);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
 bool int_converts_exactly(oc_string int_t, oc_string float_t);
@@ -752,76 +769,6 @@ size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v);
 void fmt_print_f64(double x);
 size_t fmt_put_sci(uint8_t* buf, size_t n, double v);
 
-int32_t read_int(void) {
-    uint8_t buf[32] = {0};
-    int64_t bytes = sys_read(0, ((uint8_t*)((&(buf)))), 31);
-    if ((bytes <= 0)) {
-    return 0;
-    }
-    int32_t res = 0;
-    size_t i = 0;
-    while ((i < ({ __auto_type _v = (bytes); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))) {
-    uint8_t c = __OC_AT((buf), (i));
-    if ((c >= 48)) {
-    if ((c <= 57)) {
-    res = __OC_ADD(__OC_MUL(res, 10), ({ __auto_type _v = (__OC_SUB(c, 48)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
-    }
-    }
-    i = __OC_ADD(i, 1);
-    }
-    return res;
-}
-
-uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
-    size_t len = ((path).len);
-    if ((len > 4095)) {
-    len = 4095;
-    }
-    size_t i = 0;
-    while ((i < len)) {
-    __OC_AT((out_buf), (i)) = __oc_index_str(path, i);
-    i = __OC_ADD(i, 1);
-    }
-    __OC_AT((out_buf), (len)) = 0;
-    return ((uint8_t*)(out_buf));
-}
-
-int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
-    if ((fd < 0)) {
-    return (-1);
-    }
-    int64_t n = sys_read(fd, out_buf, max_len);
-    sys_close(fd);
-    return n;
-}
-
-bool write_file(oc_string path, oc_string content) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
-    if ((fd < 0)) {
-    return false;
-    }
-    int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
-    sys_close(fd);
-    return (n >= 0);
-}
-
-bool chmod_exec(oc_string path) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    return (sys_chmod(p, OC_MODE_EXEC) == 0);
-}
-
-bool unlink_file(oc_string path) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    return (sys_unlink(p) == 0);
-}
-
 Arena arena_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, OC_PROT_RW, OC_MAP_PRIVATE_ANON, (-1), 0);
     uint8_t* buf = ((uint8_t*)(raw));
@@ -872,15 +819,6 @@ void arena_deinit(Arena* arena) {
     ((arena)->buffer) = ((uint8_t*)(0));
     ((arena)->capacity) = 0;
     ((arena)->offset) = 0;
-}
-
-bool is_keyword(uint32_t tag) {
-    if ((tag >= 10)) {
-    if ((tag <= 24)) {
-    return true;
-    }
-    }
-    return false;
 }
 
 bool str_eq(oc_string a, oc_string b) {
@@ -1364,6 +1302,197 @@ void print_i64(int64_t n) {
 
 void print_hex(uint64_t n) {
     print_int_text(false, n, 16);
+}
+
+uint8_t* io_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap) {
+    if ((__OC_ADD(((size_t)(buf)), cap) == __OC_ADD(((size_t)(((arena)->buffer))), ((arena)->offset)))) {
+    str_alloc(arena, cap);
+    return buf;
+    }
+    uint8_t* bigger = str_alloc(arena, __OC_MUL(cap, 2));
+    size_t i = 0;
+    while ((i < len)) {
+    __OC_AT((bigger), (i)) = __OC_AT((buf), (i));
+    i = __OC_ADD(i, 1);
+    }
+    return bigger;
+}
+
+ReadLine read_line(Arena* arena) {
+    size_t cap = 128;
+    uint8_t* buf = str_alloc(arena, cap);
+    size_t len = 0;
+    bool got = false;
+    uint8_t c[1] = {0};
+    bool reading = true;
+    while (reading) {
+    int64_t n = sys_read(0, ((uint8_t*)((&(c)))), 1);
+    if ((n <= 0)) {
+    reading = false;
+    }
+    else {
+    got = true;
+    if ((__OC_AT((c), (0)) == 10)) {
+    reading = false;
+    }
+    else {
+    if ((len == cap)) {
+    buf = io_grow(arena, buf, len, cap);
+    cap = __OC_MUL(cap, 2);
+    }
+    __OC_AT((buf), (len)) = __OC_AT((c), (0));
+    len = __OC_ADD(len, 1);
+    }
+    }
+    }
+    if ((!got)) {
+    return (ReadLine){ .ok = false, .line = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    if ((len > 0)) {
+    if ((__OC_AT((buf), (__OC_SUB(len, 1))) == 13)) {
+    len = __OC_SUB(len, 1);
+    }
+    }
+    return (ReadLine){ .ok = true, .line = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+}
+
+ReadAll read_all(Arena* arena) {
+    size_t cap = 4096;
+    uint8_t* buf = str_alloc(arena, cap);
+    size_t len = 0;
+    bool reading = true;
+    while (reading) {
+    if ((len == cap)) {
+    buf = io_grow(arena, buf, len, cap);
+    cap = __OC_MUL(cap, 2);
+    }
+    int64_t n = sys_read(0, ((uint8_t*)((buf + len))), __OC_SUB(cap, len));
+    if ((n < 0)) {
+    return (ReadAll){ .ok = false, .data = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    if ((n == 0)) {
+    reading = false;
+    }
+    else {
+    len = __OC_ADD(len, ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    }
+    return (ReadAll){ .ok = true, .data = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+}
+
+ParsedI64 read_i64(void) {
+    uint8_t buf[64] = {0};
+    size_t len = 0;
+    bool got = false;
+    bool too_long = false;
+    uint8_t c[1] = {0};
+    bool reading = true;
+    while (reading) {
+    int64_t n = sys_read(0, ((uint8_t*)((&(c)))), 1);
+    if ((n <= 0)) {
+    reading = false;
+    }
+    else {
+    got = true;
+    if ((__OC_AT((c), (0)) == 10)) {
+    reading = false;
+    }
+    else {
+    if ((len < 64)) {
+    __OC_AT((buf), (len)) = __OC_AT((c), (0));
+    len = __OC_ADD(len, 1);
+    }
+    else {
+    too_long = true;
+    }
+    }
+    }
+    }
+    bool ok = got;
+    if (too_long) {
+    ok = false;
+    }
+    int64_t value = 0;
+    if (ok) {
+    oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(buf)))), .len = 64 };
+    ParsedI64 r = parse_i64(trim(__oc_slice_str(all, 0, len)));
+    ok = ((r).ok);
+    value = ((r).value);
+    }
+    return (ParsedI64){ .ok = ok, .value = value };
+}
+
+int32_t read_int(void) {
+    ParsedI64 r = read_i64();
+    if ((!((r).ok))) {
+    return 0;
+    }
+    if ((((r).value) < (-2147483648))) {
+    return 0;
+    }
+    if ((((r).value) > 2147483647)) {
+    return 0;
+    }
+    return ({ __auto_type _v = (((r).value)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+}
+
+uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
+    size_t len = ((path).len);
+    if ((len > 4095)) {
+    len = 4095;
+    }
+    size_t i = 0;
+    while ((i < len)) {
+    __OC_AT((out_buf), (i)) = __oc_index_str(path, i);
+    i = __OC_ADD(i, 1);
+    }
+    __OC_AT((out_buf), (len)) = 0;
+    return ((uint8_t*)(out_buf));
+}
+
+int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
+    if ((fd < 0)) {
+    return (-1);
+    }
+    int64_t n = sys_read(fd, out_buf, max_len);
+    sys_close(fd);
+    return n;
+}
+
+bool write_file(oc_string path, oc_string content) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
+    if ((fd < 0)) {
+    return false;
+    }
+    int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
+    sys_close(fd);
+    return (n >= 0);
+}
+
+bool chmod_exec(oc_string path) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    return (sys_chmod(p, OC_MODE_EXEC) == 0);
+}
+
+bool unlink_file(oc_string path) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    return (sys_unlink(p) == 0);
+}
+
+bool is_keyword(uint32_t tag) {
+    if ((tag >= 10)) {
+    if ((tag <= 24)) {
+    return true;
+    }
+    }
+    return false;
 }
 
 Lexer lexer_init(oc_string source) {
@@ -3458,6 +3587,20 @@ void bind_to_target(oc_string target, AstNode* value) {
     }
 }
 
+bool is_scalar_load(Validator* v, AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    bool load = (((expr)->tag) == NODE_INDEX);
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    load = true;
+    }
+    if ((!load)) {
+    return false;
+    }
+    return is_scalar_value_type(validator_expr_type(v, expr));
+}
+
 bool validator_is_float(Validator* v, AstNode* expr) {
     return is_float_type_name(validator_expr_type(v, expr));
 }
@@ -4201,6 +4344,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     else {
     oc_string id = get_ident_name(((stmt)->left));
+    if (is_scalar_load(v, ((stmt)->left))) {
+    id = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
@@ -4302,6 +4448,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     oc_string tgt_opt = get_ident_name(((stmt)->left));
     oc_string val_ident = get_ident_name(((stmt)->right));
+    if (is_scalar_load(v, ((stmt)->right))) {
+    val_ident = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     oc_string rhs_arena = get_expr_arena_borrow(v, ((stmt)->right));
     if ((((rhs_arena).len) > 0)) {
     if ((((tgt_opt).len) > 0)) {
@@ -4383,6 +4532,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (ptr_escape) {
+    print_src_loc(((v)->srcmap), ((stmt)->tok));
     printf("%s\n", "error: borrowed pointer escapes enclosing scope");
     ((v)->has_error) = true;
     return false;
@@ -4414,6 +4564,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (val_escape) {
+    print_src_loc(((v)->srcmap), ((stmt)->tok));
     printf("%s\n", "error: borrowed pointer escapes enclosing scope");
     ((v)->has_error) = true;
     return false;
