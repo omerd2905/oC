@@ -63,6 +63,8 @@ fn is_safe_path(s: string, allow_backslash: bool) -> bool {
 struct ModuleLoader {
     visited: [128]string,
     visited_count: usize,
+    map: SourceMap,  // which file each line of the combined source came from
+    lines: u32,      // newlines in the combined source so far
 }
 
 fn arena_dup_str(arena: *mut Arena, s: string) -> string {
@@ -182,6 +184,7 @@ fn load_module_recursive(
     let file_buf: *mut u8 = arena_alloc(arena, 262144);
     let mut bytes: i64 = -1;
     let mut resolved_path: string = path;
+    let mut shown_path: string = path; // name used in diagnostics
 
     if base_dir.len > 0 {
         if path.len > 0 {
@@ -190,6 +193,7 @@ fn load_module_recursive(
                 bytes = read_file(cand1, file_buf, 262143);
                 if bytes >= 0 {
                     resolved_path = cand1;
+                    shown_path = cand1;
                 }
             }
         }
@@ -311,6 +315,18 @@ fn load_module_recursive(
             scanning = false;
         }
     }
+
+    if loader.map.count < 128 {
+        loader.map.first_line[loader.map.count] = loader.lines + 1;
+        loader.map.path[loader.map.count] = arena_dup_str(arena, shown_path);
+        loader.map.count = loader.map.count + 1;
+    }
+    let mut nl: usize = 0;
+    while nl < src.len {
+        if src[nl] == 10 { loader.lines = loader.lines + 1; }
+        nl = nl + 1;
+    }
+    loader.lines = loader.lines + 1; // the newline appended below
 
     buf_append(out, src);
     buf_append(out, "\n");
@@ -732,6 +748,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let mut loader: ModuleLoader = ModuleLoader {
         visited: [""],
         visited_count: 0,
+        map: SourceMap { count: 0, first_line: [0], path: [""] },
+        lines: 0,
     };
     let mut combined_buf: CodeBuffer = buf_init(4194304);
 
@@ -778,7 +796,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     }
 
     // Active defense: compile-time escape & borrow safety validation
-    let valid: bool = validate_program(prog);
+    let valid: bool = validate_program(prog, &loader.map);
     if !valid {
         buf_deinit(&mut combined_buf);
         arena_deinit(&mut arena);

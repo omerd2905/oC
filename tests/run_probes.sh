@@ -28,6 +28,9 @@ COMPILE_REJECT=(
   "probe_array_store_uaf.oc|use-after-free: variable 'q' used after arena 'a' was deinitialized"
   "probe_float_eq.oc|== and != are not allowed on floats"
   "probe_float_to_int_implicit.oc|implicit conversion from float to integer"
+  "probe_undefined_fn.oc|probe_undefined_fn.oc:3:11: error: undefined function 'totally_undefined_fn'"
+  "probe_misspelled_fn.oc|probe_misspelled_fn.oc:5:11: error: undefined function 'align_upp'"
+  "probe_libc_no_extern.oc|probe_libc_no_extern.oc:4:18: error: undefined function 'getpid'"
 )
 
 RUNTIME_TRAP=(
