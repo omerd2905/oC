@@ -699,6 +699,35 @@ fn print_str_raw(s: string) {
     sys_write(1, s.ptr, s.len);
 }
 
+fn print_u32_raw(n: u32) {
+    let mut digits: [10]u8 = [0];
+    let mut pos: usize = 10;
+    let mut v: u32 = n;
+    while pos > 0 {
+        pos = pos - 1;
+        digits[pos] = (48 + (v % 10)).as(u8);
+        v = v / 10;
+        if v == 0 { break; }
+    }
+    let all: string = string { ptr: (&digits).as(*u8), len: 10 };
+    print_str_raw(all[pos..10]);
+}
+
+// "file:line:col: " for a token, so a diagnostic points into the user's file.
+fn print_src_loc(m: *SourceMap, tok: Token) {
+    let f: i32 = srcmap_file(m, tok.line);
+    if f >= 0 {
+        print_str_raw(m.path[f.as(usize)]);
+        print_str_raw(":");
+        print_u32_raw(tok.line - m.first_line[f.as(usize)] + 1);
+    } else {
+        print_u32_raw(tok.line);
+    }
+    print_str_raw(":");
+    print_u32_raw(tok.col);
+    print_str_raw(": ");
+}
+
 fn print_err_ref_invalidated(name: string, bv: string) {
     print_str_raw("error: reference '");
     print_str_raw(name);
@@ -1142,9 +1171,9 @@ fn strip_ptr_type(t: string) -> string {
     return t[1..t.len];
 }
 
-// First declaration of function `name` in the program (null if there is none).
-fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
-    let mut decl: *mut AstNode = v.program.left;
+// First declaration (`fn` or `extern fn`) of function `name` in the program, or null.
+fn program_find_fn(program: *mut AstNode, name: string) -> *mut AstNode {
+    let mut decl: *mut AstNode = program.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
             if str_eq(decl.tok.slice, name) { return decl; }
@@ -1152,6 +1181,44 @@ fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
         decl = decl.next;
     }
     return (0).as(*mut AstNode);
+}
+
+fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
+    return program_find_fn(v.program, name);
+}
+
+// Functions the compiler implements itself; every other call needs a declaration.
+fn is_builtin_fn(name: string) -> bool {
+    if str_eq(name, "sqrt_f64") { return true; }
+    if str_eq(name, "wrapping_add") { return true; }
+    if str_eq(name, "wrapping_sub") { return true; }
+    if str_eq(name, "wrapping_mul") { return true; }
+    return false;
+}
+
+// Every call must name a function declared in the program (`fn` or `extern fn`) or a
+// built-in. Otherwise the C backend would let the C compiler resolve any libc symbol
+// implicitly, and the two backends would disagree. Reports every undefined call.
+fn check_calls_resolved(program: *mut AstNode, m: *SourceMap, node: *mut AstNode) -> bool {
+    let mut ok: bool = true;
+    let mut n: *mut AstNode = node;
+    while n != (0).as(*mut AstNode) {
+        if n.tag == NODE_CALL {
+            if !is_builtin_fn(n.tok.slice) {
+                if program_find_fn(program, n.tok.slice) == (0).as(*mut AstNode) {
+                    print_src_loc(m, n.tok);
+                    print_str_raw("error: undefined function '");
+                    print_str_raw(n.tok.slice);
+                    print_str_raw("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\n");
+                    ok = false;
+                }
+            }
+        }
+        if !check_calls_resolved(program, m, n.left) { ok = false; }
+        if !check_calls_resolved(program, m, n.right) { ok = false; }
+        n = n.next;
+    }
+    return ok;
 }
 
 // Best-effort static type of an expression ("" when unknown). The validator is not a full
@@ -2005,7 +2072,8 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode)
     return true;
 }
 
-fn validate_program(root: *mut AstNode) -> bool {
+fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
+    if !check_calls_resolved(root, m, root.left) { return false; }
     let mut fx: FnEffects = FnEffects {
         names: [""],
         effects: [0],
