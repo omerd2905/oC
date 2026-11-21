@@ -1,0 +1,276 @@
+// Number formatting beyond what print does.
+//
+// print_f64(x, digits) prints an f64 with up to 40 significant digits, in the format of C's
+// printf("%.<digits>g\n", x). It is a separate import because the exact conversion takes
+// about 10 KB of native code, which programs that only print() floats should not carry.
+
+import "std/sys/float.oc";
+
+// ---------------------------------------------------------------------------------------
+// print_f64(x, digits): x with `digits` significant digits (1 to 40), in the format of C's
+// printf("%.<digits>g\n", x): fixed notation when the decimal exponent is in
+// [-4, digits), scientific otherwise, trailing zeros removed. 17 digits always identify
+// the f64 exactly. The digits are correctly rounded (halves to even) because they are
+// taken from the exact decimal value of x, computed with integer arithmetic.
+// Specials print as NaN, inf and -inf, and negative zero as 0, as with print.
+// ---------------------------------------------------------------------------------------
+
+struct FmtExact {
+    len: usize, // number of decimal digits written
+    shift: i32, // the value is those digits divided by 10^shift
+}
+
+// l[0..n] *= f (f < 2^32), little-endian 32-bit limbs. Returns the new length.
+fn fmt_big_mul(l: *mut u32, n: usize, f: u64) -> usize {
+    let mut carry: u64 = 0;
+    let mut i: usize = 0;
+    while i < n {
+        let t: u64 = (l[i].as(u64) * f) + carry;
+        l[i] = (t & 4294967295).as(u32);
+        carry = t >> 32;
+        i = i + 1;
+    }
+    if carry > 0 {
+        l[n] = carry.as(u32);
+        return n + 1;
+    }
+    return n;
+}
+
+// l[0..n] /= 10^9; returns the remainder.
+fn fmt_big_div1e9(l: *mut u32, n: usize) -> u64 {
+    let mut rem: u64 = 0;
+    let mut i: usize = n;
+    while i > 0 {
+        i = i - 1;
+        let cur: u64 = (rem << 32) | l[i].as(u64);
+        l[i] = (cur / 1000000000).as(u32);
+        rem = cur % 1000000000;
+    }
+    return rem;
+}
+
+// The exact decimal expansion of v (finite, > 0): its digits go to `d` (no leading zeros)
+// and v = digits / 10^shift. A double is a binary fraction, so the expansion terminates;
+// it has at most 767 digits.
+fn fmt_exact_digits(v: f64, d: *mut u8) -> FmtExact {
+    // v = mant * 2^e with mant an integer in [2^52, 2^53). Scaling by 2 is exact here.
+    let mut m: f64 = v;
+    let mut e: i32 = 0;
+    while m >= 9007199254740992.0 {
+        m = m * 0.5;
+        e = e + 1;
+    }
+    while m < 4503599627370496.0 {
+        m = m * 2.0;
+        e = e - 1;
+    }
+    let mut mant: u64 = m.as(u64);
+    while (mant & 1) == 0 { // an odd mantissa keeps e >= -1074, which bounds the sizes below
+        mant = mant >> 1;
+        e = e + 1;
+    }
+    let mut limbs: [84]u32 = [0]; // 2^53 * 5^1074 needs 80 limbs
+    let l: *mut u32 = (&mut limbs).as(*mut u32);
+    l[0] = (mant & 4294967295).as(u32);
+    l[1] = (mant >> 32).as(u32);
+    let mut n: usize = 2;
+    let mut shift: i32 = 0;
+    let mut k: i32 = e;
+    let mut f: u64 = 1;
+    if e >= 0 {
+        while k >= 31 {
+            n = fmt_big_mul(l, n, 2147483648);
+            k = k - 31;
+        }
+        while k > 0 {
+            f = f * 2;
+            k = k - 1;
+        }
+    } else {
+        // mant / 2^k = mant * 5^k / 10^k
+        k = -e;
+        shift = k;
+        while k >= 13 {
+            n = fmt_big_mul(l, n, 1220703125); // 5^13
+            k = k - 13;
+        }
+        while k > 0 {
+            f = f * 5;
+            k = k - 1;
+        }
+    }
+    n = fmt_big_mul(l, n, f);
+    // To decimal, nine digits at a time, least significant group first.
+    let mut groups: [90]u32 = [0];
+    let mut g: usize = 0;
+    while n > 0 {
+        groups[g] = fmt_big_div1e9(l, n).as(u32);
+        g = g + 1;
+        while n > 0 {
+            if l[n - 1] != 0 { break; }
+            n = n - 1;
+        }
+    }
+    let mut len: usize = fmt_put_u64(d, 0, groups[g - 1].as(u64));
+    while g > 1 {
+        g = g - 1;
+        let grp: u32 = groups[g - 1];
+        let mut div: u32 = 100000000;
+        while div > 0 {
+            d[len] = (48 + ((grp / div) % 10)).as(u8);
+            len = len + 1;
+            div = div / 10;
+        }
+    }
+    return FmtExact { len: len, shift: shift };
+}
+
+// Writes v (finite, > 0) with p (1 to 40) significant digits, like C's %.<p>g.
+fn fmt_put_g(o: *mut u8, start: usize, v: f64, p: usize) -> usize {
+    let mut dig: [800]u8 = [0];
+    // Digits are read back from `dig` itself: copying them out through the pointer would
+    // look to the validator like a stack pointer escaping into `o`.
+    let ex: FmtExact = fmt_exact_digits(v, (&mut dig).as(*mut u8));
+    let mut x10: i32 = (ex.len.as(i32) - 1) - ex.shift; // v = d.ddd * 10^x10
+    let mut len: usize = ex.len;
+    if len > p {
+        // Round to p digits, halves to even. The digits are exact, so this is too.
+        let mut up: bool = dig[p] > 53;
+        if dig[p] == 53 {
+            let mut i: usize = p + 1;
+            while i < len {
+                if dig[i] != 48 {
+                    up = true;
+                    break;
+                }
+                i = i + 1;
+            }
+            if !up { up = ((dig[p - 1] - 48) % 2) == 1; }
+        }
+        len = p;
+        if up {
+            let mut i: usize = p;
+            let mut carry: bool = true;
+            while i > 0 {
+                i = i - 1;
+                if dig[i] == 57 {
+                    dig[i] = 48;
+                } else {
+                    dig[i] = dig[i] + 1;
+                    carry = false;
+                    break;
+                }
+            }
+            if carry { // 99..9 rounded up: 10..0, one decade higher
+                dig[0] = 49;
+                x10 = x10 + 1;
+            }
+        }
+    }
+    while len > 1 { // %g drops trailing zeros
+        if dig[len - 1] != 48 { break; }
+        len = len - 1;
+    }
+    let mut n: usize = start;
+    let mut fixed: bool = false;
+    if x10 >= -4 {
+        if x10 < p.as(i32) { fixed = true; }
+    }
+    if fixed {
+        if x10 >= 0 {
+            let int_digits: usize = (x10 + 1).as(usize);
+            let mut i: usize = 0;
+            while i < int_digits {
+                if i < len { o[n] = dig[i]; } else { o[n] = 48; }
+                n = n + 1;
+                i = i + 1;
+            }
+            if len > int_digits {
+                o[n] = 46; // '.'
+                n = n + 1;
+                while i < len {
+                    o[n] = dig[i];
+                    n = n + 1;
+                    i = i + 1;
+                }
+            }
+        } else {
+            o[n] = 48;
+            o[n + 1] = 46;
+            n = n + 2;
+            let mut z: i32 = -x10 - 1;
+            while z > 0 {
+                o[n] = 48;
+                n = n + 1;
+                z = z - 1;
+            }
+            let mut i: usize = 0;
+            while i < len {
+                o[n] = dig[i];
+                n = n + 1;
+                i = i + 1;
+            }
+        }
+        return n;
+    }
+    o[n] = dig[0];
+    n = n + 1;
+    if len > 1 {
+        o[n] = 46;
+        n = n + 1;
+        let mut i: usize = 1;
+        while i < len {
+            o[n] = dig[i];
+            n = n + 1;
+            i = i + 1;
+        }
+    }
+    o[n] = 101; // 'e'
+    let mut mag: i32 = x10;
+    if x10 < 0 {
+        o[n + 1] = 45;
+        mag = -x10;
+    } else {
+        o[n + 1] = 43;
+    }
+    n = n + 2;
+    if mag < 10 {
+        o[n] = 48;
+        n = n + 1;
+    }
+    return fmt_put_u64(o, n, mag.as(u64));
+}
+
+fn print_f64(x: f64, digits: u32) {
+    if !(x <= x) {
+        sys_write(1, "NaN\n".ptr, 4);
+        return;
+    }
+    let mut p: usize = digits.as(usize);
+    if p < 1 { p = 1; }
+    if p > 40 { p = 40; }
+    let mut out: [64]u8 = [0];
+    let o: *mut u8 = (&mut out).as(*mut u8);
+    let mut n: usize = 0;
+    let mut v: f64 = x;
+    if v < 0.0 {
+        o[0] = 45; // '-'
+        n = 1;
+        v = -v;
+    }
+    if v > 1.7976931348623157e308 {
+        o[n] = 105;
+        o[n + 1] = 110;
+        o[n + 2] = 102;
+        n = n + 3;
+    } else if v <= 0.0 {
+        n = 0; // zero, either sign
+        o[0] = 48;
+        n = 1;
+    } else {
+        n = fmt_put_g(o, n, v, p);
+    }
+    o[n] = 10;
+    sys_write(1, o.as(*u8), n + 1);
+}
