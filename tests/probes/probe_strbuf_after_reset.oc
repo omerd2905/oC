@@ -1,0 +1,10 @@
+// A StrBuf lives in its arena: using it after arena_reset is rejected at compile time.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut sb: StrBuf = strbuf_init(&mut a, 16);
+    strbuf_push_str(&mut sb, "hi");
+    arena_reset(&mut a);
+    print(strbuf_to_string(&sb));
+}

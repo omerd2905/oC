@@ -169,6 +169,22 @@ fn str_alloc(arena: *mut Arena, n: usize) -> *mut u8 {
     return p;
 }
 
+// Grows an arena buffer from cap to 2 * cap bytes, in place when it is the arena's most
+// recent allocation, otherwise by copying len bytes. Panics when the arena is full.
+fn str_grow(arena: *mut Arena, buf: *mut u8, len: usize, cap: usize) -> *mut u8 {
+    if buf.as(usize) + cap == arena.buffer.as(usize) + arena.offset {
+        str_alloc(arena, cap); // lands right after buf
+        return buf;
+    }
+    let bigger: *mut u8 = str_alloc(arena, cap * 2);
+    let mut i: usize = 0;
+    while i < len {
+        bigger[i] = buf[i];
+        i = i + 1;
+    }
+    return bigger;
+}
+
 fn str_concat(arena: *mut Arena, a: string, b: string) -> string {
     let total: usize = a.len + b.len;
     if total == 0 { return ""; }
@@ -298,6 +314,60 @@ fn str_to_lower(arena: *mut Arena, s: string) -> string {
         i = i + 1;
     }
     return string { ptr: buf.as(*u8), len: s.len };
+}
+
+// ---------------------------------------------------------------------------------------
+// StrBuf: a string built piece by piece in an arena
+//
+//     let mut sb: StrBuf = strbuf_init(&mut a, 64);
+//     strbuf_push_str(&mut sb, "x = ");
+//     strbuf_push(&mut sb, 55);
+//     print(strbuf_to_string(&sb)); // x = 7
+//
+// The buffer doubles when full (in place when it is the arena's latest allocation), so
+// pushing n bytes costs O(n) in total, unlike a chain of str_concat calls that copies the
+// whole string each time. Like any arena string, the result must not be used after the
+// arena is reset.
+// ---------------------------------------------------------------------------------------
+
+struct StrBuf {
+    arena: *mut Arena,
+    buf: *mut u8,
+    len: usize,
+    cap: usize,
+}
+
+fn strbuf_init(arena: *mut Arena, cap: usize) -> StrBuf {
+    let mut c: usize = cap;
+    if c < 16 { c = 16; }
+    return StrBuf { arena: arena, buf: str_alloc(arena, c), len: 0, cap: c };
+}
+
+fn strbuf_push(b: *mut StrBuf, c: u8) {
+    if b.len == b.cap {
+        b.buf = str_grow(b.arena, b.buf, b.len, b.cap);
+        b.cap = b.cap * 2;
+    }
+    b.buf[b.len] = c;
+    b.len = b.len + 1;
+}
+
+fn strbuf_push_str(b: *mut StrBuf, s: string) {
+    while b.len + s.len > b.cap {
+        b.buf = str_grow(b.arena, b.buf, b.len, b.cap);
+        b.cap = b.cap * 2;
+    }
+    let mut i: usize = 0;
+    while i < s.len {
+        b.buf[b.len + i] = s[i];
+        i = i + 1;
+    }
+    b.len = b.len + s.len;
+}
+
+// A view of what has been pushed so far (no copy).
+fn strbuf_to_string(b: *StrBuf) -> string {
+    return string { ptr: b.buf.as(*u8), len: b.len };
 }
 
 // ---------------------------------------------------------------------------------------

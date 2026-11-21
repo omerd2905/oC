@@ -19,22 +19,6 @@ struct ReadAll {
     data: string,
 }
 
-// Grows an arena buffer from cap to 2 * cap bytes, in place when it is the arena's most
-// recent allocation, otherwise by copying len bytes. Panics when the arena is full.
-fn io_grow(arena: *mut Arena, buf: *mut u8, len: usize, cap: usize) -> *mut u8 {
-    if buf.as(usize) + cap == arena.buffer.as(usize) + arena.offset {
-        str_alloc(arena, cap); // lands right after buf
-        return buf;
-    }
-    let bigger: *mut u8 = str_alloc(arena, cap * 2);
-    let mut i: usize = 0;
-    while i < len {
-        bigger[i] = buf[i];
-        i = i + 1;
-    }
-    return bigger;
-}
-
 // The next line of standard input. At end of input, a last line without a line break is
 // still returned (ok = true); after it, ok is false. A line may be as long as the arena
 // allows: one that does not fit panics with "arena out of memory".
@@ -55,7 +39,7 @@ fn read_line(arena: *mut Arena) -> ReadLine {
                 reading = false;
             } else {
                 if len == cap {
-                    buf = io_grow(arena, buf, len, cap);
+                    buf = str_grow(arena, buf, len, cap);
                     cap = cap * 2;
                 }
                 buf[len] = c[0];
@@ -78,7 +62,7 @@ fn read_all(arena: *mut Arena) -> ReadAll {
     let mut reading: bool = true;
     while reading {
         if len == cap {
-            buf = io_grow(arena, buf, len, cap);
+            buf = str_grow(arena, buf, len, cap);
             cap = cap * 2;
         }
         let n: i64 = sys_read(0, (buf + len).as(*mut u8), cap - len);

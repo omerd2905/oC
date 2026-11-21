@@ -1,0 +1,41 @@
+// StrBuf from std/str.oc (issue #60, phase 4): growth from a tiny buffer, growth in place
+// and by copying after another allocation, and the views it hands out.
+// Both backends must print str_builder.expected exactly.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(65536);
+    let mut sb: StrBuf = strbuf_init(&mut a, 0);
+    print(sb.cap);                              // 16
+    print(strbuf_to_string(&sb).len);           // 0
+    strbuf_push_str(&mut sb, "x = ");
+    strbuf_push(&mut sb, 55);
+    print(strbuf_to_string(&sb));               // x = 7
+    let mut i: u32 = 0;
+    while i < 1000 {
+        strbuf_push_str(&mut sb, ", ab");
+        i = i + 1;
+    }
+    print(sb.len);                              // 4005
+    print(sb.cap);                              // 4096
+    let s: string = strbuf_to_string(&sb);
+    print(s[0..9]);                             // x = 7, ab
+    print(s[s.len - 4..s.len]);                 // , ab
+    let other: string = str_concat(&mut a, "in", "terleave");
+    while sb.len < 5000 { strbuf_push(&mut sb, 46); }
+    print(sb.len);                              // 5000
+    print(sb.cap);                              // 8192
+    print(strbuf_to_string(&sb)[4999]);         // 46
+    print(other);                               // interleave
+    let mut line: StrBuf = strbuf_init(&mut a, 8);
+    let words: [3]string = ["build", "an", "answer"];
+    let mut w: usize = 0;
+    while w < 3 {
+        if w > 0 { strbuf_push(&mut line, 32); }
+        strbuf_push_str(&mut line, words[w]);
+        w = w + 1;
+    }
+    print(strbuf_to_string(&line));             // build an answer
+    print(str_to_upper(&mut a, strbuf_to_string(&line)));  // BUILD AN ANSWER
+    arena_deinit(&mut a);
+}
