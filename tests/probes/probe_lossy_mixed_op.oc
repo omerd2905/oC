@@ -1,0 +1,8 @@
+// In a mixed operation the integer side becomes a float: the same rule applies.
+fn scale(n: u64) -> f64 {
+    return n * 0.5;
+}
+
+fn main() {
+    print(scale(3));
+}

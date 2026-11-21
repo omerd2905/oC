@@ -1,0 +1,54 @@
+// Conversions to floating point (issue #55). Implicit only where nothing can be lost:
+// i8..i32 and u8..u32 to f64, i8/i16/u8/u16 to f32, f32 to f64, and integer literals that
+// the float holds exactly. Anything else is written .as(T) and rounds to the nearest value.
+// Generated; float_conversions.expected was computed with Python's IEEE doubles.
+struct Reading { raw: u16, volts: f32, total: f64, }
+
+fn widen(x: f32) -> f64 { return x; }
+fn avg(sum: u64, n: u32) -> f64 { return sum.as(f64) / n; }
+
+fn main() {
+    let i32_max: i32 = 2147483647;
+    let i32_min: i32 = -2147483648;
+    let u32_max: u32 = 4294967295;
+    let i16_min: i16 = -32768;
+    let u16_max: u16 = 65535;
+    let small: i8 = -7;
+    let big: i64 = 9007199254740993;
+    let huge: u64 = 18446744073709551615;
+    let d: f64 = 16777217.0;
+    let third: f32 = 0.1;
+    let from_i32: f64 = i32_max;
+    let from_u32: f64 = u32_max;
+    let from_i16: f32 = i16_min;
+    let from_u16: f32 = u16_max;
+    let exact_lit: f64 = 1000000000000000000;
+    let exact_neg: f64 = -9007199254740992;
+    let f32_lit: f32 = 16777216;
+    let r: Reading = Reading { raw: u16_max, volts: 3.3, total: u32_max };
+    let arr: [3]f64 = [i32_min, 2, 0.5];
+    print(from_i32);                                        // 2147483647.000000
+    print(from_u32);                                        // 4294967295.000000
+    print(from_i16);                                        // -32768.000000
+    print(from_u16);                                        // 65535.000000
+    print(i32_min * 2.0);                                   // -4294967296.000000
+    print(small / 2.0);                                     // -3.500000
+    print(third * u16_max);                                 // 6553.500000
+    print(exact_lit - 1.0e18);                              // 0.000000
+    print(exact_neg);                                       // -9.007199e+15
+    print(f32_lit);                                         // 16777216.000000
+    print(r.raw);                                           // 65535
+    print(r.volts);                                         // 3.300000
+    print(r.total);                                         // 4294967295.000000
+    print(arr[0] + arr[1] + arr[2]);                        // -2147483645.500000
+    print(widen(third));                                    // 0.100000
+    print(avg(10, 4));                                      // 2.500000
+    print(big.as(f64) - 9007199254740992.0);                // 0.000000
+    print((big + 2).as(f64) - 9007199254740992.0);          // 4.000000
+    print(huge.as(f64));                                    // 1.844674e+19
+    print(d.as(f32).as(f64) - 16777216.0);                  // 0.000000
+    print((16777219.0).as(f32).as(f64) - 16777216.0);       // 4.000000
+    print((9007199254740993).as(f64) - 9007199254740992.0); // 0.000000
+    print(i32_max.as(f32).as(f64));                         // 2147483648.000000
+    print((1.0e300).as(f32));                               // inf
+}
