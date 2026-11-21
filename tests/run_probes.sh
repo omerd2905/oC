@@ -160,6 +160,27 @@ for backend in c native; do
   fi
 done
 
+echo "=== Native backend tables: overflowing one is an error, not a wrong result ==="
+WORK="$(mktemp -d)"
+{ echo 'fn main() {'; for i in $(seq 0 299); do echo "    let v$i: i64 = $i;"; done; echo '    print(v256);'; echo '}'; } > "$WORK/vars.oc"
+{ for i in $(seq 0 139); do echo "let C$i: i64 = $i;"; done; echo 'fn main() { print(C139); }'; } > "$WORK/consts.oc"
+for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)"; do
+  IFS='|' read -r f want_c want_err <<<"$entry"
+  TOTAL=$((TOTAL + 1))
+  got_c="$("$OCC" run "$WORK/$f" --backend c 2>&1)"
+  if out="$("$OCC" build "$WORK/$f" -o "$WORK/bin" --backend native 2>&1)"; then
+    echo "  [FAIL] $f: the native backend compiled past its table limit"
+    exit 1
+  elif [ "$got_c" = "$want_c" ] && grep -qF -- "$want_err" <<<"$out"; then
+    echo "  [PASS] $f: C backend prints $want_c; native backend reports: $want_err"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] $f: C printed '$got_c', native said: $out"
+    exit 1
+  fi
+done
+rm -rf "$WORK"
+
 echo "=== [3/4] Positive Examples Verification (C & Native Backends) ==="
 for ex in "$ROOT"/examples/*.oc; do
   base="$(basename "$ex")"
