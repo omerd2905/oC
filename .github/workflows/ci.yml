@@ -129,6 +129,13 @@ jobs:
             fi
             echo "probe_$p.oc trapped as expected"
           done
+          ./bin/occ.exe build tests/probes/probe_fp_trap.oc -o build/fptrap --backend native --fp-trap
+          if ./build/fptrap.exe 2> build/fptrap.err; then
+            echo "probe_fp_trap.oc --fp-trap exited 0 without trapping"
+            exit 1
+          fi
+          test "$(tr -d '\r' < build/fptrap.err)" = "panic: floating-point result is NaN or infinite at tests/probes/probe_fp_trap.oc:5:22"
+          echo "probe_fp_trap.oc trapped at the division, location included"
 
       - name: occ.exe runs from another directory (std found via the real executable path)
         run: |

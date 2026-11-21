@@ -151,8 +151,8 @@ for backend in c native; do
   RC=$?
   set -e
   rm -f /tmp/oc_probe_bin
-  if [ "$plain" = "inf" ] && [ "$RC" -ne 0 ] && [ "$trapped" = "panic: floating-point result is NaN or infinite" ]; then
-    echo "  [PASS] probe_fp_trap.oc (--backend $backend): prints inf by default, panics with --fp-trap"
+  if [ "$plain" = "inf" ] && [ "$RC" -ne 0 ] && [ "$trapped" = "panic: floating-point result is NaN or infinite at $ROOT/tests/probes/probe_fp_trap.oc:5:22" ]; then
+    echo "  [PASS] probe_fp_trap.oc (--backend $backend): prints inf by default, panics with --fp-trap at the division"
     PASS=$((PASS + 1))
   else
     echo "  [FAIL] probe_fp_trap.oc (--backend $backend): default printed '$plain'; --fp-trap exit $RC, printed '$trapped'"

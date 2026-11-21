@@ -73,8 +73,8 @@ struct NativeGen {
     fixup_is_6byte: [1024]bool,
     fixup_count: usize,
 
-    data_reloc_code: [512]usize,
-    data_reloc_data: [512]usize,
+    data_reloc_code: [4096]usize,
+    data_reloc_data: [4096]usize,
     data_reloc_count: usize,
 
     var_names: [256]string,
@@ -101,6 +101,7 @@ struct NativeGen {
 
     root: *mut AstNode,
     fp_trap: bool,   // --fp-trap: trap when a float operation produces NaN or infinity
+    srcmap: *SourceMap, // source locations for --fp-trap panics
     cur_ret: string, // return type of the function being emitted
     const_types: [128]string,
     const_names: [128]string,
@@ -169,12 +170,12 @@ fn ng_add_fixup(ng: *mut NativeGen, code_off: usize, fn_name: string, is_6byte: 
 }
 
 fn ng_add_data_reloc(ng: *mut NativeGen, code_off: usize, data_off: usize) {
-    if ng.data_reloc_count < 512 {
+    if ng.data_reloc_count < 4096 {
         ng.data_reloc_code[ng.data_reloc_count] = code_off;
         ng.data_reloc_data[ng.data_reloc_count] = data_off;
         ng.data_reloc_count = ng.data_reloc_count + 1;
     } else {
-        ng_fail(ng, "native codegen error: data relocation table full (512)");
+        ng_fail(ng, "native codegen error: data relocation table full (4096)");
     }
 }
 
@@ -1070,7 +1071,9 @@ fn ng_emit_float_to_int(ng: *mut NativeGen, code: *mut CodeBuffer, src: string, 
 
 // --fp-trap: traps if the float in %rax (f64 when `wide`) is NaN or infinite, i.e. its
 // exponent bits are all ones. Shifting the sign bit out leaves one unsigned comparison.
-fn ng_emit_fp_check(ng: *mut NativeGen, code: *mut CodeBuffer, wide: bool) {
+// The trap is handed the location of the operation (`tok`) in %rsi / %rdx, so the panic can
+// name it.
+fn ng_emit_fp_check(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, wide: bool, tok: Token) {
     if !ng.fp_trap { return; }
     if wide {
         buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 193); // mov %rax, %rcx
@@ -1082,8 +1085,27 @@ fn ng_emit_fp_check(ng: *mut NativeGen, code: *mut CodeBuffer, wide: bool) {
         buf_append_u8(code, 209); buf_append_u8(code, 225);                          // shl $1, %ecx
         buf_append_u8(code, 129); buf_append_u8(code, 249); elf_append_u32(code, 0xff000000); // cmp $(inf << 1), %ecx
     }
-    ng_add_fixup(ng, code.len, "__trap_fp", true);
-    buf_append_u8(code, 15); buf_append_u8(code, 131); elf_append_u32(code, 0); // jae trap
+    buf_append_u8(code, 114); buf_append_u8(code, 20); // jb past the 20 bytes below
+    let loc_off: usize = data.len;
+    buf_append_src_loc(data, ng.srcmap, tok, false);
+    buf_append_u8(code, 72); buf_append_u8(code, 190); // movabs $loc, %rsi
+    let loc_patch: usize = code.len;
+    elf_append_u64(code, 0);
+    ng_add_data_reloc(ng, loc_patch, loc_off);
+    buf_append_u8(code, 186); elf_append_u32(code, (data.len - loc_off).as(u32)); // mov $len, %edx
+    ng_add_fixup(ng, code.len, "__trap_fp", false);
+    buf_append_u8(code, 233); elf_append_u32(code, 0); // jmp trap
+}
+
+// write(2, %rsi, %rdx) inside a trap stub.
+fn ng_emit_stderr_write(ng: *mut NativeGen, code: *mut CodeBuffer, is_win: bool) {
+    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 2); // mov $2, %rdi
+    if is_win {
+        ng_emit_call(ng, code, "__win_write");
+    } else {
+        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1); // mov $1, %rax
+        buf_append_u8(code, 15); buf_append_u8(code, 5); // syscall
+    }
 }
 
 // Declared type of parameter `idx` of function `fn_name` ("" if unknown).
@@ -1758,7 +1780,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 // No overflow or division trap: IEEE 754 defines inf and NaN results.
                 buf_append_u8(code, ng_sse_prefix(wide)); buf_append_u8(code, 15); buf_append_u8(code, arith); buf_append_u8(code, 193); // op %xmm1, %xmm0
                 ng_emit_xmm0_to_rax(code, wide);
-                ng_emit_fp_check(ng, code, wide);
+                ng_emit_fp_check(ng, code, data, wide, expr.tok);
                 return;
             }
             // Ordered comparisons; anything compared with NaN is false. a < b is tested as b > a.
@@ -2048,7 +2070,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             ng_emit_rax_to_xmm0(code, true);
             buf_append_u8(code, 242); buf_append_u8(code, 15); buf_append_u8(code, 81); buf_append_u8(code, 192); // sqrtsd %xmm0, %xmm0
             ng_emit_xmm0_to_rax(code, true);
-            ng_emit_fp_check(ng, code, true);
+            ng_emit_fp_check(ng, code, data, true, expr.tok);
             return;
         }
         let w_op: string = wrapping_op(expr.tok.slice);
@@ -3136,7 +3158,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     return ok;
 }
 
-fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_trap: bool) -> bool {
+fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_trap: bool, m: *SourceMap) -> bool {
     let mut code_buf: CodeBuffer = buf_init(262144);
     let mut data_buf: CodeBuffer = buf_init(65536);
     let code: *mut CodeBuffer = &mut code_buf;
@@ -3175,6 +3197,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
         field_count: 0,
         root: root,
         fp_trap: fp_trap,
+        srcmap: m,
         cur_ret: "",
         const_types: [""],
         const_names: [""],
@@ -3569,7 +3592,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     trap_msgs[3] = "panic: division by zero\n";
     trap_msgs[4] = "panic: invalid signed cast\n";
     trap_msgs[5] = "panic: invalid unsigned cast\n";
-    trap_msgs[6] = "panic: floating-point result is NaN or infinite\n";
+    trap_msgs[6] = "panic: floating-point result is NaN or infinite at "; // + location from %rsi / %rdx
     let mut ti: usize = 0;
     while ti < 7 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
@@ -3581,21 +3604,29 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
             tk = tk + 1;
         }
 
-        if !is_win {
-            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 1);
+        let with_loc: bool = ti == 6;
+        if with_loc {
+            buf_append_u8(code, 86); buf_append_u8(code, 82); // push %rsi; push %rdx (the location)
         }
-        buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 2);
         buf_append_u8(code, 72); buf_append_u8(code, 190);
         let t_patch: usize = code.len;
         elf_append_u64(code, 0);
         ng_add_data_reloc(ng, t_patch, t_data_off);
         buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, tmsg.len.as(u32));
+        ng_emit_stderr_write(ng, code, is_win);
+        if with_loc {
+            buf_append_u8(code, 90); buf_append_u8(code, 94); // pop %rdx; pop %rsi
+            ng_emit_stderr_write(ng, code, is_win);
+            // Two pushes keep the stack alignment the Windows call relies on; %rsi points at "\n".
+            buf_append_u8(code, 106); buf_append_u8(code, 10); buf_append_u8(code, 106); buf_append_u8(code, 10); // push $10 (x2)
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 230); // mov %rsp, %rsi
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); elf_append_u32(code, 1); // mov $1, %rdx
+            ng_emit_stderr_write(ng, code, is_win);
+        }
         if is_win {
-            ng_emit_call(ng, code, "__win_write");
             buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
             ng_emit_call(ng, code, "__win_exit");
         } else {
-            buf_append_u8(code, 15); buf_append_u8(code, 5);
             buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); elf_append_u32(code, 60);
             buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 199); elf_append_u32(code, 1);
             buf_append_u8(code, 15); buf_append_u8(code, 5);
@@ -3679,12 +3710,12 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     return true;
 }
 
-fn emit_native_elf(root: *mut AstNode, out_file_str: string, fp_trap: bool) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap);
+fn emit_native_elf(root: *mut AstNode, out_file_str: string, fp_trap: bool, m: *SourceMap) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap, m);
 }
 
-fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap);
+fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool, m: *SourceMap) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap, m);
 }
 
 fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {

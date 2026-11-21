@@ -827,9 +827,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if is_native {
         let mut ok_native: bool = false;
         if out_target == OC_TARGET_WINDOWS_X86_64 {
-            ok_native = emit_native_pe(prog, out_file_str, fp_trap);
+            ok_native = emit_native_pe(prog, out_file_str, fp_trap, &loader.map);
         } else {
-            ok_native = emit_native_elf(prog, out_file_str, fp_trap);
+            ok_native = emit_native_elf(prog, out_file_str, fp_trap, &loader.map);
         }
         buf_deinit(&mut combined_buf);
         if !ok_native {
@@ -841,6 +841,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     } else {
         let mut out: CodeBuffer = buf_init(4194304);
         out.fp_trap = fp_trap;
+        out.srcmap = &loader.map;
         codegen_program(prog, &mut out);
         buf_deinit(&mut combined_buf);
 
