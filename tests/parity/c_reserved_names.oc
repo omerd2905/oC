@@ -1,0 +1,35 @@
+// oC names that C reserves (int, long, char, double, static, ...) must work on the C
+// backend too: it renames them in the generated C. Both backends must print the same.
+let static: i32 = 7;
+
+struct union {
+    int: i32,
+    char: string,
+    double: [2]u8,
+}
+
+fn long(short: i32, unsigned: i32) -> i32 {
+    return short * unsigned;
+}
+
+fn register(volatile: *mut union) {
+    volatile.int = volatile.int + 1;
+}
+
+fn main() {
+    let mut int: i32 = long(6, 7);
+    print(int);                    // 42
+    int = int + static;
+    print(int);                    // 49
+    let char: [3]u8 = [111, 107, 0];
+    print(char);                   // ok
+    let mut u: union = union { int: 1, char: "text", double: [1, 2] };
+    register(&mut u);
+    print(u.int);                  // 2
+    print(u.char);                 // text
+    print(u.double[1]);            // 2
+    let sizeof: string = "fine";
+    print(sizeof);                 // fine
+    let p: *i32 = &int;
+    print(*p);                     // 49
+}

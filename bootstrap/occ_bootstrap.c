@@ -639,10 +639,13 @@ void buf_append(CodeBuffer* buf, oc_string text);
 void buf_append_u32(CodeBuffer* buf, uint32_t v);
 void buf_append_src_loc(CodeBuffer* buf, SourceMap* m, Token tok, bool c_escape);
 void cg_fchk_close(CodeBuffer* out, Token tok);
+bool is_c_reserved(oc_string name);
+void buf_append_ident(CodeBuffer* buf, oc_string name);
 oc_string buf_to_string(CodeBuffer* buf);
 void buf_deinit(CodeBuffer* buf);
 oc_string to_c_type(oc_string type_name);
 void emit_c_type(oc_string type_name, CodeBuffer* out);
+void buf_append_c_type(CodeBuffer* out, oc_string t);
 bool is_type_ptr(oc_string t);
 bool is_type_str(oc_string t);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
@@ -733,6 +736,8 @@ void ng_emit_xmm1_const(CodeBuffer* code, uint64_t bits);
 void ng_emit_float_to_int(NativeGen* ng, CodeBuffer* code, oc_string src, oc_string dst);
 void ng_emit_fp_check(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, bool wide, Token tok);
 void ng_emit_stderr_write(NativeGen* ng, CodeBuffer* code, bool is_win);
+void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t disp, bool at_rsp);
+void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp);
 oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t);
@@ -4977,6 +4982,81 @@ void cg_fchk_close(CodeBuffer* out, Token tok) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\")"), .len = sizeof("\")") - 1 });
 }
 
+bool is_c_reserved(oc_string name) {
+    oc_string words[56] = {0};
+    __OC_AT((words), (0)) = (oc_string){ .ptr = (const uint8_t*)("auto"), .len = sizeof("auto") - 1 };
+    __OC_AT((words), (1)) = (oc_string){ .ptr = (const uint8_t*)("break"), .len = sizeof("break") - 1 };
+    __OC_AT((words), (2)) = (oc_string){ .ptr = (const uint8_t*)("case"), .len = sizeof("case") - 1 };
+    __OC_AT((words), (3)) = (oc_string){ .ptr = (const uint8_t*)("char"), .len = sizeof("char") - 1 };
+    __OC_AT((words), (4)) = (oc_string){ .ptr = (const uint8_t*)("const"), .len = sizeof("const") - 1 };
+    __OC_AT((words), (5)) = (oc_string){ .ptr = (const uint8_t*)("continue"), .len = sizeof("continue") - 1 };
+    __OC_AT((words), (6)) = (oc_string){ .ptr = (const uint8_t*)("default"), .len = sizeof("default") - 1 };
+    __OC_AT((words), (7)) = (oc_string){ .ptr = (const uint8_t*)("do"), .len = sizeof("do") - 1 };
+    __OC_AT((words), (8)) = (oc_string){ .ptr = (const uint8_t*)("double"), .len = sizeof("double") - 1 };
+    __OC_AT((words), (9)) = (oc_string){ .ptr = (const uint8_t*)("else"), .len = sizeof("else") - 1 };
+    __OC_AT((words), (10)) = (oc_string){ .ptr = (const uint8_t*)("enum"), .len = sizeof("enum") - 1 };
+    __OC_AT((words), (11)) = (oc_string){ .ptr = (const uint8_t*)("extern"), .len = sizeof("extern") - 1 };
+    __OC_AT((words), (12)) = (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 };
+    __OC_AT((words), (13)) = (oc_string){ .ptr = (const uint8_t*)("for"), .len = sizeof("for") - 1 };
+    __OC_AT((words), (14)) = (oc_string){ .ptr = (const uint8_t*)("goto"), .len = sizeof("goto") - 1 };
+    __OC_AT((words), (15)) = (oc_string){ .ptr = (const uint8_t*)("if"), .len = sizeof("if") - 1 };
+    __OC_AT((words), (16)) = (oc_string){ .ptr = (const uint8_t*)("inline"), .len = sizeof("inline") - 1 };
+    __OC_AT((words), (17)) = (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    __OC_AT((words), (18)) = (oc_string){ .ptr = (const uint8_t*)("long"), .len = sizeof("long") - 1 };
+    __OC_AT((words), (19)) = (oc_string){ .ptr = (const uint8_t*)("register"), .len = sizeof("register") - 1 };
+    __OC_AT((words), (20)) = (oc_string){ .ptr = (const uint8_t*)("restrict"), .len = sizeof("restrict") - 1 };
+    __OC_AT((words), (21)) = (oc_string){ .ptr = (const uint8_t*)("return"), .len = sizeof("return") - 1 };
+    __OC_AT((words), (22)) = (oc_string){ .ptr = (const uint8_t*)("short"), .len = sizeof("short") - 1 };
+    __OC_AT((words), (23)) = (oc_string){ .ptr = (const uint8_t*)("signed"), .len = sizeof("signed") - 1 };
+    __OC_AT((words), (24)) = (oc_string){ .ptr = (const uint8_t*)("sizeof"), .len = sizeof("sizeof") - 1 };
+    __OC_AT((words), (25)) = (oc_string){ .ptr = (const uint8_t*)("static"), .len = sizeof("static") - 1 };
+    __OC_AT((words), (26)) = (oc_string){ .ptr = (const uint8_t*)("struct"), .len = sizeof("struct") - 1 };
+    __OC_AT((words), (27)) = (oc_string){ .ptr = (const uint8_t*)("switch"), .len = sizeof("switch") - 1 };
+    __OC_AT((words), (28)) = (oc_string){ .ptr = (const uint8_t*)("typedef"), .len = sizeof("typedef") - 1 };
+    __OC_AT((words), (29)) = (oc_string){ .ptr = (const uint8_t*)("union"), .len = sizeof("union") - 1 };
+    __OC_AT((words), (30)) = (oc_string){ .ptr = (const uint8_t*)("unsigned"), .len = sizeof("unsigned") - 1 };
+    __OC_AT((words), (31)) = (oc_string){ .ptr = (const uint8_t*)("void"), .len = sizeof("void") - 1 };
+    __OC_AT((words), (32)) = (oc_string){ .ptr = (const uint8_t*)("volatile"), .len = sizeof("volatile") - 1 };
+    __OC_AT((words), (33)) = (oc_string){ .ptr = (const uint8_t*)("while"), .len = sizeof("while") - 1 };
+    __OC_AT((words), (34)) = (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    __OC_AT((words), (35)) = (oc_string){ .ptr = (const uint8_t*)("alignas"), .len = sizeof("alignas") - 1 };
+    __OC_AT((words), (36)) = (oc_string){ .ptr = (const uint8_t*)("alignof"), .len = sizeof("alignof") - 1 };
+    __OC_AT((words), (37)) = (oc_string){ .ptr = (const uint8_t*)("constexpr"), .len = sizeof("constexpr") - 1 };
+    __OC_AT((words), (38)) = (oc_string){ .ptr = (const uint8_t*)("nullptr"), .len = sizeof("nullptr") - 1 };
+    __OC_AT((words), (39)) = (oc_string){ .ptr = (const uint8_t*)("static_assert"), .len = sizeof("static_assert") - 1 };
+    __OC_AT((words), (40)) = (oc_string){ .ptr = (const uint8_t*)("thread_local"), .len = sizeof("thread_local") - 1 };
+    __OC_AT((words), (41)) = (oc_string){ .ptr = (const uint8_t*)("typeof"), .len = sizeof("typeof") - 1 };
+    __OC_AT((words), (42)) = (oc_string){ .ptr = (const uint8_t*)("typeof_unqual"), .len = sizeof("typeof_unqual") - 1 };
+    __OC_AT((words), (43)) = (oc_string){ .ptr = (const uint8_t*)("asm"), .len = sizeof("asm") - 1 };
+    __OC_AT((words), (44)) = (oc_string){ .ptr = (const uint8_t*)("int8_t"), .len = sizeof("int8_t") - 1 };
+    __OC_AT((words), (45)) = (oc_string){ .ptr = (const uint8_t*)("int16_t"), .len = sizeof("int16_t") - 1 };
+    __OC_AT((words), (46)) = (oc_string){ .ptr = (const uint8_t*)("int32_t"), .len = sizeof("int32_t") - 1 };
+    __OC_AT((words), (47)) = (oc_string){ .ptr = (const uint8_t*)("int64_t"), .len = sizeof("int64_t") - 1 };
+    __OC_AT((words), (48)) = (oc_string){ .ptr = (const uint8_t*)("uint8_t"), .len = sizeof("uint8_t") - 1 };
+    __OC_AT((words), (49)) = (oc_string){ .ptr = (const uint8_t*)("uint16_t"), .len = sizeof("uint16_t") - 1 };
+    __OC_AT((words), (50)) = (oc_string){ .ptr = (const uint8_t*)("uint32_t"), .len = sizeof("uint32_t") - 1 };
+    __OC_AT((words), (51)) = (oc_string){ .ptr = (const uint8_t*)("uint64_t"), .len = sizeof("uint64_t") - 1 };
+    __OC_AT((words), (52)) = (oc_string){ .ptr = (const uint8_t*)("size_t"), .len = sizeof("size_t") - 1 };
+    __OC_AT((words), (53)) = (oc_string){ .ptr = (const uint8_t*)("oc_string"), .len = sizeof("oc_string") - 1 };
+    __OC_AT((words), (54)) = (oc_string){ .ptr = (const uint8_t*)("NULL"), .len = sizeof("NULL") - 1 };
+    __OC_AT((words), (55)) = (oc_string){ .ptr = (const uint8_t*)("errno"), .len = sizeof("errno") - 1 };
+    size_t i = 0;
+    while ((i < 56)) {
+    if (str_eq(__OC_AT((words), (i)), name)) {
+    return true;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+}
+
+void buf_append_ident(CodeBuffer* buf, oc_string name) {
+    buf_append(buf, name);
+    if (is_c_reserved(name)) {
+    buf_append(buf, (oc_string){ .ptr = (const uint8_t*)("__oc"), .len = sizeof("__oc") - 1 });
+    }
+}
+
 oc_string buf_to_string(CodeBuffer* buf) {
     return (oc_string){ .ptr = ((uint8_t*)(((buf)->buffer))), .len = ((buf)->len) };
 }
@@ -5093,11 +5173,28 @@ void emit_c_type(oc_string type_name, CodeBuffer* out) {
     }
     }
     oc_string base = __oc_slice_str(type_name, base_start, ((type_name).len));
-    buf_append(out, to_c_type(base));
+    buf_append_c_type(out, base);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
     return;
     }
-    buf_append(out, to_c_type(type_name));
+    buf_append_c_type(out, type_name);
+}
+
+void buf_append_c_type(CodeBuffer* out, oc_string t) {
+    oc_string c = to_c_type(t);
+    bool user_type = str_eq(c, t);
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    user_type = false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("void"), .len = sizeof("void") - 1 })) {
+    user_type = false;
+    }
+    if (user_type) {
+    buf_append_ident(out, t);
+    }
+    else {
+    buf_append(out, c);
+    }
 }
 
 bool is_type_ptr(oc_string t) {
@@ -5481,7 +5578,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_IDENT)) {
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     return;
     }
     if ((((expr)->tag) == NODE_UNARY)) {
@@ -5738,18 +5835,18 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     else {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")."), .len = sizeof(").") - 1 });
     }
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
     if ((((expr)->tag) == NODE_STRUCT_INIT)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
-    buf_append(out, to_c_type(((((expr)->tok)).slice)));
+    buf_append_c_type(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("){ "), .len = sizeof("){ ") - 1 });
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("."), .len = sizeof(".") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((f)->left), out);
     if ((((f)->next) != ((AstNode*)(0)))) {
@@ -5800,7 +5897,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* arg = ((expr)->left);
     while ((arg != ((AstNode*)(0)))) {
@@ -5970,9 +6067,9 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     if ((((arg)->tag) == NODE_IDENT)) {
     if (is_u8_array_type(cg_var_type(out, ((((arg)->tok)).slice)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\"%.*s\\n\", (int)sizeof("), .len = sizeof("    printf(\"%.*s\\n\", (int)sizeof(") - 1 });
-    buf_append(out, ((((arg)->tok)).slice));
+    buf_append_ident(out, ((((arg)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), (const char*)"), .len = sizeof("), (const char*)") - 1 });
-    buf_append(out, ((((arg)->tok)).slice));
+    buf_append_ident(out, ((((arg)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
     return;
     }
@@ -6071,7 +6168,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     oc_string elem_str = __oc_slice_str(((stmt)->type_name), __OC_ADD(close_idx, 1), ((((stmt)->type_name)).len));
     emit_c_type(elem_str, out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((stmt)->tok)).slice));
+    buf_append_ident(out, ((((stmt)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
     buf_append(out, sz_str);
     bool use_zero_init = true;
@@ -6126,7 +6223,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__auto_type"), .len = sizeof("__auto_type") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((stmt)->tok)).slice));
+    buf_append_ident(out, ((((stmt)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((stmt)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
@@ -6475,7 +6572,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("uint32_t"), .len = sizeof("uint32_t") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((g_decl)->tok)).slice));
+    buf_append_ident(out, ((((g_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((g_decl)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
@@ -6487,9 +6584,9 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((s_decl != ((AstNode*)(0)))) {
     if ((((s_decl)->tag) == NODE_STRUCT_DECL)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct "), .len = sizeof("typedef struct ") - 1 });
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
     }
     s_decl = ((s_decl)->next);
@@ -6502,7 +6599,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     if (str_eq(((s_decl)->type_name), (oc_string){ .ptr = (const uint8_t*)("packed"), .len = sizeof("packed") - 1 })) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__attribute__((packed)) "), .len = sizeof("__attribute__((packed)) ") - 1 });
     }
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" {\n"), .len = sizeof(" {\n") - 1 });
     AstNode* f = ((s_decl)->left);
     while ((f != ((AstNode*)(0)))) {
@@ -6525,7 +6622,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     oc_string elem_str = __oc_slice_str(((f)->type_name), __OC_ADD(close_idx, 1), ((((f)->type_name)).len));
     emit_c_type(elem_str, out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
     buf_append(out, sz_str);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("];\n"), .len = sizeof("];\n") - 1 });
@@ -6533,7 +6630,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((f)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
     }
     f = ((f)->next);
@@ -6562,7 +6659,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((decl)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, fn_name);
+    buf_append_ident(out, fn_name);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* param = ((decl)->left);
     if ((param == ((AstNode*)(0)))) {
@@ -6572,7 +6669,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((param != ((AstNode*)(0)))) {
     emit_c_type(((param)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((param)->tok)).slice));
+    buf_append_ident(out, ((((param)->tok)).slice));
     if ((((param)->next) != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     }
@@ -6643,7 +6740,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((decl)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, fn_name);
+    buf_append_ident(out, fn_name);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* param = ((decl)->left);
     if ((param == ((AstNode*)(0)))) {
@@ -6653,7 +6750,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((param != ((AstNode*)(0)))) {
     emit_c_type(((param)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((param)->tok)).slice));
+    buf_append_ident(out, ((((param)->tok)).slice));
     if ((((param)->next) != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     }
@@ -8143,6 +8240,63 @@ void ng_emit_stderr_write(NativeGen* ng, CodeBuffer* code, bool is_win) {
     }
 }
 
+void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t disp, bool at_rsp) {
+    if ((width == 1)) {
+    buf_append_u8(code, 136);
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    }
+    if (at_rsp) {
+    buf_append_u8(code, __OC_ADD(132, __OC_MUL(reg, 8)));
+    buf_append_u8(code, 36);
+    }
+    else {
+    buf_append_u8(code, __OC_ADD(133, __OC_MUL(reg, 8)));
+    }
+    elf_append_i32(code, disp);
+}
+
+void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp) {
+    int32_t alen = ({ __auto_type _v = (ng_parse_array_len(arr_t)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    oc_string elem_t = ng_parse_array_elem(arr_t);
+    int32_t stride = ng_type_stride(elem_t);
+    int32_t bytes = __OC_MUL(alen, stride);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 49);
+    buf_append_u8(code, 192);
+    int32_t z = 0;
+    while ((__OC_ADD(z, 8) <= bytes)) {
+    ng_emit_store_disp(code, 0, 8, __OC_ADD(off, z), at_rsp);
+    z = __OC_ADD(z, 8);
+    }
+    while ((z < bytes)) {
+    ng_emit_store_disp(code, 0, 1, __OC_ADD(off, z), at_rsp);
+    z = __OC_ADD(z, 1);
+    }
+    AstNode* el = ((init)->left);
+    int32_t k = 0;
+    while ((el != ((AstNode*)(0)))) {
+    if ((k >= alen)) {
+    break;
+    }
+    ng_emit_expr_as(ng, code, data, el, elem_t);
+    int32_t el_off = __OC_ADD(off, __OC_MUL(k, stride));
+    if ((stride == 1)) {
+    ng_emit_store_disp(code, 0, 1, el_off, at_rsp);
+    }
+    else {
+    ng_emit_store_disp(code, 0, 8, el_off, at_rsp);
+    if ((stride == 16)) {
+    ng_emit_store_disp(code, 2, 8, __OC_ADD(el_off, 8), at_rsp);
+    }
+    }
+    k = __OC_ADD(k, 1);
+    el = ((el)->next);
+    }
+}
+
 oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx) {
     AstNode* decl = ((((ng)->root))->left);
     while ((decl != ((AstNode*)(0)))) {
@@ -8433,7 +8587,17 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     int32_t f_w = ng_field_width(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
-    ng_emit_expr_as(ng, code, data, ((f)->left), ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
+    oc_string f_type = ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
+    if ((((f_type).len) > 0)) {
+    if ((__oc_index_str(f_type, 0) == 91)) {
+    if ((((((f)->left))->tag) == NODE_ARRAY_INIT)) {
+    ng_emit_array_init_at(ng, code, data, f_off, f_type, ((f)->left), true);
+    f = ((f)->next);
+    continue;
+    }
+    }
+    }
+    ng_emit_expr_as(ng, code, data, ((f)->left), f_type);
     int32_t f_words = ng_value_words(ng, ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
     if ((f_words > 1)) {
     if ((__OC_ADD(f_off, __OC_MUL(f_words, 8)) <= 32)) {
@@ -9748,6 +9912,15 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
     oc_string f_type = ng_find_field_type(ng, t_name, ((((f)->tok)).slice));
+    if ((((f_type).len) > 0)) {
+    if ((__oc_index_str(f_type, 0) == 91)) {
+    if ((((((f)->left))->tag) == NODE_ARRAY_INIT)) {
+    ng_emit_array_init_at(ng, code, data, __OC_ADD(base_off, f_off), f_type, ((f)->left), false);
+    f = ((f)->next);
+    continue;
+    }
+    }
+    }
     ng_emit_expr_as(ng, code, data, ((f)->left), f_type);
     int32_t f_words = ng_value_words(ng, f_type);
     if ((f_words > 1)) {
