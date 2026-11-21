@@ -3,8 +3,9 @@
 // print_f64(x, digits) prints an f64 with up to 40 significant digits, in the format of C's
 // printf("%.<digits>g\n", x); f64_to_str gives the same text as a string. parse_f64 reads
 // decimal text back, correctly rounded. Both directions use exact integer arithmetic, so
-// the results are identical on both backends. This is a separate import because it takes
-// about 15 KB of native code, which programs that only print() floats should not carry.
+// the results are identical on both backends. This is a separate import because, with
+// std/str.oc which it uses, it adds about 35 KB of native code, which programs that only
+// print() floats should not carry.
 
 import "sys/float.oc";
 import "str.oc";

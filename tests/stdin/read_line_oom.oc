@@ -1,0 +1,8 @@
+// A line longer than the arena can hold panics instead of being cut off silently.
+import "std/io.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(512);
+    let r: ReadLine = read_line(&mut a);
+    print(r.line.len);
+}

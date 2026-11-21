@@ -1,21 +1,141 @@
+// Standard input.
+//
+// read_line and read_all build their result in an arena; read_i64 needs none. Input is
+// read one byte per system call by read_line and read_i64, so they never consume more than
+// the line they return (a later read sees the rest); read_all reads in large blocks.
+
+import "mem.oc";
+import "str.oc";
+
 extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
 
-fn read_int() -> i32 {
-    let mut buf: [32]u8 = [0]
-    let bytes: i64 = sys_read(0, (&mut buf).as(*mut u8), 31)
-    if bytes <= 0 {
-        return 0
+struct ReadLine {
+    ok: bool,     // false at end of input with nothing read
+    line: string, // without the line break; "\r\n" and "\n" both end a line
+}
+
+struct ReadAll {
+    ok: bool, // false if reading failed
+    data: string,
+}
+
+// Grows an arena buffer from cap to 2 * cap bytes, in place when it is the arena's most
+// recent allocation, otherwise by copying len bytes. Panics when the arena is full.
+fn io_grow(arena: *mut Arena, buf: *mut u8, len: usize, cap: usize) -> *mut u8 {
+    if buf.as(usize) + cap == arena.buffer.as(usize) + arena.offset {
+        str_alloc(arena, cap); // lands right after buf
+        return buf;
     }
-    let mut res: i32 = 0
-    let mut i: usize = 0
-    while i < bytes.as(usize) {
-        let c: u8 = buf[i]
-        if c >= 48 {
-            if c <= 57 {
-                res = (res * 10) + (c - 48).as(i32)
+    let bigger: *mut u8 = str_alloc(arena, cap * 2);
+    let mut i: usize = 0;
+    while i < len {
+        bigger[i] = buf[i];
+        i = i + 1;
+    }
+    return bigger;
+}
+
+// The next line of standard input. At end of input, a last line without a line break is
+// still returned (ok = true); after it, ok is false. A line may be as long as the arena
+// allows: one that does not fit panics with "arena out of memory".
+fn read_line(arena: *mut Arena) -> ReadLine {
+    let mut cap: usize = 128;
+    let mut buf: *mut u8 = str_alloc(arena, cap);
+    let mut len: usize = 0;
+    let mut got: bool = false;
+    let mut c: [1]u8 = [0];
+    let mut reading: bool = true;
+    while reading {
+        let n: i64 = sys_read(0, (&mut c).as(*mut u8), 1);
+        if n <= 0 {
+            reading = false;
+        } else {
+            got = true;
+            if c[0] == 10 {
+                reading = false;
+            } else {
+                if len == cap {
+                    buf = io_grow(arena, buf, len, cap);
+                    cap = cap * 2;
+                }
+                buf[len] = c[0];
+                len = len + 1;
             }
         }
-        i = i + 1
     }
-    return res
+    if !got { return ReadLine { ok: false, line: "" }; }
+    if len > 0 {
+        if buf[len - 1] == 13 { len = len - 1; } // "\r\n"
+    }
+    return ReadLine { ok: true, line: string { ptr: buf.as(*u8), len: len } };
+}
+
+// All remaining standard input.
+fn read_all(arena: *mut Arena) -> ReadAll {
+    let mut cap: usize = 4096;
+    let mut buf: *mut u8 = str_alloc(arena, cap);
+    let mut len: usize = 0;
+    let mut reading: bool = true;
+    while reading {
+        if len == cap {
+            buf = io_grow(arena, buf, len, cap);
+            cap = cap * 2;
+        }
+        let n: i64 = sys_read(0, (buf + len).as(*mut u8), cap - len);
+        if n < 0 { return ReadAll { ok: false, data: "" }; }
+        if n == 0 {
+            reading = false;
+        } else {
+            len = len + n.as(usize);
+        }
+    }
+    return ReadAll { ok: true, data: string { ptr: buf.as(*u8), len: len } };
+}
+
+// Reads one line and parses it as an i64, ignoring surrounding spaces. ok is false at end
+// of input, for a line that is not a number, and for one longer than 64 bytes (the rest of
+// that line is still consumed).
+fn read_i64() -> ParsedI64 {
+    let mut buf: [64]u8 = [0];
+    let mut len: usize = 0;
+    let mut got: bool = false;
+    let mut too_long: bool = false;
+    let mut c: [1]u8 = [0];
+    let mut reading: bool = true;
+    while reading {
+        let n: i64 = sys_read(0, (&mut c).as(*mut u8), 1);
+        if n <= 0 {
+            reading = false;
+        } else {
+            got = true;
+            if c[0] == 10 {
+                reading = false;
+            } else if len < 64 {
+                buf[len] = c[0];
+                len = len + 1;
+            } else {
+                too_long = true;
+            }
+        }
+    }
+    let mut ok: bool = got;
+    if too_long { ok = false; }
+    let mut value: i64 = 0;
+    if ok {
+        let all: string = string { ptr: (&buf).as(*u8), len: 64 };
+        let r: ParsedI64 = parse_i64(trim(all[0..len]));
+        ok = r.ok;
+        value = r.value;
+    }
+    return ParsedI64 { ok: ok, value: value };
+}
+
+// Deprecated: cannot tell a bad line from 0. Use read_i64.
+// The number on the next line, or 0 at end of input, for a non-number or outside i32.
+fn read_int() -> i32 {
+    let r: ParsedI64 = read_i64();
+    if !r.ok { return 0; }
+    if r.value < -2147483648 { return 0; }
+    if r.value > 2147483647 { return 0; }
+    return r.value.as(i32);
 }
