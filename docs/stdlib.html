@@ -43,6 +43,7 @@
         <a href="#std-os" class="sidebar-link">OC-OS(3) Targets &amp; Portability</a>
         <a href="#std-mem" class="sidebar-link">OC-MEM(3) Arena Alloc</a>
         <a href="#std-fs" class="sidebar-link">OC-FS(3) Hardened I/O</a>
+        <a href="#std-str" class="sidebar-link">OC-STR(3) Strings</a>
         <a href="#std-io" class="sidebar-link">OC-IO(3) Standard I/O</a>
         <a href="#std-net" class="sidebar-link">OC-NET(3) Sockets</a>
         <a href="#std-math" class="sidebar-link">OC-MATH(3) Checked Math</a>
@@ -80,6 +81,7 @@
         <pre><code>// Importing modules into oC source units
 import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_reset, arena_deinit
 import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_exec, unlink_file
+import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace
 import "std/io.oc"    // OC-IO(3):    print, read_int, sys_read
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
@@ -554,6 +556,49 @@ fn main() {
             <strong>Linear Resource Analysis (planned, not implemented):</strong> the compiler does not track file descriptor lifecycles yet. Closing a descriptor twice (CWE-415 / CWE-675) or returning without closing it (CWE-404 / CWE-775) is not diagnosed; close every descriptor you open.
           </div>
         </div>
+      </section>
+
+      <!-- SECTION: STD/STR -->
+      <section id="std-str">
+        <h2>OC-STR(3) &mdash; `std/str.oc` Strings</h2>
+        <p>
+          A <code>string</code> is a <code>{ptr, len}</code> view of bytes; nothing here relies on a NUL terminator. Three rules hold throughout: functions that only look at a string return slices of their input and never allocate; functions that build a new string take an <code>Arena</code>, so the validator rejects using the result after that arena is reset or deinitialized; and running out of arena space panics with <code>panic: arena out of memory</code> instead of returning a null view. Classification is ASCII only.
+        </p>
+
+        <div class="fn-box">
+          <h3>Comparison and views</h3>
+          <div class="fn-sig">fn str_eq(a: string, b: string) -&gt; bool<br>fn starts_with(s: string, prefix: string) -&gt; bool &nbsp; fn ends_with(s: string, suffix: string) -&gt; bool<br>fn find(s: string, needle: string) -&gt; i64 &nbsp; fn contains(s: string, needle: string) -&gt; bool<br>fn trim(s: string) -&gt; string &nbsp; fn trim_start(s: string) -&gt; string &nbsp; fn trim_end(s: string) -&gt; string<br>fn substr(s: string, start: usize, len: usize) -&gt; string<br>fn split_once(s: string, sep: string, out: *mut Split) -&gt; bool &nbsp; struct Split { head: string, tail: string }<br>fn cstr_to_string(cstr: *u8) -&gt; string</div>
+          <p>
+            <code>find</code> returns the index of the first occurrence, or -1; an empty needle is found at 0. <code>trim</code> removes ASCII whitespace (space, tab, newline, vertical tab, form feed, carriage return) from both ends. <code>substr</code> panics with <code>slice index out of bounds</code> when the range leaves the string. <code>split_once</code> fills <code>out</code> with the parts before and after the first separator and returns true, or returns false with <code>out.head</code> set to all of <code>s</code>. It uses an out parameter because the native backend returns at most 32 bytes, and <code>{ok, head, tail}</code> would be 40.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>ASCII classification</h3>
+          <div class="fn-sig">fn is_digit(c: u8) -&gt; bool &nbsp; fn is_alpha(c: u8) -&gt; bool &nbsp; fn is_space(c: u8) -&gt; bool &nbsp; fn is_upper(c: u8) -&gt; bool &nbsp; fn is_lower(c: u8) -&gt; bool<br>fn to_upper(c: u8) -&gt; u8 &nbsp; fn to_lower(c: u8) -&gt; u8</div>
+          <p>
+            Bytes of 128 and above are neither letters, digits nor spaces, and <code>to_upper</code> / <code>to_lower</code> leave them unchanged.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Building strings in an arena</h3>
+          <div class="fn-sig">fn str_concat(arena: *mut Arena, a: string, b: string) -&gt; string<br>fn str_repeat(arena: *mut Arena, s: string, n: usize) -&gt; string<br>fn str_join(arena: *mut Arena, parts: *string, count: usize, sep: string) -&gt; string<br>fn str_replace(arena: *mut Arena, s: string, from: string, to: string) -&gt; string<br>fn str_to_upper(arena: *mut Arena, s: string) -&gt; string &nbsp; fn str_to_lower(arena: *mut Arena, s: string) -&gt; string<br>fn str_alloc(arena: *mut Arena, n: usize) -&gt; *mut u8</div>
+          <p>
+            <code>str_join</code> takes a pointer to an array of strings: <code>str_join(&amp;mut a, (&amp;words).as(*string), 3, ", ")</code>. <code>str_replace</code> replaces every non-overlapping occurrence from left to right; an empty <code>from</code> matches nothing. An empty result is <code>""</code> and allocates nothing.
+          </p>
+        </div>
+
+        <pre><code>import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut kv: Split = Split { head: "", tail: "" };
+    if split_once("  name = Ada ", "=", &amp;mut kv) {
+        print(str_concat(&amp;mut a, "Hello, ", trim(kv.tail))); // Hello, Ada
+    }
+    arena_deinit(&amp;mut a);
+}</code></pre>
       </section>
 
       <!-- SECTION: STD/IO -->

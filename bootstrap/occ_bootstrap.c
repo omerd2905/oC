@@ -277,6 +277,7 @@ static const size_t NG_IMP_COUNT = 9;
 
 typedef struct Arena Arena;
 typedef struct Token Token;
+typedef struct Split Split;
 typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
 typedef struct SourceMap SourceMap;
@@ -299,6 +300,11 @@ struct Token {
     oc_string slice;
     uint32_t line;
     uint32_t col;
+};
+
+struct Split {
+    oc_string head;
+    oc_string tail;
 };
 
 struct Lexer {
@@ -460,10 +466,32 @@ uint8_t* arena_alloc(Arena* arena, size_t size);
 void arena_reset(Arena* arena);
 void arena_deinit(Arena* arena);
 bool is_keyword(uint32_t tag);
-Lexer lexer_init(oc_string source);
 bool str_eq(oc_string a, oc_string b);
-bool is_space(uint8_t c);
+bool starts_with(oc_string s, oc_string prefix);
+bool ends_with(oc_string s, oc_string suffix);
+int64_t find(oc_string s, oc_string needle);
+bool contains(oc_string s, oc_string needle);
+oc_string trim_start(oc_string s);
+oc_string trim_end(oc_string s);
+oc_string trim(oc_string s);
+bool split_once(oc_string s, oc_string sep, Split* out);
+oc_string substr(oc_string s, size_t start, size_t len);
+oc_string cstr_to_string(uint8_t* cstr);
 bool is_digit(uint8_t c);
+bool is_upper(uint8_t c);
+bool is_lower(uint8_t c);
+bool is_alpha(uint8_t c);
+bool is_space(uint8_t c);
+uint8_t to_upper(uint8_t c);
+uint8_t to_lower(uint8_t c);
+uint8_t* str_alloc(Arena* arena, size_t n);
+oc_string str_concat(Arena* arena, oc_string a, oc_string b);
+oc_string str_repeat(Arena* arena, oc_string s, size_t n);
+oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep);
+oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to);
+oc_string str_to_upper(Arena* arena, oc_string s);
+oc_string str_to_lower(Arena* arena, oc_string s);
+Lexer lexer_init(oc_string source);
 bool is_hex_digit(uint8_t c);
 bool is_ident_start(uint8_t c);
 bool is_ident_char(uint8_t c);
@@ -501,7 +529,6 @@ void print_err_borrow_escape(oc_string src, oc_string tgt);
 void print_err_cross_arena(oc_string arena, oc_string tgt);
 void print_err_ret_local(oc_string src);
 void print_err_ret_arena(oc_string arena);
-bool starts_with(oc_string s, oc_string prefix);
 bool is_scalar_value_type(oc_string t);
 int32_t validator_find_var(Validator* v, oc_string name);
 void validator_set_points_to_stack_local(Validator* v, oc_string name);
@@ -670,10 +697,8 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
 bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
 bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
-oc_string cstr_to_string(uint8_t* cstr);
 bool is_safe_path(oc_string s, bool allow_backslash);
 oc_string arena_dup_str(Arena* arena, oc_string s);
-oc_string str_concat(Arena* arena, oc_string a, oc_string b);
 bool is_path_sep(uint8_t c);
 bool is_abs_path(oc_string p);
 oc_string dir_of_path(Arena* arena, oc_string path);
@@ -829,10 +854,6 @@ bool is_keyword(uint32_t tag) {
     return false;
 }
 
-Lexer lexer_init(oc_string source) {
-    return (Lexer){ .source = source, .index = 0, .line = 1, .col = 1 };
-}
-
 bool str_eq(oc_string a, oc_string b) {
     if ((((a).len) != ((b).len))) {
     return false;
@@ -847,26 +868,294 @@ bool str_eq(oc_string a, oc_string b) {
     return true;
 }
 
+bool starts_with(oc_string s, oc_string prefix) {
+    if ((((s).len) < ((prefix).len))) {
+    return false;
+    }
+    return str_eq(__oc_slice_str(s, 0, ((prefix).len)), prefix);
+}
+
+bool ends_with(oc_string s, oc_string suffix) {
+    if ((((s).len) < ((suffix).len))) {
+    return false;
+    }
+    return str_eq(__oc_slice_str(s, __OC_SUB(((s).len), ((suffix).len)), ((s).len)), suffix);
+}
+
+int64_t find(oc_string s, oc_string needle) {
+    if ((((needle).len) > ((s).len))) {
+    return (-1);
+    }
+    size_t i = 0;
+    while ((__OC_ADD(i, ((needle).len)) <= ((s).len))) {
+    if (str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((needle).len))), needle)) {
+    return ({ __auto_type _v = (i); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; });
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (-1);
+}
+
+bool contains(oc_string s, oc_string needle) {
+    return (find(s, needle) >= 0);
+}
+
+oc_string trim_start(oc_string s) {
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    if ((!is_space(__oc_index_str(s, i)))) {
+    break;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return __oc_slice_str(s, i, ((s).len));
+}
+
+oc_string trim_end(oc_string s) {
+    size_t n = ((s).len);
+    while ((n > 0)) {
+    if ((!is_space(__oc_index_str(s, __OC_SUB(n, 1))))) {
+    break;
+    }
+    n = __OC_SUB(n, 1);
+    }
+    return __oc_slice_str(s, 0, n);
+}
+
+oc_string trim(oc_string s) {
+    return trim_end(trim_start(s));
+}
+
+bool split_once(oc_string s, oc_string sep, Split* out) {
+    int64_t at = find(s, sep);
+    if ((at < 0)) {
+    ((out)->head) = s;
+    ((out)->tail) = __oc_slice_str(s, ((s).len), ((s).len));
+    return false;
+    }
+    size_t i = ({ __auto_type _v = (at); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
+    ((out)->head) = __oc_slice_str(s, 0, i);
+    ((out)->tail) = __oc_slice_str(s, __OC_ADD(i, ((sep).len)), ((s).len));
+    return true;
+}
+
+oc_string substr(oc_string s, size_t start, size_t len) {
+    return __oc_slice_str(s, start, __OC_ADD(start, len));
+}
+
+oc_string cstr_to_string(uint8_t* cstr) {
+    size_t len = 0;
+    while ((__OC_AT((cstr), (len)) != 0)) {
+    len = __OC_ADD(len, 1);
+    }
+    return (oc_string){ .ptr = cstr, .len = len };
+}
+
+bool is_digit(uint8_t c) {
+    if ((c < 48)) {
+    return false;
+    }
+    return (c <= 57);
+}
+
+bool is_upper(uint8_t c) {
+    if ((c < 65)) {
+    return false;
+    }
+    return (c <= 90);
+}
+
+bool is_lower(uint8_t c) {
+    if ((c < 97)) {
+    return false;
+    }
+    return (c <= 122);
+}
+
+bool is_alpha(uint8_t c) {
+    if (is_upper(c)) {
+    return true;
+    }
+    return is_lower(c);
+}
+
 bool is_space(uint8_t c) {
     if ((c == 32)) {
     return true;
     }
-    if ((c == 9)) {
-    return true;
-    }
-    if ((c == 13)) {
-    return true;
-    }
+    if ((c < 9)) {
     return false;
+    }
+    return (c <= 13);
 }
 
-bool is_digit(uint8_t c) {
-    if ((c >= 48)) {
-    if ((c <= 57)) {
-    return true;
+uint8_t to_upper(uint8_t c) {
+    if (is_lower(c)) {
+    return __OC_SUB(c, 32);
+    }
+    return c;
+}
+
+uint8_t to_lower(uint8_t c) {
+    if (is_upper(c)) {
+    return __OC_ADD(c, 32);
+    }
+    return c;
+}
+
+uint8_t* str_alloc(Arena* arena, size_t n) {
+    uint8_t* p = arena_alloc(arena, n);
+    if ((((size_t)(p)) == 0)) {
+    sys_write(2, (((oc_string){ .ptr = (const uint8_t*)("panic: arena out of memory\n"), .len = sizeof("panic: arena out of memory\n") - 1 }).ptr), 27);
+    sys_exit(1);
+    }
+    return p;
+}
+
+oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
+    size_t total = __OC_ADD(((a).len), ((b).len));
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t i = 0;
+    while ((i < ((a).len))) {
+    __OC_AT((buf), (i)) = __oc_index_str(a, i);
+    i = __OC_ADD(i, 1);
+    }
+    size_t j = 0;
+    while ((j < ((b).len))) {
+    __OC_AT((buf), (__OC_ADD(((a).len), j))) = __oc_index_str(b, j);
+    j = __OC_ADD(j, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_repeat(Arena* arena, oc_string s, size_t n) {
+    size_t total = __OC_MUL(((s).len), n);
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    while ((pos < total)) {
+    __OC_AT((buf), (pos)) = __oc_index_str(s, __OC_MOD(pos, ((s).len)));
+    pos = __OC_ADD(pos, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep) {
+    if ((count == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    size_t total = __OC_MUL(((sep).len), __OC_SUB(count, 1));
+    size_t i = 0;
+    while ((i < count)) {
+    total = __OC_ADD(total, ((__OC_AT((parts), (i))).len));
+    i = __OC_ADD(i, 1);
+    }
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    i = 0;
+    while ((i < count)) {
+    if ((i > 0)) {
+    size_t k = 0;
+    while ((k < ((sep).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(sep, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
     }
     }
-    return false;
+    oc_string part = __OC_AT((parts), (i));
+    size_t k = 0;
+    while ((k < ((part).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(part, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to) {
+    size_t count = 0;
+    if ((((from).len) > 0)) {
+    size_t i = 0;
+    while ((__OC_ADD(i, ((from).len)) <= ((s).len))) {
+    if (str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((from).len))), from)) {
+    count = __OC_ADD(count, 1);
+    i = __OC_ADD(i, ((from).len));
+    }
+    else {
+    i = __OC_ADD(i, 1);
+    }
+    }
+    }
+    size_t total = __OC_ADD(__OC_SUB(((s).len), __OC_MUL(count, ((from).len))), __OC_MUL(count, ((to).len)));
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    bool hit = false;
+    if ((count > 0)) {
+    if ((__OC_ADD(i, ((from).len)) <= ((s).len))) {
+    hit = str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((from).len))), from);
+    }
+    }
+    if (hit) {
+    size_t k = 0;
+    while ((k < ((to).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(to, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
+    }
+    i = __OC_ADD(i, ((from).len));
+    }
+    else {
+    __OC_AT((buf), (pos)) = __oc_index_str(s, i);
+    pos = __OC_ADD(pos, 1);
+    i = __OC_ADD(i, 1);
+    }
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_to_upper(Arena* arena, oc_string s) {
+    if ((((s).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, ((s).len));
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((buf), (i)) = to_upper(__oc_index_str(s, i));
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+oc_string str_to_lower(Arena* arena, oc_string s) {
+    if ((((s).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, ((s).len));
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((buf), (i)) = to_lower(__oc_index_str(s, i));
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+Lexer lexer_init(oc_string source) {
+    return (Lexer){ .source = source, .index = 0, .line = 1, .col = 1 };
 }
 
 bool is_hex_digit(uint8_t c) {
@@ -2232,20 +2521,6 @@ void print_err_ret_arena(oc_string arena) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot return reference to locally allocated arena '"), .len = sizeof("error: cannot return reference to locally allocated arena '") - 1 });
     print_str_raw(arena);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
-}
-
-bool starts_with(oc_string s, oc_string prefix) {
-    if ((((s).len) < ((prefix).len))) {
-    return false;
-    }
-    size_t i = 0;
-    while ((i < ((prefix).len))) {
-    if ((__oc_index_str(s, i) != __oc_index_str(prefix, i))) {
-    return false;
-    }
-    i = __OC_ADD(i, 1);
-    }
-    return true;
 }
 
 bool is_scalar_value_type(oc_string t) {
@@ -10661,14 +10936,6 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     return ok;
 }
 
-oc_string cstr_to_string(uint8_t* cstr) {
-    size_t len = 0;
-    while ((__OC_AT((cstr), (len)) != 0)) {
-    len = __OC_ADD(len, 1);
-    }
-    return (oc_string){ .ptr = cstr, .len = len };
-}
-
 bool is_safe_path(oc_string s, bool allow_backslash) {
     if ((((s).len) == 0)) {
     return false;
@@ -10763,25 +11030,6 @@ oc_string arena_dup_str(Arena* arena, oc_string s) {
     i = __OC_ADD(i, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
-}
-
-oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
-    size_t total = __OC_ADD(((a).len), ((b).len));
-    if ((total == 0)) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    uint8_t* buf = arena_alloc(arena, total);
-    size_t i = 0;
-    while ((i < ((a).len))) {
-    __OC_AT((buf), (i)) = __oc_index_str(a, i);
-    i = __OC_ADD(i, 1);
-    }
-    size_t j = 0;
-    while ((j < ((b).len))) {
-    __OC_AT((buf), (__OC_ADD(((a).len), j))) = __oc_index_str(b, j);
-    j = __OC_ADD(j, 1);
-    }
-    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
 }
 
 bool is_path_sep(uint8_t c) {

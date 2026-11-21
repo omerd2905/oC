@@ -187,7 +187,7 @@ Timings depend on the machine and the compiler version: run `./benchmarks/run_be
 ## Repository Structure
 
 - `compiler/` - Compiler source code (lexer, parser, escape validator, C codegen, ELF/PE emitter, CLI driver).
-- `std/` - Standard library modules (`mem.oc`, `fs.oc`, `io.oc`, `net.oc`, `math.oc`, `os.oc`, `fmt.oc`).
+- `std/` - Standard library modules (`mem.oc`, `fs.oc`, `io.oc`, `net.oc`, `math.oc`, `os.oc`, `fmt.oc`, `str.oc`).
 - `examples/` - Example programs demonstrating arenas, slices, network sockets, and file I/O.
 - `tests/` - Probe test suite and exploit rejection cases.
 - `docs/` - HTML documentation and manual pages hosted on GitHub Pages.
