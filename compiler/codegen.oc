@@ -352,7 +352,10 @@ extern fn cg_var_type(out: *mut CodeBuffer, name: string) -> string;
 // arithmetic (IEEE 754: no overflow trap), so the checked integer macros must not see them.
 fn cg_float_type(expr: *mut AstNode, out: *mut CodeBuffer) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len > 0 { return expr.type_name; } // f32 when the validator bound it
+        return "f64";
+    }
     if expr.tag == NODE_CAST {
         if is_float_type(expr.type_name) { return expr.type_name; }
         return "";
@@ -476,6 +479,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
 
     if expr.tag == NODE_FLOAT {
         buf_append(out, expr.tok.slice);
+        if str_eq(expr.type_name, "f32") { buf_append(out, "f"); } // rounded straight to float
         return;
     }
 

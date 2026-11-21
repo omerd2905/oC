@@ -493,7 +493,10 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
     if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
-    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len > 0 { return expr.type_name; } // f32 when the validator bound it
+        return "f64";
+    }
     if expr.tag == NODE_IDENT {
         if ng_find_var_idx(ng, expr.tok.slice) >= 0 {
             return ng_find_var_type(ng, expr.tok.slice);
@@ -1253,7 +1256,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     if expr.tag == NODE_FLOAT {
         buf_append_u8(code, 72);
         buf_append_u8(code, 184); // movabs $bits, %rax
-        elf_append_u64(code, ng_literal_bits(ng, expr.tok.slice, false));
+        elf_append_u64(code, ng_literal_bits(ng, expr.tok.slice, str_eq(expr.type_name, "f32")));
         return;
     }
 
