@@ -277,6 +277,7 @@ static const size_t NG_IMP_COUNT = 9;
 
 typedef struct Arena Arena;
 typedef struct Split Split;
+typedef struct StrBuf StrBuf;
 typedef struct ParsedU64 ParsedU64;
 typedef struct ParsedI64 ParsedI64;
 typedef struct ReadLine ReadLine;
@@ -302,6 +303,13 @@ struct Arena {
 struct Split {
     oc_string head;
     oc_string tail;
+};
+
+struct StrBuf {
+    Arena* arena;
+    uint8_t* buf;
+    size_t len;
+    size_t cap;
 };
 
 struct ParsedU64 {
@@ -502,12 +510,17 @@ bool is_space(uint8_t c);
 uint8_t to_upper(uint8_t c);
 uint8_t to_lower(uint8_t c);
 uint8_t* str_alloc(Arena* arena, size_t n);
+uint8_t* str_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap);
 oc_string str_concat(Arena* arena, oc_string a, oc_string b);
 oc_string str_repeat(Arena* arena, oc_string s, size_t n);
 oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep);
 oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to);
 oc_string str_to_upper(Arena* arena, oc_string s);
 oc_string str_to_lower(Arena* arena, oc_string s);
+StrBuf strbuf_init(Arena* arena, size_t cap);
+void strbuf_push(StrBuf* b, uint8_t c);
+void strbuf_push_str(StrBuf* b, oc_string s);
+oc_string strbuf_to_string(StrBuf* b);
 uint64_t digit_value(uint8_t c);
 ParsedU64 parse_digits_u64(oc_string s, uint64_t radix);
 ParsedU64 parse_u64_radix(oc_string s, uint32_t radix);
@@ -525,7 +538,6 @@ void print_int_text(bool neg, uint64_t mag, uint64_t radix);
 void print_u64(uint64_t n);
 void print_i64(int64_t n);
 void print_hex(uint64_t n);
-uint8_t* io_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap);
 ReadLine read_line(Arena* arena);
 ReadAll read_all(Arena* arena);
 ParsedI64 read_i64(void);
@@ -979,6 +991,20 @@ uint8_t* str_alloc(Arena* arena, size_t n) {
     return p;
 }
 
+uint8_t* str_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap) {
+    if ((__OC_ADD(((size_t)(buf)), cap) == __OC_ADD(((size_t)(((arena)->buffer))), ((arena)->offset)))) {
+    str_alloc(arena, cap);
+    return buf;
+    }
+    uint8_t* bigger = str_alloc(arena, __OC_MUL(cap, 2));
+    size_t i = 0;
+    while ((i < len)) {
+    __OC_AT((bigger), (i)) = __OC_AT((buf), (i));
+    i = __OC_ADD(i, 1);
+    }
+    return bigger;
+}
+
 oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
     size_t total = __OC_ADD(((a).len), ((b).len));
     if ((total == 0)) {
@@ -1119,6 +1145,40 @@ oc_string str_to_lower(Arena* arena, oc_string s) {
     i = __OC_ADD(i, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+StrBuf strbuf_init(Arena* arena, size_t cap) {
+    size_t c = cap;
+    if ((c < 16)) {
+    c = 16;
+    }
+    return (StrBuf){ .arena = arena, .buf = str_alloc(arena, c), .len = 0, .cap = c };
+}
+
+void strbuf_push(StrBuf* b, uint8_t c) {
+    if ((((b)->len) == ((b)->cap))) {
+    ((b)->buf) = str_grow(((b)->arena), ((b)->buf), ((b)->len), ((b)->cap));
+    ((b)->cap) = __OC_MUL(((b)->cap), 2);
+    }
+    __OC_AT((((b)->buf)), (((b)->len))) = c;
+    ((b)->len) = __OC_ADD(((b)->len), 1);
+}
+
+void strbuf_push_str(StrBuf* b, oc_string s) {
+    while ((__OC_ADD(((b)->len), ((s).len)) > ((b)->cap))) {
+    ((b)->buf) = str_grow(((b)->arena), ((b)->buf), ((b)->len), ((b)->cap));
+    ((b)->cap) = __OC_MUL(((b)->cap), 2);
+    }
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((((b)->buf)), (__OC_ADD(((b)->len), i))) = __oc_index_str(s, i);
+    i = __OC_ADD(i, 1);
+    }
+    ((b)->len) = __OC_ADD(((b)->len), ((s).len));
+}
+
+oc_string strbuf_to_string(StrBuf* b) {
+    return (oc_string){ .ptr = ((uint8_t*)(((b)->buf))), .len = ((b)->len) };
 }
 
 uint64_t digit_value(uint8_t c) {
@@ -1304,20 +1364,6 @@ void print_hex(uint64_t n) {
     print_int_text(false, n, 16);
 }
 
-uint8_t* io_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap) {
-    if ((__OC_ADD(((size_t)(buf)), cap) == __OC_ADD(((size_t)(((arena)->buffer))), ((arena)->offset)))) {
-    str_alloc(arena, cap);
-    return buf;
-    }
-    uint8_t* bigger = str_alloc(arena, __OC_MUL(cap, 2));
-    size_t i = 0;
-    while ((i < len)) {
-    __OC_AT((bigger), (i)) = __OC_AT((buf), (i));
-    i = __OC_ADD(i, 1);
-    }
-    return bigger;
-}
-
 ReadLine read_line(Arena* arena) {
     size_t cap = 128;
     uint8_t* buf = str_alloc(arena, cap);
@@ -1337,7 +1383,7 @@ ReadLine read_line(Arena* arena) {
     }
     else {
     if ((len == cap)) {
-    buf = io_grow(arena, buf, len, cap);
+    buf = str_grow(arena, buf, len, cap);
     cap = __OC_MUL(cap, 2);
     }
     __OC_AT((buf), (len)) = __OC_AT((c), (0));
@@ -1363,7 +1409,7 @@ ReadAll read_all(Arena* arena) {
     bool reading = true;
     while (reading) {
     if ((len == cap)) {
-    buf = io_grow(arena, buf, len, cap);
+    buf = str_grow(arena, buf, len, cap);
     cap = __OC_MUL(cap, 2);
     }
     int64_t n = sys_read(0, ((uint8_t*)((buf + len))), __OC_SUB(cap, len));
