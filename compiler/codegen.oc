@@ -30,6 +30,7 @@ struct CodeBuffer {
     flt_types: [256]string,
     flt_count: usize,
     fp_trap: bool, // --fp-trap: panic when a float operation produces NaN or infinity
+    srcmap: *SourceMap, // source locations for --fp-trap panics (null: line:col only)
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
@@ -57,6 +58,7 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         flt_types: [""],
         flt_count: 0,
         fp_trap: false,
+        srcmap: (0).as(*SourceMap),
     };
 }
 
@@ -73,6 +75,53 @@ fn buf_append(buf: *mut CodeBuffer, text: string) {
         buf_append_u8(buf, text[i]);
         i = i + 1;
     }
+}
+
+fn buf_append_u32(buf: *mut CodeBuffer, v: u32) {
+    let mut digits: [10]u8 = [0];
+    let mut n: usize = 0;
+    let mut x: u32 = v;
+    while n < 10 {
+        digits[n] = (48 + (x % 10)).as(u8);
+        n = n + 1;
+        x = x / 10;
+        if x == 0 { break; }
+    }
+    while n > 0 {
+        n = n - 1;
+        buf_append_u8(buf, digits[n]);
+    }
+}
+
+// Appends "file:line:col" for a token (see SourceMap in ast.oc). With `c_escape` the file
+// name is escaped for a C string literal (Windows paths contain backslashes).
+fn buf_append_src_loc(buf: *mut CodeBuffer, m: *SourceMap, tok: Token, c_escape: bool) {
+    let f: i32 = srcmap_file(m, tok.line);
+    if f >= 0 {
+        let path: string = m.path[f.as(usize)];
+        let mut i: usize = 0;
+        while i < path.len {
+            if c_escape {
+                if path[i] == 92 { buf_append_u8(buf, 92); } // '\'
+                if path[i] == 34 { buf_append_u8(buf, 92); } // '"'
+            }
+            buf_append_u8(buf, path[i]);
+            i = i + 1;
+        }
+        buf_append_u8(buf, 58); // ':'
+        buf_append_u32(buf, tok.line - m.first_line[f.as(usize)] + 1);
+    } else {
+        buf_append_u32(buf, tok.line);
+    }
+    buf_append_u8(buf, 58);
+    buf_append_u32(buf, tok.col);
+}
+
+// `, "file:line:col")` closing an __OC_FCHK( check, so the panic names the operation.
+fn cg_fchk_close(out: *mut CodeBuffer, tok: Token) {
+    buf_append(out, ", \"");
+    buf_append_src_loc(out, out.srcmap, tok, true);
+    buf_append(out, "\")");
 }
 
 fn buf_to_string(buf: *mut CodeBuffer) -> string {
@@ -680,7 +729,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, "__builtin_sqrt((double)(");
             codegen_expr(expr.left, out);
             buf_append(out, "))");
-            if out.fp_trap { buf_append(out, ")"); }
+            if out.fp_trap { cg_fchk_close(out, expr.tok); }
             return;
         }
         let w_op: string = wrapping_op(expr.tok.slice);
@@ -717,7 +766,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
         if float_op {
             let mut checked: bool = out.fp_trap;
             if is_comparison_tok(expr.tok.tag) { checked = false; }
-            if checked { buf_append(out, "__OC_FCHK"); }
+            if checked { buf_append(out, "__OC_FCHK("); }
             buf_append(out, "(");
             codegen_expr(expr.left, out);
             buf_append(out, " ");
@@ -725,6 +774,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             buf_append(out, " ");
             codegen_expr(expr.right, out);
             buf_append(out, ")");
+            if checked { cg_fchk_close(out, expr.tok); }
             return;
         }
         if expr.tok.tag == TOK_SLASH {
@@ -1213,7 +1263,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "}\n\n");
 
     // --fp-trap: x - x is 0 for every finite x, and NaN for NaN and for either infinity.
-    buf_append(out, "#define __OC_FCHK(x) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite\\n\"); exit(1); } _r; })\n\n");
+    buf_append(out, "#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite at %s\\n\", loc); exit(1); } _r; })\n\n");
 
     // View of a fixed-size array as a slice. A raw pointer has no length, so slicing one is a
     // C compile error (void initializer) instead of an unbounded slice.
