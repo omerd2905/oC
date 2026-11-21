@@ -1226,7 +1226,10 @@ fn check_calls_resolved(program: *mut AstNode, m: *SourceMap, node: *mut AstNode
 // type checker; this is enough to tell floats from integers.
 fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len > 0 { return expr.type_name; } // bound by its context (f32)
+        return "f64";
+    }
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_STRING { return "string"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
@@ -1283,6 +1286,12 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         if is_cmp { return "bool"; }
         let lt: string = validator_expr_type(v, expr.left);
         let rt: string = validator_expr_type(v, expr.right);
+        if is_untyped_float(expr.left) {
+            if is_float_type_name(rt) { return rt; } // a literal takes its partner's type
+        }
+        if is_untyped_float(expr.right) {
+            if is_float_type_name(lt) { return lt; }
+        }
         if str_eq(lt, "f64") { return lt; }
         if str_eq(rt, "f64") { return rt; }
         if is_float_type_name(lt) { return lt; }
@@ -1291,6 +1300,63 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         return rt;
     }
     return "";
+}
+
+fn is_int_literal(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS { return is_int_literal(expr.left); }
+        return false;
+    }
+    return expr.tag == NODE_INT;
+}
+
+// A float literal, or arithmetic on literals such as 1.0 / 3.0, whose type the context has
+// not fixed yet. It takes the type of the float it is combined with or assigned to, so
+// `x * 0.5` with x: f32 is an f32 operation; alone it is an f64.
+fn is_untyped_float(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_FLOAT { return expr.type_name.len == 0; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS { return is_untyped_float(expr.left); }
+        return false;
+    }
+    if expr.tag != NODE_BINARY { return false; }
+    let mut arith: bool = expr.tok.tag == TOK_PLUS;
+    if expr.tok.tag == TOK_MINUS { arith = true; }
+    if expr.tok.tag == TOK_STAR { arith = true; }
+    if expr.tok.tag == TOK_SLASH { arith = true; }
+    if !arith { return false; }
+    if is_untyped_float(expr.left) {
+        if is_untyped_float(expr.right) { return true; }
+        return is_int_literal(expr.right);
+    }
+    if is_untyped_float(expr.right) { return is_int_literal(expr.left); }
+    return false;
+}
+
+// Records type `t` on the literals of an untyped float expression. Both backends read it:
+// an f32 literal is rounded once, straight from its decimal text, and computed in f32.
+fn bind_float_literals(expr: *mut AstNode, t: string) {
+    if expr == (0).as(*mut AstNode) { return; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len == 0 { expr.type_name = t; }
+        return;
+    }
+    if expr.tag == NODE_UNARY {
+        bind_float_literals(expr.left, t);
+        return;
+    }
+    if expr.tag == NODE_BINARY {
+        bind_float_literals(expr.left, t);
+        bind_float_literals(expr.right, t);
+    }
+}
+
+// Untyped float literals in `value` become f32 when they flow into an f32 place.
+fn bind_to_target(target: string, value: *mut AstNode) {
+    if !str_eq(target, "f32") { return; }
+    if is_untyped_float(value) { bind_float_literals(value, "f32"); }
 }
 
 fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
@@ -1425,6 +1491,7 @@ fn array_elem_type(t: string) -> string {
 // the elements of an array literal.
 fn validator_check_conversion(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
     if value == (0).as(*mut AstNode) { return true; }
+    bind_to_target(target, value);
     if value.tag == NODE_ARRAY_INIT {
         let elem: string = array_elem_type(target);
         if elem.len > 0 {
@@ -1710,6 +1777,13 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                 v.has_error = true;
                 return false;
             }
+            // A literal operand takes the type of a typed float operand (f32 * 0.5 is f32).
+            if is_untyped_float(expr.right) {
+                if !is_untyped_float(expr.left) { bind_to_target(validator_expr_type(v, expr.left), expr.right); }
+            }
+            if is_untyped_float(expr.left) {
+                if !is_untyped_float(expr.right) { bind_to_target(validator_expr_type(v, expr.right), expr.left); }
+            }
             // The integer side of a mixed operation is converted to the float type.
             let lt: string = validator_expr_type(v, expr.left);
             let rt: string = validator_expr_type(v, expr.right);
@@ -1729,7 +1803,10 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
     if expr.tag == NODE_UNARY { return check_expr_use(v, expr.left); }
     if expr.tag == NODE_DEREF { return check_expr_use(v, expr.left); }
-    if expr.tag == NODE_CAST { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_CAST {
+        bind_to_target(expr.type_name, expr.left); // (0.1).as(f32) is the f32 nearest to 0.1
+        return check_expr_use(v, expr.left);
+    }
     if expr.tag == NODE_ADDRESS_OF { return check_expr_use(v, expr.left); }
     if expr.tag == NODE_STRUCT_INIT {
         let mut f: *mut AstNode = expr.left;
@@ -2219,6 +2296,11 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
 
 fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
     if !check_calls_resolved(root, m, root.left) { return false; }
+    let mut top: *mut AstNode = root.left;
+    while top != (0).as(*mut AstNode) {
+        if top.tag == NODE_LET { bind_to_target(top.type_name, top.left); } // let K: f32 = 0.1;
+        top = top.next;
+    }
     let mut fx: FnEffects = FnEffects {
         names: [""],
         effects: [0],

@@ -527,6 +527,10 @@ AstNode* validator_find_fn(Validator* v, oc_string name);
 bool is_builtin_fn(oc_string name);
 bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
+bool is_int_literal(AstNode* expr);
+bool is_untyped_float(AstNode* expr);
+void bind_float_literals(AstNode* expr, oc_string t);
+void bind_to_target(oc_string target, AstNode* value);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
 bool int_converts_exactly(oc_string int_t, oc_string float_t);
@@ -2751,6 +2755,9 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_BOOL)) {
@@ -2849,6 +2856,16 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     }
     oc_string lt = validator_expr_type(v, ((expr)->left));
     oc_string rt = validator_expr_type(v, ((expr)->right));
+    if (is_untyped_float(((expr)->left))) {
+    if (is_float_type_name(rt)) {
+    return rt;
+    }
+    }
+    if (is_untyped_float(((expr)->right))) {
+    if (is_float_type_name(lt)) {
+    return lt;
+    }
+    }
     if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
     return lt;
     }
@@ -2867,6 +2884,89 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     return rt;
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool is_int_literal(AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    return is_int_literal(((expr)->left));
+    }
+    return false;
+    }
+    return (((expr)->tag) == NODE_INT);
+}
+
+bool is_untyped_float(AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    return (((((expr)->type_name)).len) == 0);
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    return is_untyped_float(((expr)->left));
+    }
+    return false;
+    }
+    if ((((expr)->tag) != NODE_BINARY)) {
+    return false;
+    }
+    bool arith = (((((expr)->tok)).tag) == TOK_PLUS);
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    arith = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_STAR)) {
+    arith = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_SLASH)) {
+    arith = true;
+    }
+    if ((!arith)) {
+    return false;
+    }
+    if (is_untyped_float(((expr)->left))) {
+    if (is_untyped_float(((expr)->right))) {
+    return true;
+    }
+    return is_int_literal(((expr)->right));
+    }
+    if (is_untyped_float(((expr)->right))) {
+    return is_int_literal(((expr)->left));
+    }
+    return false;
+}
+
+void bind_float_literals(AstNode* expr, oc_string t) {
+    if ((expr == ((AstNode*)(0)))) {
+    return;
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) == 0)) {
+    ((expr)->type_name) = t;
+    }
+    return;
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    bind_float_literals(((expr)->left), t);
+    return;
+    }
+    if ((((expr)->tag) == NODE_BINARY)) {
+    bind_float_literals(((expr)->left), t);
+    bind_float_literals(((expr)->right), t);
+    }
+}
+
+void bind_to_target(oc_string target, AstNode* value) {
+    if ((!str_eq(target, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 }))) {
+    return;
+    }
+    if (is_untyped_float(value)) {
+    bind_float_literals(value, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 });
+    }
 }
 
 bool validator_is_float(Validator* v, AstNode* expr) {
@@ -3055,6 +3155,7 @@ bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, 
     if ((value == ((AstNode*)(0)))) {
     return true;
     }
+    bind_to_target(target, value);
     if ((((value)->tag) == NODE_ARRAY_INIT)) {
     oc_string elem = array_elem_type(target);
     if ((((elem).len) > 0)) {
@@ -3436,6 +3537,16 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     ((v)->has_error) = true;
     return false;
     }
+    if (is_untyped_float(((expr)->right))) {
+    if ((!is_untyped_float(((expr)->left)))) {
+    bind_to_target(validator_expr_type(v, ((expr)->left)), ((expr)->right));
+    }
+    }
+    if (is_untyped_float(((expr)->left))) {
+    if ((!is_untyped_float(((expr)->right)))) {
+    bind_to_target(validator_expr_type(v, ((expr)->right)), ((expr)->left));
+    }
+    }
     oc_string lt = validator_expr_type(v, ((expr)->left));
     oc_string rt = validator_expr_type(v, ((expr)->right));
     if (is_float_type_name(lt)) {
@@ -3465,6 +3576,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return check_expr_use(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_CAST)) {
+    bind_to_target(((expr)->type_name), ((expr)->left));
     return check_expr_use(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
@@ -3976,6 +4088,13 @@ bool validate_program(AstNode* root, SourceMap* m) {
     if ((!check_calls_resolved(root, m, ((root)->left)))) {
     return false;
     }
+    AstNode* top = ((root)->left);
+    while ((top != ((AstNode*)(0)))) {
+    if ((((top)->tag) == NODE_LET)) {
+    bind_to_target(((top)->type_name), ((top)->left));
+    }
+    top = ((top)->next);
+    }
     FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .borrows = { false }, .count = 0 };
     AstNode* decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
@@ -4475,6 +4594,9 @@ oc_string cg_float_type(AstNode* expr, CodeBuffer* out) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_CAST)) {
@@ -4655,6 +4777,9 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
     buf_append(out, ((((expr)->tok)).slice));
+    if (str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("f"), .len = sizeof("f") - 1 });
+    }
     return;
     }
     if ((((expr)->tag) == NODE_STRING)) {
@@ -6428,6 +6553,9 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     return ((((expr)->tok)).slice);
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_IDENT)) {
@@ -7484,7 +7612,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     if ((((expr)->tag) == NODE_FLOAT)) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
-    elf_append_u64(code, ng_literal_bits(ng, ((((expr)->tok)).slice), false));
+    elf_append_u64(code, ng_literal_bits(ng, ((((expr)->tok)).slice), str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })));
     return;
     }
     if ((((expr)->tag) == NODE_BOOL)) {
