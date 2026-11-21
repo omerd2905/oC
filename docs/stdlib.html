@@ -81,7 +81,7 @@
         <pre><code>// Importing modules into oC source units
 import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_reset, arena_deinit
 import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_exec, unlink_file
-import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace
+import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace, StrBuf, parse_i64
 import "std/io.oc"    // OC-IO(3):    read_line, read_all, read_i64, read_int (deprecated), sys_read
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
@@ -586,6 +586,14 @@ fn main() {
           <div class="fn-sig">fn str_concat(arena: *mut Arena, a: string, b: string) -&gt; string<br>fn str_repeat(arena: *mut Arena, s: string, n: usize) -&gt; string<br>fn str_join(arena: *mut Arena, parts: *string, count: usize, sep: string) -&gt; string<br>fn str_replace(arena: *mut Arena, s: string, from: string, to: string) -&gt; string<br>fn str_to_upper(arena: *mut Arena, s: string) -&gt; string &nbsp; fn str_to_lower(arena: *mut Arena, s: string) -&gt; string<br>fn str_alloc(arena: *mut Arena, n: usize) -&gt; *mut u8</div>
           <p>
             <code>str_join</code> takes a pointer to an array of strings: <code>str_join(&amp;mut a, (&amp;words).as(*string), 3, ", ")</code>. <code>str_replace</code> replaces every non-overlapping occurrence from left to right; an empty <code>from</code> matches nothing. An empty result is <code>""</code> and allocates nothing.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>StrBuf: building a string piece by piece</h3>
+          <div class="fn-sig">struct StrBuf { arena: *mut Arena, buf: *mut u8, len: usize, cap: usize }<br>fn strbuf_init(arena: *mut Arena, cap: usize) -&gt; StrBuf<br>fn strbuf_push(b: *mut StrBuf, c: u8) &nbsp; fn strbuf_push_str(b: *mut StrBuf, s: string)<br>fn strbuf_to_string(b: *StrBuf) -&gt; string</div>
+          <p>
+            A growable buffer in an arena (at least 16 bytes to start). When full it doubles, in place if it is the arena's latest allocation, so pushing <em>n</em> bytes costs O(<em>n</em>) in total; a chain of <code>str_concat</code> calls copies the whole string every time. <code>strbuf_to_string</code> is a view of the bytes pushed so far, not a copy. The validator treats a <code>StrBuf</code> like any arena string: using it after <code>arena_reset</code> is a compile error.
           </p>
         </div>
 
