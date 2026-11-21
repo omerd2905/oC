@@ -136,6 +136,8 @@ To verify that the self-hosted compiler produces a bit-for-bit identical binary 
 ./showcase.sh
 ```
 
+The compiler is self-hosted through the C backend: `occ` translates its own source to C and the host C compiler builds it, so `bin/occ` links the C library. "Zero libc" applies to programs built with `--backend native`; the native backend cannot compile `occ` itself yet (see the native backend limits in [`docs/man-occ.html`](docs/man-occ.html#native-limits)).
+
 This runs:
 1. Stage 2 and Stage 3 self-compilation and asserts binary equality (`cmp Stage 2 == Stage 3`).
 2. Standalone static ELF generation and execution on `--backend native`.

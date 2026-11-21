@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>OCC(1) — Self-Hosted Zero-Libc oC Compiler Reference Manual</title>
+  <title>OCC(1) — Self-Hosted oC Compiler Reference Manual</title>
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -69,7 +69,7 @@
 
         <h2>NAME</h2>
         <p>
-          <strong>occ</strong> — self-hosted zero-libc oC compiler and native x86_64 ELF64 / PE32+ generator.
+          <strong>occ</strong> — self-hosted oC compiler (built through its C backend) that also generates zero-libc native x86_64 ELF64 / PE32+ executables.
         </p>
       </section>
 
@@ -83,7 +83,10 @@
       <section id="description">
         <h2>DESCRIPTION</h2>
         <p>
-          <strong>occ</strong> is the primary compiler driver for the <code>oC</code> systems programming language. Engineered from the ground up without libc or runtime dependencies, <code>occ</code> compiles entire programs using regional bump arenas, validates lifetime and borrow constraints at compile time via <code>EscapeValidator</code>, and generates either highly-optimized C11 code or standalone <code>x86_64</code> binaries: Linux ELF64 or Windows PE32+. The C backend builds on Linux, macOS, the BSDs and Windows (MSYS2 MinGW64), and cross-compiles with <code>--target</code>.
+          <strong>occ</strong> is the primary compiler driver for the <code>oC</code> systems programming language. <code>occ</code> compiles entire programs using regional bump arenas, validates lifetime and borrow constraints at compile time via <code>EscapeValidator</code>, and generates either highly-optimized C11 code or standalone <code>x86_64</code> binaries: Linux ELF64 or Windows PE32+. The C backend builds on Linux, macOS, the BSDs and Windows (MSYS2 MinGW64), and cross-compiles with <code>--target</code>.
+        </p>
+        <p>
+          "Zero libc" describes the programs that <code>--backend native</code> produces, not <code>occ</code> itself: <code>occ</code> is an oC program built through the C backend, so it links the host C library (<code>ldd bin/occ</code> lists <code>libc.so.6</code>), and the C backend needs a C compiler. The native backend cannot compile <code>occ</code> yet; see <a href="#native-limits">Native Backend Limits</a>.
         </p>
 
         <h3>Compiler Architecture Pipeline</h3>
@@ -372,11 +375,26 @@ hello.exe: PE32+ AMD64 OK, W^X sections .text/.rdata, imports KERNEL32!ExitProce
         </table>
       </section>
 
+      <section id="native-limits">
+        <h3>Native Backend Limits</h3>
+        <p>
+          <code>--backend native</code> is a single-pass code generator with fixed tables. A program that exceeds one of these limits gets a <code>native codegen error</code> naming it; it still builds with <code>--backend c</code>.
+        </p>
+        <ul>
+          <li><strong>Arguments:</strong> at most 6 register words per call and per function signature. A string counts as 2, a struct as 1 per 8 bytes, every other value as 1. A struct larger than 32 bytes cannot be passed by value; pass a pointer to it.</li>
+          <li><strong>Per program:</strong> 256 functions, 1024 call sites, 512 data relocations, 128 top-level constants, 256 KB of machine code and 64 KB of data.</li>
+          <li><strong>Targets:</strong> <code>x86_64</code> only (Linux ELF64 and Windows PE32+); no optimization passes.</li>
+        </ul>
+        <p>
+          The compiler itself exceeds the argument and function limits (<code>occ build compiler/main.oc --backend native</code> fails with <code>function takes more than 6 register words</code>), which is why <code>occ</code> is built through the C backend. Passing larger arguments on the stack would remove the first limit; the toolchain becomes libc-free only once both are lifted.
+        </p>
+      </section>
+
       <!-- Section 6: BOOTSTRAP & SELF-HOSTING -->
       <section id="bootstrap">
         <h2>BOOTSTRAP &amp; SELF-HOSTING</h2>
         <p>
-          <code>occ</code> is <strong>100% self-hosted</strong>. The entire compiler is written in <code>oC</code> itself and builds itself without any external language tools.
+          <code>occ</code> is <strong>self-hosted through the C backend</strong>. The entire compiler is written in <code>oC</code>; <code>occ</code> translates its own source to C and the host C compiler (<code>cc</code>, <code>gcc</code> or <code>clang</code>) builds that. The committed <code>bootstrap/occ_bootstrap.c</code> is this C, so a fresh checkout needs only a C compiler to build <code>bin/occ</code>. The resulting compiler links the host C library.
         </p>
 
         <h3>Stage 2 == Stage 3 Bit-for-Bit Verification</h3>
