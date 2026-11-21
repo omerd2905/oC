@@ -1,0 +1,6 @@
+// f64 -> f32 can lose information, so it needs .as(f32).
+fn main() {
+    let d: f64 = 16777217.0; // 2^24 + 1
+    let f: f32 = d;
+    print(f.as(f64) - 16777216.0);
+}

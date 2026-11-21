@@ -362,6 +362,7 @@ struct Validator {
     uint32_t scope_depth;
     bool has_error;
     oc_string initializing_var;
+    SourceMap* srcmap;
 };
 
 struct CodeBuffer {
@@ -526,6 +527,11 @@ bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
+bool int_converts_exactly(oc_string int_t, oc_string float_t);
+bool int_literal_converts_exactly(oc_string text, uint64_t bits);
+bool validator_check_lossless_to_float(Validator* v, oc_string target, AstNode* value, oc_string place);
+oc_string array_elem_type(oc_string t);
+bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, oc_string place);
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
@@ -533,7 +539,7 @@ void validator_save_invalidated(Validator* v, bool* out);
 void validator_restore_invalidated(Validator* v, bool* saved);
 bool block_always_returns(AstNode* block);
 bool validate_stmt(Validator* v, AstNode* stmt);
-bool validate_function(AstNode* f, FnEffects* fx, AstNode* program);
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m);
 bool validate_program(AstNode* root, SourceMap* m);
 AstNode* parse_program(Parser* p);
 CodeBuffer buf_init(size_t capacity);
@@ -2877,6 +2883,191 @@ bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* va
     return false;
 }
 
+bool int_converts_exactly(oc_string int_t, oc_string float_t) {
+    if (str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("i8"), .len = sizeof("i8") - 1 })) {
+    return true;
+    }
+    if (str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return true;
+    }
+    if (str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("i16"), .len = sizeof("i16") - 1 })) {
+    return true;
+    }
+    if (str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("u16"), .len = sizeof("u16") - 1 })) {
+    return true;
+    }
+    if (str_eq(float_t, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    return false;
+    }
+    if (str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
+    return true;
+    }
+    return str_eq(int_t, (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 });
+}
+
+bool int_literal_converts_exactly(oc_string text, uint64_t bits) {
+    uint64_t base = 10;
+    size_t i = 0;
+    if ((((text).len) > 2)) {
+    if ((__oc_index_str(text, 0) == 48)) {
+    if ((__oc_index_str(text, 1) == 120)) {
+    base = 16;
+    i = 2;
+    }
+    if ((__oc_index_str(text, 1) == 88)) {
+    base = 16;
+    i = 2;
+    }
+    if ((__oc_index_str(text, 1) == 98)) {
+    base = 2;
+    i = 2;
+    }
+    }
+    }
+    uint64_t val = 0;
+    while ((i < ((text).len))) {
+    uint8_t c = __oc_index_str(text, i);
+    uint64_t d = 99;
+    if ((c >= 48)) {
+    if ((c <= 57)) {
+    d = ({ __auto_type _v = (__OC_SUB(c, 48)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    if ((c >= 97)) {
+    if ((c <= 102)) {
+    d = ({ __auto_type _v = (__OC_SUB(c, 87)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    if ((c >= 65)) {
+    if ((c <= 70)) {
+    d = ({ __auto_type _v = (__OC_SUB(c, 55)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    if ((d < base)) {
+    if ((val > __OC_DIV(__OC_SUB(18446744073709551615ULL, d), base))) {
+    return false;
+    }
+    val = __OC_ADD(__OC_MUL(val, base), d);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    while ((val > 0)) {
+    if (((val & 1) == 1)) {
+    break;
+    }
+    val = (val >> 1);
+    }
+    return ((val >> bits) == 0);
+}
+
+bool validator_check_lossless_to_float(Validator* v, oc_string target, AstNode* value, oc_string place) {
+    if ((!is_float_type_name(target))) {
+    return true;
+    }
+    if ((value == ((AstNode*)(0)))) {
+    return true;
+    }
+    AstNode* lit = value;
+    if ((((lit)->tag) == NODE_UNARY)) {
+    if ((((((lit)->tok)).tag) == TOK_MINUS)) {
+    lit = ((lit)->left);
+    }
+    }
+    if ((((lit)->tag) == NODE_FLOAT)) {
+    return true;
+    }
+    if ((((lit)->tag) == NODE_INT)) {
+    uint64_t bits = 53;
+    if (str_eq(target, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    bits = 24;
+    }
+    if (int_literal_converts_exactly(((((lit)->tok)).slice), bits)) {
+    return true;
+    }
+    print_src_loc(((v)->srcmap), ((lit)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: integer literal "), .len = sizeof("error: integer literal ") - 1 });
+    print_str_raw(((((lit)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" in "), .len = sizeof(" in ") - 1 });
+    print_str_raw(place);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" is not exactly representable as "), .len = sizeof(" is not exactly representable as ") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("; write ("), .len = sizeof("; write (") - 1 });
+    print_str_raw(((((lit)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(").as("), .len = sizeof(").as(") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(") to accept the rounding\n"), .len = sizeof(") to accept the rounding\n") - 1 });
+    ((v)->has_error) = true;
+    return false;
+    }
+    oc_string from = validator_expr_type(v, value);
+    if (is_int_type_name(from)) {
+    if (int_converts_exactly(from, target)) {
+    return true;
+    }
+    }
+    else {
+    if (str_eq(from, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
+    if ((!str_eq(target, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 }))) {
+    return true;
+    }
+    }
+    else {
+    return true;
+    }
+    }
+    print_src_loc(((v)->srcmap), ((value)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: implicit conversion from "), .len = sizeof("error: implicit conversion from ") - 1 });
+    print_str_raw(from);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" to "), .len = sizeof(" to ") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" in "), .len = sizeof(" in ") - 1 });
+    print_str_raw(place);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" can lose precision; write .as("), .len = sizeof(" can lose precision; write .as(") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("), which rounds to the nearest "), .len = sizeof("), which rounds to the nearest ") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    ((v)->has_error) = true;
+    return false;
+}
+
+oc_string array_elem_type(oc_string t) {
+    if ((!starts_with(t, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    size_t i = 1;
+    while ((i < ((t).len))) {
+    if ((__oc_index_str(t, i) == 93)) {
+    return __oc_slice_str(t, __OC_ADD(i, 1), ((t).len));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, oc_string place) {
+    if ((value == ((AstNode*)(0)))) {
+    return true;
+    }
+    if ((((value)->tag) == NODE_ARRAY_INIT)) {
+    oc_string elem = array_elem_type(target);
+    if ((((elem).len) > 0)) {
+    AstNode* el = ((value)->left);
+    while ((el != ((AstNode*)(0)))) {
+    if ((!validator_check_conversion(v, elem, el, (oc_string){ .ptr = (const uint8_t*)("an array element"), .len = sizeof("an array element") - 1 }))) {
+    return false;
+    }
+    el = ((el)->next);
+    }
+    }
+    return true;
+    }
+    if ((!validator_check_no_float_to_int(v, target, value, place))) {
+    return false;
+    }
+    return validator_check_lossless_to_float(v, target, value, place);
+}
+
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr) {
     if ((expr == ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -3129,7 +3320,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if ((arg_v == ((AstNode*)(0)))) {
     break;
     }
-    if ((!validator_check_no_float_to_int(v, ((prm)->type_name), arg_v, (oc_string){ .ptr = (const uint8_t*)("a function argument"), .len = sizeof("a function argument") - 1 }))) {
+    if ((!validator_check_conversion(v, ((prm)->type_name), arg_v, (oc_string){ .ptr = (const uint8_t*)("a function argument"), .len = sizeof("a function argument") - 1 }))) {
     return false;
     }
     prm = ((prm)->next);
@@ -3239,6 +3430,22 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     ((v)->has_error) = true;
     return false;
     }
+    oc_string lt = validator_expr_type(v, ((expr)->left));
+    oc_string rt = validator_expr_type(v, ((expr)->right));
+    if (is_float_type_name(lt)) {
+    if ((!is_float_type_name(rt))) {
+    if ((!validator_check_lossless_to_float(v, lt, ((expr)->right), (oc_string){ .ptr = (const uint8_t*)("a float operation"), .len = sizeof("a float operation") - 1 }))) {
+    return false;
+    }
+    }
+    }
+    if (is_float_type_name(rt)) {
+    if ((!is_float_type_name(lt))) {
+    if ((!validator_check_lossless_to_float(v, rt, ((expr)->left), (oc_string){ .ptr = (const uint8_t*)("a float operation"), .len = sizeof("a float operation") - 1 }))) {
+    return false;
+    }
+    }
+    }
     }
     if ((!check_expr_use(v, ((expr)->left)))) {
     return false;
@@ -3261,6 +3468,10 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
     if ((!check_expr_use(v, ((f)->left)))) {
+    return false;
+    }
+    oc_string f_type = validator_field_type(v, ((((expr)->tok)).slice), ((((f)->tok)).slice));
+    if ((!validator_check_conversion(v, f_type, ((f)->left), (oc_string){ .ptr = (const uint8_t*)("a struct field"), .len = sizeof("a struct field") - 1 }))) {
     return false;
     }
     f = ((f)->next);
@@ -3346,7 +3557,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     }
-    if ((!validator_check_no_float_to_int(v, inferred_type, ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a variable initializer"), .len = sizeof("a variable initializer") - 1 }))) {
+    if ((!validator_check_conversion(v, inferred_type, ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a variable initializer"), .len = sizeof("a variable initializer") - 1 }))) {
     return false;
     }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
@@ -3433,7 +3644,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((!check_expr_use(v, ((stmt)->right)))) {
     return false;
     }
-    if ((!validator_check_no_float_to_int(v, validator_expr_type(v, ((stmt)->left)), ((stmt)->right), (oc_string){ .ptr = (const uint8_t*)("an assignment"), .len = sizeof("an assignment") - 1 }))) {
+    if ((!validator_check_conversion(v, validator_expr_type(v, ((stmt)->left)), ((stmt)->right), (oc_string){ .ptr = (const uint8_t*)("an assignment"), .len = sizeof("an assignment") - 1 }))) {
     return false;
     }
     bool is_direct_ident = false;
@@ -3614,7 +3825,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
-    if ((!validator_check_no_float_to_int(v, ((v)->ret_type), ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a return value"), .len = sizeof("a return value") - 1 }))) {
+    if ((!validator_check_conversion(v, ((v)->ret_type), ((stmt)->left), (oc_string){ .ptr = (const uint8_t*)("a return value"), .len = sizeof("a return value") - 1 }))) {
     return false;
     }
     oc_string src_name = contains_stack_ref(v, ((stmt)->left));
@@ -3705,11 +3916,11 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return check_expr_use(v, stmt);
 }
 
-bool validate_function(AstNode* f, FnEffects* fx, AstNode* program) {
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m) {
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -3798,7 +4009,7 @@ bool validate_program(AstNode* root, SourceMap* m) {
     decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
-    if ((!validate_function(decl, (&(fx)), root))) {
+    if ((!validate_function(decl, (&(fx)), root, m))) {
     return false;
     }
     }

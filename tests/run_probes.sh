@@ -31,6 +31,10 @@ COMPILE_REJECT=(
   "probe_undefined_fn.oc|probe_undefined_fn.oc:3:11: error: undefined function 'totally_undefined_fn'"
   "probe_misspelled_fn.oc|probe_misspelled_fn.oc:5:11: error: undefined function 'align_upp'"
   "probe_libc_no_extern.oc|probe_libc_no_extern.oc:4:18: error: undefined function 'getpid'"
+  "probe_lossy_i64_to_f64.oc|probe_lossy_i64_to_f64.oc:4:18: error: implicit conversion from i64 to f64 in a variable initializer can lose precision; write .as(f64)"
+  "probe_lossy_f64_to_f32.oc|probe_lossy_f64_to_f32.oc:4:18: error: implicit conversion from f64 to f32 in a variable initializer can lose precision; write .as(f32)"
+  "probe_lossy_int_literal.oc|probe_lossy_int_literal.oc:3:18: error: integer literal 9007199254740993 in a variable initializer is not exactly representable as f64"
+  "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
 )
 
 RUNTIME_TRAP=(
