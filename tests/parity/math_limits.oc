@@ -1,0 +1,27 @@
+// Integer limit constants of std/math.oc, and that arithmetic at the limits behaves:
+// one step past any of them would panic (see the overflow probes).
+import "std/math.oc";
+
+fn main() {
+    print(I8_MIN);                  // -128
+    print(I8_MAX);                  // 127
+    print(I16_MIN);                 // -32768
+    print(I16_MAX);                 // 32767
+    print(I32_MIN);                 // -2147483648
+    print(I32_MAX);                 // 2147483647
+    print(I64_MIN);                 // -9223372036854775808
+    print(I64_MAX);                 // 9223372036854775807
+    print(U8_MAX);                  // 255
+    print(U16_MAX);                 // 65535
+    print(U32_MAX);                 // 4294967295
+    print(U64_MAX);                 // 18446744073709551615
+    print(USIZE_MAX);               // 18446744073709551615
+    print(I64_MIN + I64_MAX);       // -1
+    print(I32_MIN < 0);             // true
+    let lowest: i64 = I64_MIN;
+    print(lowest / 2);              // -4611686018427387904
+    print(abs_i64(I64_MIN + 1));    // 9223372036854775807
+    print(U64_MAX / U32_MAX);       // 4294967297
+    print(-9223372036854775808);    // -9223372036854775808
+    print(sat_add_i32(I32_MAX, 1)); // 2147483647
+}
