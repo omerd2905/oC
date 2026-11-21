@@ -1,0 +1,512 @@
+// Strings: views, ASCII classification, and building strings in an arena.
+//
+// A string is a {ptr, len} view of bytes; nothing here assumes a NUL terminator.
+// - Views (trim, find, split_once, substr, ...) never allocate: they return slices of their
+//   input, which stay valid as long as the input does.
+// - Anything that builds a new string takes an arena, so the validator's lifetime rules
+//   apply: a result must not be used after that arena is reset or deinitialized.
+// - Running out of arena space panics ("panic: arena out of memory") instead of returning
+//   a null view.
+// Classification is ASCII only: bytes of 128 and above are not letters, digits or spaces.
+
+import "mem.oc";
+
+extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
+extern fn sys_exit(code: i32);
+
+// ---------------------------------------------------------------------------------------
+// Comparison and views
+// ---------------------------------------------------------------------------------------
+
+fn str_eq(a: string, b: string) -> bool {
+    if a.len != b.len { return false; }
+    let mut i: usize = 0;
+    while i < a.len {
+        if a[i] != b[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn starts_with(s: string, prefix: string) -> bool {
+    if s.len < prefix.len { return false; }
+    return str_eq(s[0..prefix.len], prefix);
+}
+
+fn ends_with(s: string, suffix: string) -> bool {
+    if s.len < suffix.len { return false; }
+    return str_eq(s[s.len - suffix.len..s.len], suffix);
+}
+
+// Index of the first occurrence of needle in s, or -1. An empty needle is found at 0.
+fn find(s: string, needle: string) -> i64 {
+    if needle.len > s.len { return -1; }
+    let mut i: usize = 0;
+    while i + needle.len <= s.len {
+        if str_eq(s[i..i + needle.len], needle) { return i.as(i64); }
+        i = i + 1;
+    }
+    return -1;
+}
+
+fn contains(s: string, needle: string) -> bool {
+    return find(s, needle) >= 0;
+}
+
+fn trim_start(s: string) -> string {
+    let mut i: usize = 0;
+    while i < s.len {
+        if !is_space(s[i]) { break; }
+        i = i + 1;
+    }
+    return s[i..s.len];
+}
+
+fn trim_end(s: string) -> string {
+    let mut n: usize = s.len;
+    while n > 0 {
+        if !is_space(s[n - 1]) { break; }
+        n = n - 1;
+    }
+    return s[0..n];
+}
+
+fn trim(s: string) -> string {
+    return trim_end(trim_start(s));
+}
+
+struct Split {
+    head: string,
+    tail: string,
+}
+
+// Splits s at the first `sep`: out.head is the part before it, out.tail the part after, and
+// the result is true. Without a separator the result is false, out.head is all of s and
+// out.tail is empty.
+//     let mut kv: Split = Split { head: "", tail: "" };
+//     if split_once("key=value", "=", &mut kv) { ... kv.head is "key", kv.tail "value" }
+// (An out parameter rather than a returned struct: the native backend returns at most
+// 32 bytes, and {ok, head, tail} would be 40.)
+fn split_once(s: string, sep: string, out: *mut Split) -> bool {
+    let at: i64 = find(s, sep);
+    if at < 0 {
+        out.head = s;
+        out.tail = s[s.len..s.len];
+        return false;
+    }
+    let i: usize = at.as(usize);
+    out.head = s[0..i];
+    out.tail = s[i + sep.len..s.len];
+    return true;
+}
+
+// The len bytes of s starting at start. Panics if that range is not inside s.
+fn substr(s: string, start: usize, len: usize) -> string {
+    return s[start..start + len];
+}
+
+// A view of a NUL-terminated C string (the terminator is not included).
+fn cstr_to_string(cstr: *u8) -> string {
+    let mut len: usize = 0;
+    while cstr[len] != 0 {
+        len = len + 1;
+    }
+    return string { ptr: cstr, len: len };
+}
+
+// ---------------------------------------------------------------------------------------
+// ASCII classification
+// ---------------------------------------------------------------------------------------
+
+fn is_digit(c: u8) -> bool {
+    if c < 48 { return false; }
+    return c <= 57;
+}
+
+fn is_upper(c: u8) -> bool {
+    if c < 65 { return false; }
+    return c <= 90;
+}
+
+fn is_lower(c: u8) -> bool {
+    if c < 97 { return false; }
+    return c <= 122;
+}
+
+fn is_alpha(c: u8) -> bool {
+    if is_upper(c) { return true; }
+    return is_lower(c);
+}
+
+// Space, tab, newline, vertical tab, form feed, carriage return (as C's isspace).
+fn is_space(c: u8) -> bool {
+    if c == 32 { return true; }
+    if c < 9 { return false; }
+    return c <= 13;
+}
+
+fn to_upper(c: u8) -> u8 {
+    if is_lower(c) { return c - 32; }
+    return c;
+}
+
+fn to_lower(c: u8) -> u8 {
+    if is_upper(c) { return c + 32; }
+    return c;
+}
+
+// ---------------------------------------------------------------------------------------
+// Building strings in an arena
+// ---------------------------------------------------------------------------------------
+
+// n bytes from the arena; panics when it is full.
+fn str_alloc(arena: *mut Arena, n: usize) -> *mut u8 {
+    let p: *mut u8 = arena_alloc(arena, n);
+    if p.as(usize) == 0 {
+        sys_write(2, "panic: arena out of memory\n".ptr, 27);
+        sys_exit(1);
+    }
+    return p;
+}
+
+// Grows an arena buffer from cap to 2 * cap bytes, in place when it is the arena's most
+// recent allocation, otherwise by copying len bytes. Panics when the arena is full.
+fn str_grow(arena: *mut Arena, buf: *mut u8, len: usize, cap: usize) -> *mut u8 {
+    if buf.as(usize) + cap == arena.buffer.as(usize) + arena.offset {
+        str_alloc(arena, cap); // lands right after buf
+        return buf;
+    }
+    let bigger: *mut u8 = str_alloc(arena, cap * 2);
+    let mut i: usize = 0;
+    while i < len {
+        bigger[i] = buf[i];
+        i = i + 1;
+    }
+    return bigger;
+}
+
+fn str_concat(arena: *mut Arena, a: string, b: string) -> string {
+    let total: usize = a.len + b.len;
+    if total == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, total);
+    let mut i: usize = 0;
+    while i < a.len {
+        buf[i] = a[i];
+        i = i + 1;
+    }
+    let mut j: usize = 0;
+    while j < b.len {
+        buf[a.len + j] = b[j];
+        j = j + 1;
+    }
+    return string { ptr: buf.as(*u8), len: total };
+}
+
+// s repeated n times.
+fn str_repeat(arena: *mut Arena, s: string, n: usize) -> string {
+    let total: usize = s.len * n;
+    if total == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, total);
+    let mut pos: usize = 0;
+    while pos < total {
+        buf[pos] = s[pos % s.len];
+        pos = pos + 1;
+    }
+    return string { ptr: buf.as(*u8), len: total };
+}
+
+// parts[0], sep, parts[1], sep, ... parts[count - 1]. `parts` points to an array of
+// strings: str_join(&mut a, (&words).as(*string), 3, ", ").
+fn str_join(arena: *mut Arena, parts: *string, count: usize, sep: string) -> string {
+    if count == 0 { return ""; }
+    let mut total: usize = sep.len * (count - 1);
+    let mut i: usize = 0;
+    while i < count {
+        total = total + parts[i].len;
+        i = i + 1;
+    }
+    if total == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, total);
+    let mut pos: usize = 0;
+    i = 0;
+    while i < count {
+        if i > 0 {
+            let mut k: usize = 0;
+            while k < sep.len {
+                buf[pos] = sep[k];
+                pos = pos + 1;
+                k = k + 1;
+            }
+        }
+        let part: string = parts[i];
+        let mut k: usize = 0;
+        while k < part.len {
+            buf[pos] = part[k];
+            pos = pos + 1;
+            k = k + 1;
+        }
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: total };
+}
+
+// s with every occurrence of `from` replaced by `to`, scanning left to right without
+// overlaps. An empty `from` matches nothing.
+fn str_replace(arena: *mut Arena, s: string, from: string, to: string) -> string {
+    let mut count: usize = 0;
+    if from.len > 0 {
+        let mut i: usize = 0;
+        while i + from.len <= s.len {
+            if str_eq(s[i..i + from.len], from) {
+                count = count + 1;
+                i = i + from.len;
+            } else {
+                i = i + 1;
+            }
+        }
+    }
+    let total: usize = (s.len - (count * from.len)) + (count * to.len);
+    if total == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, total);
+    let mut pos: usize = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        let mut hit: bool = false;
+        if count > 0 {
+            if i + from.len <= s.len {
+                hit = str_eq(s[i..i + from.len], from);
+            }
+        }
+        if hit {
+            let mut k: usize = 0;
+            while k < to.len {
+                buf[pos] = to[k];
+                pos = pos + 1;
+                k = k + 1;
+            }
+            i = i + from.len;
+        } else {
+            buf[pos] = s[i];
+            pos = pos + 1;
+            i = i + 1;
+        }
+    }
+    return string { ptr: buf.as(*u8), len: total };
+}
+
+fn str_to_upper(arena: *mut Arena, s: string) -> string {
+    if s.len == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, s.len);
+    let mut i: usize = 0;
+    while i < s.len {
+        buf[i] = to_upper(s[i]);
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: s.len };
+}
+
+fn str_to_lower(arena: *mut Arena, s: string) -> string {
+    if s.len == 0 { return ""; }
+    let buf: *mut u8 = str_alloc(arena, s.len);
+    let mut i: usize = 0;
+    while i < s.len {
+        buf[i] = to_lower(s[i]);
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: s.len };
+}
+
+// ---------------------------------------------------------------------------------------
+// StrBuf: a string built piece by piece in an arena
+//
+//     let mut sb: StrBuf = strbuf_init(&mut a, 64);
+//     strbuf_push_str(&mut sb, "x = ");
+//     strbuf_push(&mut sb, 55);
+//     print(strbuf_to_string(&sb)); // x = 7
+//
+// The buffer doubles when full (in place when it is the arena's latest allocation), so
+// pushing n bytes costs O(n) in total, unlike a chain of str_concat calls that copies the
+// whole string each time. Like any arena string, the result must not be used after the
+// arena is reset.
+// ---------------------------------------------------------------------------------------
+
+struct StrBuf {
+    arena: *mut Arena,
+    buf: *mut u8,
+    len: usize,
+    cap: usize,
+}
+
+fn strbuf_init(arena: *mut Arena, cap: usize) -> StrBuf {
+    let mut c: usize = cap;
+    if c < 16 { c = 16; }
+    return StrBuf { arena: arena, buf: str_alloc(arena, c), len: 0, cap: c };
+}
+
+fn strbuf_push(b: *mut StrBuf, c: u8) {
+    if b.len == b.cap {
+        b.buf = str_grow(b.arena, b.buf, b.len, b.cap);
+        b.cap = b.cap * 2;
+    }
+    b.buf[b.len] = c;
+    b.len = b.len + 1;
+}
+
+fn strbuf_push_str(b: *mut StrBuf, s: string) {
+    while b.len + s.len > b.cap {
+        b.buf = str_grow(b.arena, b.buf, b.len, b.cap);
+        b.cap = b.cap * 2;
+    }
+    let mut i: usize = 0;
+    while i < s.len {
+        b.buf[b.len + i] = s[i];
+        i = i + 1;
+    }
+    b.len = b.len + s.len;
+}
+
+// A view of what has been pushed so far (no copy).
+fn strbuf_to_string(b: *StrBuf) -> string {
+    return string { ptr: b.buf.as(*u8), len: b.len };
+}
+
+// ---------------------------------------------------------------------------------------
+// Parsing and formatting integers
+//
+// Parsers take the whole string: an optional sign ('+', or '-' for signed types) and at
+// least one digit, nothing else (no spaces, prefixes or separators; trim first). Empty
+// input, any other character and a value that does not fit all give ok = false.
+// ---------------------------------------------------------------------------------------
+
+struct ParsedU64 {
+    ok: bool,
+    value: u64,
+}
+
+struct ParsedI64 {
+    ok: bool,
+    value: i64,
+}
+
+// Value of an ASCII digit in bases up to 16 ('a'-'f' and 'A'-'F' are 10-15), or 99.
+fn digit_value(c: u8) -> u64 {
+    if is_digit(c) { return (c - 48).as(u64); }
+    if c >= 97 { if c <= 102 { return (c - 87).as(u64); } }
+    if c >= 65 { if c <= 70 { return (c - 55).as(u64); } }
+    return 99;
+}
+
+// Digits only (no sign), base 2 to 16.
+fn parse_digits_u64(s: string, radix: u64) -> ParsedU64 {
+    let fail: ParsedU64 = ParsedU64 { ok: false, value: 0 };
+    if s.len == 0 { return fail; }
+    if radix < 2 { return fail; }
+    if radix > 16 { return fail; }
+    let mut v: u64 = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        let d: u64 = digit_value(s[i]);
+        if d >= radix { return fail; }
+        if v > (18446744073709551615 - d) / radix { return fail; } // would not fit
+        v = (v * radix) + d;
+        i = i + 1;
+    }
+    return ParsedU64 { ok: true, value: v };
+}
+
+fn parse_u64_radix(s: string, radix: u32) -> ParsedU64 {
+    let mut digits: string = s;
+    if s.len > 0 {
+        if s[0] == 43 { digits = s[1..s.len]; } // '+'
+    }
+    return parse_digits_u64(digits, radix.as(u64));
+}
+
+fn parse_i64_radix(s: string, radix: u32) -> ParsedI64 {
+    let fail: ParsedI64 = ParsedI64 { ok: false, value: 0 };
+    let mut neg: bool = false;
+    let mut digits: string = s;
+    if s.len > 0 {
+        if s[0] == 45 { // '-'
+            neg = true;
+            digits = s[1..s.len];
+        } else if s[0] == 43 {
+            digits = s[1..s.len];
+        }
+    }
+    let mag: ParsedU64 = parse_digits_u64(digits, radix.as(u64));
+    if !mag.ok { return fail; }
+    if neg {
+        if mag.value > 9223372036854775808 { return fail; }
+        if mag.value == 9223372036854775808 { return ParsedI64 { ok: true, value: -9223372036854775808 }; }
+        return ParsedI64 { ok: true, value: -(mag.value.as(i64)) };
+    }
+    if mag.value > 9223372036854775807 { return fail; }
+    return ParsedI64 { ok: true, value: mag.value.as(i64) };
+}
+
+fn parse_u64(s: string) -> ParsedU64 { return parse_u64_radix(s, 10); }
+fn parse_i64(s: string) -> ParsedI64 { return parse_i64_radix(s, 10); }
+
+// Writes the digits of v in base `radix` (2 to 16, lowercase) ending just before buf[end];
+// returns the index of the first digit.
+fn fmt_digits_back(buf: *mut u8, end: usize, v: u64, radix: u64) -> usize {
+    let mut pos: usize = end;
+    let mut x: u64 = v;
+    while pos > 0 {
+        pos = pos - 1;
+        let d: u64 = x % radix;
+        if d < 10 { buf[pos] = (48 + d).as(u8); } else { buf[pos] = (87 + d).as(u8); }
+        x = x / radix;
+        if x == 0 { break; }
+    }
+    return pos;
+}
+
+// Text of n (base 10, or 16 for the hex variants: lowercase, no 0x prefix, no padding).
+fn int_text(arena: *mut Arena, neg: bool, mag: u64, radix: u64) -> string {
+    let mut tmp: [24]u8 = [0];
+    let start: usize = fmt_digits_back((&mut tmp).as(*mut u8), 24, mag, radix);
+    let mut len: usize = 24 - start;
+    if neg { len = len + 1; }
+    let buf: *mut u8 = str_alloc(arena, len);
+    let mut pos: usize = 0;
+    if neg {
+        buf[0] = 45;
+        pos = 1;
+    }
+    let mut i: usize = start;
+    while i < 24 {
+        buf[pos] = tmp[i];
+        pos = pos + 1;
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: len };
+}
+
+// Magnitude of n as u64, correct for the most negative i64 too.
+fn i64_magnitude(n: i64) -> u64 {
+    if n >= 0 { return n.as(u64); }
+    return (-(n + 1)).as(u64) + 1;
+}
+
+fn u64_to_str(arena: *mut Arena, n: u64) -> string { return int_text(arena, false, n, 10); }
+fn i64_to_str(arena: *mut Arena, n: i64) -> string { return int_text(arena, n < 0, i64_magnitude(n), 10); }
+fn u64_to_hex(arena: *mut Arena, n: u64) -> string { return int_text(arena, false, n, 16); }
+
+// Writing without a newline, to build a line piece by piece (print() always adds one).
+fn print_str(s: string) {
+    sys_write(1, s.ptr, s.len);
+}
+
+fn print_int_text(neg: bool, mag: u64, radix: u64) {
+    let mut tmp: [24]u8 = [0];
+    let start: usize = fmt_digits_back((&mut tmp).as(*mut u8), 24, mag, radix);
+    if neg { sys_write(1, "-".ptr, 1); }
+    let all: string = string { ptr: (&tmp).as(*u8), len: 24 };
+    print_str(all[start..24]);
+}
+
+fn print_u64(n: u64) { print_int_text(false, n, 10); }
+fn print_i64(n: i64) { print_int_text(n < 0, i64_magnitude(n), 10); }
+fn print_hex(n: u64) { print_int_text(false, n, 16); }

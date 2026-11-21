@@ -780,20 +780,6 @@ fn print_err_ret_arena(arena: string) {
     print_str_raw("'\n");
 }
 
-fn starts_with(s: string, prefix: string) -> bool {
-    if s.len < prefix.len {
-        return false;
-    }
-    let mut i: usize = 0;
-    while i < prefix.len {
-        if s[i] != prefix[i] {
-            return false;
-        }
-        i = i + 1;
-    }
-    return true;
-}
-
 fn is_scalar_value_type(t: string) -> bool {
     if str_eq(t, "i32") { return true; }
     if str_eq(t, "i64") { return true; }
@@ -1226,7 +1212,10 @@ fn check_calls_resolved(program: *mut AstNode, m: *SourceMap, node: *mut AstNode
 // type checker; this is enough to tell floats from integers.
 fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    if expr.tag == NODE_FLOAT { return "f64"; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len > 0 { return expr.type_name; } // bound by its context (f32)
+        return "f64";
+    }
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_STRING { return "string"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
@@ -1283,6 +1272,12 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         if is_cmp { return "bool"; }
         let lt: string = validator_expr_type(v, expr.left);
         let rt: string = validator_expr_type(v, expr.right);
+        if is_untyped_float(expr.left) {
+            if is_float_type_name(rt) { return rt; } // a literal takes its partner's type
+        }
+        if is_untyped_float(expr.right) {
+            if is_float_type_name(lt) { return lt; }
+        }
         if str_eq(lt, "f64") { return lt; }
         if str_eq(rt, "f64") { return rt; }
         if is_float_type_name(lt) { return lt; }
@@ -1291,6 +1286,74 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         return rt;
     }
     return "";
+}
+
+fn is_int_literal(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS { return is_int_literal(expr.left); }
+        return false;
+    }
+    return expr.tag == NODE_INT;
+}
+
+// A float literal, or arithmetic on literals such as 1.0 / 3.0, whose type the context has
+// not fixed yet. It takes the type of the float it is combined with or assigned to, so
+// `x * 0.5` with x: f32 is an f32 operation; alone it is an f64.
+fn is_untyped_float(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_FLOAT { return expr.type_name.len == 0; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS { return is_untyped_float(expr.left); }
+        return false;
+    }
+    if expr.tag != NODE_BINARY { return false; }
+    let mut arith: bool = expr.tok.tag == TOK_PLUS;
+    if expr.tok.tag == TOK_MINUS { arith = true; }
+    if expr.tok.tag == TOK_STAR { arith = true; }
+    if expr.tok.tag == TOK_SLASH { arith = true; }
+    if !arith { return false; }
+    if is_untyped_float(expr.left) {
+        if is_untyped_float(expr.right) { return true; }
+        return is_int_literal(expr.right);
+    }
+    if is_untyped_float(expr.right) { return is_int_literal(expr.left); }
+    return false;
+}
+
+// Records type `t` on the literals of an untyped float expression. Both backends read it:
+// an f32 literal is rounded once, straight from its decimal text, and computed in f32.
+fn bind_float_literals(expr: *mut AstNode, t: string) {
+    if expr == (0).as(*mut AstNode) { return; }
+    if expr.tag == NODE_FLOAT {
+        if expr.type_name.len == 0 { expr.type_name = t; }
+        return;
+    }
+    if expr.tag == NODE_UNARY {
+        bind_float_literals(expr.left, t);
+        return;
+    }
+    if expr.tag == NODE_BINARY {
+        bind_float_literals(expr.left, t);
+        bind_float_literals(expr.right, t);
+    }
+}
+
+// Untyped float literals in `value` become f32 when they flow into an f32 place.
+fn bind_to_target(target: string, value: *mut AstNode) {
+    if !str_eq(target, "f32") { return; }
+    if is_untyped_float(value) { bind_float_literals(value, "f32"); }
+}
+
+// buf[i] or s.field of a number or bool type: the value read cannot be a pointer, so it
+// does not inherit the stack or arena borrow of the buffer or struct it comes from.
+// (A cast such as p.as(usize) is not a load and keeps its borrow.)
+fn is_scalar_load(v: *mut Validator, expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    let mut load: bool = expr.tag == NODE_INDEX;
+    if expr.tag == NODE_FIELD_ACCESS { load = true; }
+    if !load { return false; }
+    return is_scalar_value_type(validator_expr_type(v, expr));
 }
 
 fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
@@ -1425,6 +1488,7 @@ fn array_elem_type(t: string) -> string {
 // the elements of an array literal.
 fn validator_check_conversion(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
     if value == (0).as(*mut AstNode) { return true; }
+    bind_to_target(target, value);
     if value.tag == NODE_ARRAY_INIT {
         let elem: string = array_elem_type(target);
         if elem.len > 0 {
@@ -1710,6 +1774,13 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                 v.has_error = true;
                 return false;
             }
+            // A literal operand takes the type of a typed float operand (f32 * 0.5 is f32).
+            if is_untyped_float(expr.right) {
+                if !is_untyped_float(expr.left) { bind_to_target(validator_expr_type(v, expr.left), expr.right); }
+            }
+            if is_untyped_float(expr.left) {
+                if !is_untyped_float(expr.right) { bind_to_target(validator_expr_type(v, expr.right), expr.left); }
+            }
             // The integer side of a mixed operation is converted to the float type.
             let lt: string = validator_expr_type(v, expr.left);
             let rt: string = validator_expr_type(v, expr.right);
@@ -1729,7 +1800,10 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
     if expr.tag == NODE_UNARY { return check_expr_use(v, expr.left); }
     if expr.tag == NODE_DEREF { return check_expr_use(v, expr.left); }
-    if expr.tag == NODE_CAST { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_CAST {
+        bind_to_target(expr.type_name, expr.left); // (0.1).as(f32) is the f32 nearest to 0.1
+        return check_expr_use(v, expr.left);
+    }
     if expr.tag == NODE_ADDRESS_OF { return check_expr_use(v, expr.left); }
     if expr.tag == NODE_STRUCT_INIT {
         let mut f: *mut AstNode = expr.left;
@@ -1843,7 +1917,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 }
             }
         } else {
-            let id: string = get_ident_name(stmt.left);
+            let mut id: string = get_ident_name(stmt.left);
+            if is_scalar_load(v, stmt.left) { id = ""; }
             if id.len > 0 {
                 let idx: i32 = validator_find_var(v, id);
                 if idx >= 0 {
@@ -1944,7 +2019,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
         let mut src_opt: string = get_underlying_address_of(stmt.right);
         if src_opt.len == 0 { src_opt = get_local_array_slice_source(v, stmt.right); }
         let tgt_opt: string = get_ident_name(stmt.left);
-        let val_ident: string = get_ident_name(stmt.right);
+        let mut val_ident: string = get_ident_name(stmt.right);
+        if is_scalar_load(v, stmt.right) { val_ident = ""; }
         let rhs_arena: string = get_expr_arena_borrow(v, stmt.right);
 
         if rhs_arena.len > 0 {
@@ -2025,6 +2101,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                             }
                         }
                         if ptr_escape {
+                            print_src_loc(v.srcmap, stmt.tok);
                             print("error: borrowed pointer escapes enclosing scope");
                             v.has_error = true;
                             return false;
@@ -2051,7 +2128,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                                 val_escape = true;
                             }
                             if val_escape {
-                                print("error: borrowed pointer escapes enclosing scope");
+                                print_src_loc(v.srcmap, stmt.tok);
+                            print("error: borrowed pointer escapes enclosing scope");
                                 v.has_error = true;
                                 return false;
                             }
@@ -2219,6 +2297,11 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
 
 fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
     if !check_calls_resolved(root, m, root.left) { return false; }
+    let mut top: *mut AstNode = root.left;
+    while top != (0).as(*mut AstNode) {
+        if top.tag == NODE_LET { bind_to_target(top.type_name, top.left); } // let K: f32 = 0.1;
+        top = top.next;
+    }
     let mut fx: FnEffects = FnEffects {
         names: [""],
         effects: [0],

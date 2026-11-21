@@ -381,12 +381,13 @@ hello.exe: PE32+ AMD64 OK, W^X sections .text/.rdata, imports KERNEL32!ExitProce
           <code>--backend native</code> is a single-pass code generator with fixed tables. A program that exceeds one of these limits gets a <code>native codegen error</code> naming it; it still builds with <code>--backend c</code>.
         </p>
         <ul>
-          <li><strong>Arguments:</strong> at most 6 register words per call and per function signature. A string counts as 2, a struct as 1 per 8 bytes, every other value as 1. A struct larger than 32 bytes cannot be passed by value; pass a pointer to it.</li>
+          <li><strong>Arguments:</strong> the first 6 argument words travel in registers and the rest on the stack, so any number of parameters works. A string counts as 2 words, a struct as 1 per 8 bytes, every other value as 1. <code>win32_*</code> imports and system calls take at most 6 words.</li>
+          <li><strong>Struct values:</strong> a struct larger than 32 bytes cannot be passed, returned or copied by value; use a pointer to it (it can still be a local variable initialized from a struct literal).</li>
           <li><strong>Per program:</strong> 256 functions, 1024 call sites, 4096 data relocations, 128 top-level constants, 256 KB of machine code and 64 KB of data.</li>
           <li><strong>Targets:</strong> <code>x86_64</code> only (Linux ELF64 and Windows PE32+); no optimization passes.</li>
         </ul>
         <p>
-          The compiler itself exceeds the argument and function limits (<code>occ build compiler/main.oc --backend native</code> fails with <code>function takes more than 6 register words</code>), which is why <code>occ</code> is built through the C backend. Passing larger arguments on the stack would remove the first limit; the toolchain becomes libc-free only once both are lifted.
+          The compiler itself returns structs larger than 32 bytes and has more than 256 functions (<code>occ build compiler/main.oc --backend native</code> fails with <code>cannot return a struct larger than 32 bytes</code>), which is why <code>occ</code> is built through the C backend. The toolchain becomes libc-free only once those limits are lifted.
         </p>
       </section>
 

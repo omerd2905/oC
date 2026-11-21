@@ -1,0 +1,9 @@
+// A string built in an arena must not be used after that arena is reset.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let greeting: string = str_concat(&mut a, "Hello, ", "Ada");
+    arena_reset(&mut a);
+    print(greeting);
+}

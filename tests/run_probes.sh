@@ -34,10 +34,15 @@ COMPILE_REJECT=(
   "probe_lossy_i64_to_f64.oc|probe_lossy_i64_to_f64.oc:4:18: error: implicit conversion from i64 to f64 in a variable initializer can lose precision; write .as(f64)"
   "probe_lossy_f64_to_f32.oc|probe_lossy_f64_to_f32.oc:4:18: error: implicit conversion from f64 to f32 in a variable initializer can lose precision; write .as(f32)"
   "probe_lossy_int_literal.oc|probe_lossy_int_literal.oc:3:18: error: integer literal 9007199254740993 in a variable initializer is not exactly representable as f64"
+  "probe_strbuf_after_reset.oc|use-after-free: variable 'sb' used after arena 'a' was reset"
+  "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
+  "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
 )
 
 RUNTIME_TRAP=(
+  "probe_str_substr_bounds.oc"
+  "probe_str_arena_oom.oc"
   "probe_overflow_i32.oc"
   "probe_overflow_u8.oc"
   "probe_overflow_mul_u64.oc"
@@ -160,16 +165,19 @@ for backend in c native; do
   fi
 done
 
-echo "=== Native backend tables: overflowing one is an error, not a wrong result ==="
+echo "=== Native backend limits: exceeding one is an error, not a wrong result ==="
 WORK="$(mktemp -d)"
+cp "$ROOT/tests/probes/probe_native_big_struct_return.oc" "$ROOT/tests/probes/probe_native_big_struct_copy.oc" "$WORK/"
 { echo 'fn main() {'; for i in $(seq 0 299); do echo "    let v$i: i64 = $i;"; done; echo '    print(v256);'; echo '}'; } > "$WORK/vars.oc"
 { for i in $(seq 0 139); do echo "let C$i: i64 = $i;"; done; echo 'fn main() { print(C139); }'; } > "$WORK/consts.oc"
-for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)"; do
+for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)" \
+             "probe_native_big_struct_return.oc|5|cannot return a struct larger than 32 bytes" \
+             "probe_native_big_struct_copy.oc|5|struct larger than 32 bytes cannot be copied by value"; do
   IFS='|' read -r f want_c want_err <<<"$entry"
   TOTAL=$((TOTAL + 1))
   got_c="$("$OCC" run "$WORK/$f" --backend c 2>&1)"
   if out="$("$OCC" build "$WORK/$f" -o "$WORK/bin" --backend native 2>&1)"; then
-    echo "  [FAIL] $f: the native backend compiled past its table limit"
+    echo "  [FAIL] $f: the native backend compiled past its limit"
     exit 1
   elif [ "$got_c" = "$want_c" ] && grep -qF -- "$want_err" <<<"$out"; then
     echo "  [PASS] $f: C backend prints $want_c; native backend reports: $want_err"
@@ -223,6 +231,37 @@ for t in "$ROOT"/tests/parity/*.oc; do
   fi
   rm -f /tmp/oc_parity_c /tmp/oc_parity_native /tmp/oc_parity_c.out /tmp/oc_parity_native.out
 done
+
+echo "=== Standard input: read_line, read_i64, read_int, read_all ==="
+WORK="$(mktemp -d)"
+{ printf '  Ada \r\n-42\n7x\n-2147483649\nabc\r\n\n'; head -c 100000 /dev/zero | tr '\0' x; printf '\ntail1\ntail2'; } > "$WORK/input"
+head -c 2000 /dev/zero | tr '\0' y > "$WORK/long"
+for backend in c native; do
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/read_input.oc" -o "$WORK/read_input" --backend "$backend" >/dev/null
+  if [ "$("$WORK/read_input" < "$WORK/input")" = "$(cat "$ROOT/tests/stdin/read_input.expected")" ]; then
+    echo "  [PASS] read_input.oc (--backend $backend): lines, \\r\\n, numbers, a 100000-byte line, EOF"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] read_input.oc (--backend $backend) printed:"
+    "$WORK/read_input" < "$WORK/input" | head -20
+    exit 1
+  fi
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/read_line_oom.oc" -o "$WORK/read_line_oom" --backend "$backend" >/dev/null
+  set +e
+  out="$("$WORK/read_line_oom" < "$WORK/long" 2>&1)"
+  RC=$?
+  set -e
+  if [ "$RC" -ne 0 ] && [ "$out" = "panic: arena out of memory" ]; then
+    echo "  [PASS] read_line_oom.oc (--backend $backend): a line too long for the arena panics"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] read_line_oom.oc (--backend $backend): exit $RC, printed '$out'"
+    exit 1
+  fi
+done
+rm -rf "$WORK"
 
 echo "=== [4/4] Cross-Target PE32+ Verification (--backend native --target windows-x86_64) ==="
 PE_OUT=/tmp/oc_pe_bin

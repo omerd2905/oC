@@ -1,0 +1,12 @@
+// The native backend returns structs in four registers (32 bytes). A larger one used to lose
+// its tail silently; now it is a compile error there. The C backend has no such limit.
+struct Big { a: i64, b: i64, c: i64, d: i64, e: i64, }
+
+fn make(n: i64) -> Big {
+    return Big { a: n, b: n, c: n, d: n, e: n + 1 };
+}
+
+fn main() {
+    let x: Big = make(4);
+    print(x.e);
+}

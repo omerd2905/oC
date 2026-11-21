@@ -1,0 +1,38 @@
+// A struct field of array type set from an array literal, in a local initializer, an
+// assignment and a return value. The native backend used to store nothing (reads gave 0).
+// Both backends must print struct_array_fields.expected exactly.
+struct Pixel { // 32 bytes: the native backend returns structs up to that size
+    id: i32,
+    rgb: [3]u8,
+    hist: [2]u32,
+}
+
+fn mk(n: i32) -> Pixel {
+    return Pixel { id: n, rgb: [7, 8, 9], hist: [10, 20] };
+}
+
+struct Tagged {
+    name: string,
+    bytes: [4]u8,
+}
+
+fn main() {
+    let t: Tagged = Tagged { name: "tag", bytes: [1, 2, 3, 4] };
+    print(t.name);         // tag
+    print(t.bytes[3]);     // 4
+    let p: Pixel = Pixel { id: 1, rgb: [255, 128, 3], hist: [4000000000, 5] };
+    print(p.rgb[0]);       // 255
+    print(p.rgb[2]);       // 3
+    print(p.hist[0]);      // 4000000000
+    print(p.hist[1]);      // 5
+    let mut q: Pixel = Pixel { id: 2, rgb: [1], hist: [0] };
+    print(q.rgb[0]);       // 1
+    print(q.rgb[1]);       // 0
+    q = Pixel { id: 3, rgb: [4, 5, 6], hist: [1, 2] };
+    print(q.rgb[2]);       // 6
+    print(q.hist[1]);      // 2
+    let r: Pixel = mk(9);
+    print(r.rgb[1]);       // 8
+    print(r.hist[0]);      // 10
+    print(r.id);           // 9
+}

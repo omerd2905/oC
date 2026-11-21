@@ -276,6 +276,12 @@ static const size_t NG_IMP_WRITE_FILE = 2;
 static const size_t NG_IMP_COUNT = 9;
 
 typedef struct Arena Arena;
+typedef struct Split Split;
+typedef struct StrBuf StrBuf;
+typedef struct ParsedU64 ParsedU64;
+typedef struct ParsedI64 ParsedI64;
+typedef struct ReadLine ReadLine;
+typedef struct ReadAll ReadAll;
 typedef struct Token Token;
 typedef struct Lexer Lexer;
 typedef struct AstNode AstNode;
@@ -292,6 +298,38 @@ struct Arena {
     size_t offset;
     size_t capacity;
     uint8_t* buffer;
+};
+
+struct Split {
+    oc_string head;
+    oc_string tail;
+};
+
+struct StrBuf {
+    Arena* arena;
+    uint8_t* buf;
+    size_t len;
+    size_t cap;
+};
+
+struct ParsedU64 {
+    bool ok;
+    uint64_t value;
+};
+
+struct ParsedI64 {
+    bool ok;
+    int64_t value;
+};
+
+struct ReadLine {
+    bool ok;
+    oc_string line;
+};
+
+struct ReadAll {
+    bool ok;
+    oc_string data;
 };
 
 struct Token {
@@ -449,21 +487,68 @@ struct ModuleLoader {
     uint32_t lines;
 };
 
+Arena arena_init(size_t capacity);
+uint8_t* arena_alloc(Arena* arena, size_t size);
+void arena_reset(Arena* arena);
+void arena_deinit(Arena* arena);
+bool str_eq(oc_string a, oc_string b);
+bool starts_with(oc_string s, oc_string prefix);
+bool ends_with(oc_string s, oc_string suffix);
+int64_t find(oc_string s, oc_string needle);
+bool contains(oc_string s, oc_string needle);
+oc_string trim_start(oc_string s);
+oc_string trim_end(oc_string s);
+oc_string trim(oc_string s);
+bool split_once(oc_string s, oc_string sep, Split* out);
+oc_string substr(oc_string s, size_t start, size_t len);
+oc_string cstr_to_string(uint8_t* cstr);
+bool is_digit(uint8_t c);
+bool is_upper(uint8_t c);
+bool is_lower(uint8_t c);
+bool is_alpha(uint8_t c);
+bool is_space(uint8_t c);
+uint8_t to_upper(uint8_t c);
+uint8_t to_lower(uint8_t c);
+uint8_t* str_alloc(Arena* arena, size_t n);
+uint8_t* str_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap);
+oc_string str_concat(Arena* arena, oc_string a, oc_string b);
+oc_string str_repeat(Arena* arena, oc_string s, size_t n);
+oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep);
+oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to);
+oc_string str_to_upper(Arena* arena, oc_string s);
+oc_string str_to_lower(Arena* arena, oc_string s);
+StrBuf strbuf_init(Arena* arena, size_t cap);
+void strbuf_push(StrBuf* b, uint8_t c);
+void strbuf_push_str(StrBuf* b, oc_string s);
+oc_string strbuf_to_string(StrBuf* b);
+uint64_t digit_value(uint8_t c);
+ParsedU64 parse_digits_u64(oc_string s, uint64_t radix);
+ParsedU64 parse_u64_radix(oc_string s, uint32_t radix);
+ParsedI64 parse_i64_radix(oc_string s, uint32_t radix);
+ParsedU64 parse_u64(oc_string s);
+ParsedI64 parse_i64(oc_string s);
+size_t fmt_digits_back(uint8_t* buf, size_t end, uint64_t v, uint64_t radix);
+oc_string int_text(Arena* arena, bool neg, uint64_t mag, uint64_t radix);
+uint64_t i64_magnitude(int64_t n);
+oc_string u64_to_str(Arena* arena, uint64_t n);
+oc_string i64_to_str(Arena* arena, int64_t n);
+oc_string u64_to_hex(Arena* arena, uint64_t n);
+void print_str(oc_string s);
+void print_int_text(bool neg, uint64_t mag, uint64_t radix);
+void print_u64(uint64_t n);
+void print_i64(int64_t n);
+void print_hex(uint64_t n);
+ReadLine read_line(Arena* arena);
+ReadAll read_all(Arena* arena);
+ParsedI64 read_i64(void);
 int32_t read_int(void);
 uint8_t* cstr_path(oc_string path, uint8_t* out_buf);
 int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len);
 bool write_file(oc_string path, oc_string content);
 bool chmod_exec(oc_string path);
 bool unlink_file(oc_string path);
-Arena arena_init(size_t capacity);
-uint8_t* arena_alloc(Arena* arena, size_t size);
-void arena_reset(Arena* arena);
-void arena_deinit(Arena* arena);
 bool is_keyword(uint32_t tag);
 Lexer lexer_init(oc_string source);
-bool str_eq(oc_string a, oc_string b);
-bool is_space(uint8_t c);
-bool is_digit(uint8_t c);
 bool is_hex_digit(uint8_t c);
 bool is_ident_start(uint8_t c);
 bool is_ident_char(uint8_t c);
@@ -501,7 +586,6 @@ void print_err_borrow_escape(oc_string src, oc_string tgt);
 void print_err_cross_arena(oc_string arena, oc_string tgt);
 void print_err_ret_local(oc_string src);
 void print_err_ret_arena(oc_string arena);
-bool starts_with(oc_string s, oc_string prefix);
 bool is_scalar_value_type(oc_string t);
 int32_t validator_find_var(Validator* v, oc_string name);
 void validator_set_points_to_stack_local(Validator* v, oc_string name);
@@ -527,6 +611,11 @@ AstNode* validator_find_fn(Validator* v, oc_string name);
 bool is_builtin_fn(oc_string name);
 bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
+bool is_int_literal(AstNode* expr);
+bool is_untyped_float(AstNode* expr);
+void bind_float_literals(AstNode* expr, oc_string t);
+void bind_to_target(oc_string target, AstNode* value);
+bool is_scalar_load(Validator* v, AstNode* expr);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
 bool int_converts_exactly(oc_string int_t, oc_string float_t);
@@ -550,10 +639,13 @@ void buf_append(CodeBuffer* buf, oc_string text);
 void buf_append_u32(CodeBuffer* buf, uint32_t v);
 void buf_append_src_loc(CodeBuffer* buf, SourceMap* m, Token tok, bool c_escape);
 void cg_fchk_close(CodeBuffer* out, Token tok);
+bool is_c_reserved(oc_string name);
+void buf_append_ident(CodeBuffer* buf, oc_string name);
 oc_string buf_to_string(CodeBuffer* buf);
 void buf_deinit(CodeBuffer* buf);
 oc_string to_c_type(oc_string type_name);
 void emit_c_type(oc_string type_name, CodeBuffer* out);
+void buf_append_c_type(CodeBuffer* out, oc_string t);
 bool is_type_ptr(oc_string t);
 bool is_type_str(oc_string t);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
@@ -591,7 +683,7 @@ void ng_add_data_reloc(NativeGen* ng, size_t code_off, size_t data_off);
 void ng_add_iat_fixup(NativeGen* ng, size_t code_off, size_t slot);
 void ng_emit_call(NativeGen* ng, CodeBuffer* code, oc_string fn_name);
 void ng_emit_iat_call(NativeGen* ng, CodeBuffer* code, size_t slot);
-uint64_t parse_u64(oc_string s);
+uint64_t parse_literal_u64(oc_string s);
 int32_t ng_find_var_idx(NativeGen* ng, oc_string name);
 int32_t ng_find_var_offset(NativeGen* ng, oc_string name);
 oc_string ng_find_var_type(NativeGen* ng, oc_string name);
@@ -644,6 +736,8 @@ void ng_emit_xmm1_const(CodeBuffer* code, uint64_t bits);
 void ng_emit_float_to_int(NativeGen* ng, CodeBuffer* code, oc_string src, oc_string dst);
 void ng_emit_fp_check(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, bool wide, Token tok);
 void ng_emit_stderr_write(NativeGen* ng, CodeBuffer* code, bool is_win);
+void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t disp, bool at_rsp);
+void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp);
 oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t);
@@ -653,6 +747,8 @@ void ng_emit_print_lit(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_str
 void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* stmt);
 int32_t calc_locals_bytes_stmt(NativeGen* ng, AstNode* stmt);
 void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off);
+void ng_emit_load_arg_reg(CodeBuffer* code, size_t reg_idx, uint32_t disp);
+void ng_emit_store_param(CodeBuffer* code, size_t reg_idx, size_t total, int32_t off);
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off);
 void ng_emit_write_fd(NativeGen* ng, CodeBuffer* code);
 void ng_emit_win_runtime(NativeGen* ng, CodeBuffer* code, bool* has_offset);
@@ -664,10 +760,8 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
 bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
 bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
-oc_string cstr_to_string(uint8_t* cstr);
 bool is_safe_path(oc_string s, bool allow_backslash);
 oc_string arena_dup_str(Arena* arena, oc_string s);
-oc_string str_concat(Arena* arena, oc_string a, oc_string b);
 bool is_path_sep(uint8_t c);
 bool is_abs_path(oc_string p);
 oc_string dir_of_path(Arena* arena, oc_string path);
@@ -691,76 +785,6 @@ size_t fmt_put_u64(uint8_t* buf, size_t n, uint64_t v);
 size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v);
 void fmt_print_f64(double x);
 size_t fmt_put_sci(uint8_t* buf, size_t n, double v);
-
-int32_t read_int(void) {
-    uint8_t buf[32] = {0};
-    int64_t bytes = sys_read(0, ((uint8_t*)((&(buf)))), 31);
-    if ((bytes <= 0)) {
-    return 0;
-    }
-    int32_t res = 0;
-    size_t i = 0;
-    while ((i < ({ __auto_type _v = (bytes); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))) {
-    uint8_t c = __OC_AT((buf), (i));
-    if ((c >= 48)) {
-    if ((c <= 57)) {
-    res = __OC_ADD(__OC_MUL(res, 10), ({ __auto_type _v = (__OC_SUB(c, 48)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
-    }
-    }
-    i = __OC_ADD(i, 1);
-    }
-    return res;
-}
-
-uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
-    size_t len = ((path).len);
-    if ((len > 4095)) {
-    len = 4095;
-    }
-    size_t i = 0;
-    while ((i < len)) {
-    __OC_AT((out_buf), (i)) = __oc_index_str(path, i);
-    i = __OC_ADD(i, 1);
-    }
-    __OC_AT((out_buf), (len)) = 0;
-    return ((uint8_t*)(out_buf));
-}
-
-int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
-    if ((fd < 0)) {
-    return (-1);
-    }
-    int64_t n = sys_read(fd, out_buf, max_len);
-    sys_close(fd);
-    return n;
-}
-
-bool write_file(oc_string path, oc_string content) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
-    if ((fd < 0)) {
-    return false;
-    }
-    int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
-    sys_close(fd);
-    return (n >= 0);
-}
-
-bool chmod_exec(oc_string path) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    return (sys_chmod(p, OC_MODE_EXEC) == 0);
-}
-
-bool unlink_file(oc_string path) {
-    uint8_t pbuf[4096] = {0};
-    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
-    return (sys_unlink(p) == 0);
-}
 
 Arena arena_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, OC_PROT_RW, OC_MAP_PRIVATE_ANON, (-1), 0);
@@ -814,19 +838,6 @@ void arena_deinit(Arena* arena) {
     ((arena)->offset) = 0;
 }
 
-bool is_keyword(uint32_t tag) {
-    if ((tag >= 10)) {
-    if ((tag <= 24)) {
-    return true;
-    }
-    }
-    return false;
-}
-
-Lexer lexer_init(oc_string source) {
-    return (Lexer){ .source = source, .index = 0, .line = 1, .col = 1 };
-}
-
 bool str_eq(oc_string a, oc_string b) {
     if ((((a).len) != ((b).len))) {
     return false;
@@ -841,26 +852,702 @@ bool str_eq(oc_string a, oc_string b) {
     return true;
 }
 
+bool starts_with(oc_string s, oc_string prefix) {
+    if ((((s).len) < ((prefix).len))) {
+    return false;
+    }
+    return str_eq(__oc_slice_str(s, 0, ((prefix).len)), prefix);
+}
+
+bool ends_with(oc_string s, oc_string suffix) {
+    if ((((s).len) < ((suffix).len))) {
+    return false;
+    }
+    return str_eq(__oc_slice_str(s, __OC_SUB(((s).len), ((suffix).len)), ((s).len)), suffix);
+}
+
+int64_t find(oc_string s, oc_string needle) {
+    if ((((needle).len) > ((s).len))) {
+    return (-1);
+    }
+    size_t i = 0;
+    while ((__OC_ADD(i, ((needle).len)) <= ((s).len))) {
+    if (str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((needle).len))), needle)) {
+    return ({ __auto_type _v = (i); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; });
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (-1);
+}
+
+bool contains(oc_string s, oc_string needle) {
+    return (find(s, needle) >= 0);
+}
+
+oc_string trim_start(oc_string s) {
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    if ((!is_space(__oc_index_str(s, i)))) {
+    break;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return __oc_slice_str(s, i, ((s).len));
+}
+
+oc_string trim_end(oc_string s) {
+    size_t n = ((s).len);
+    while ((n > 0)) {
+    if ((!is_space(__oc_index_str(s, __OC_SUB(n, 1))))) {
+    break;
+    }
+    n = __OC_SUB(n, 1);
+    }
+    return __oc_slice_str(s, 0, n);
+}
+
+oc_string trim(oc_string s) {
+    return trim_end(trim_start(s));
+}
+
+bool split_once(oc_string s, oc_string sep, Split* out) {
+    int64_t at = find(s, sep);
+    if ((at < 0)) {
+    ((out)->head) = s;
+    ((out)->tail) = __oc_slice_str(s, ((s).len), ((s).len));
+    return false;
+    }
+    size_t i = ({ __auto_type _v = (at); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
+    ((out)->head) = __oc_slice_str(s, 0, i);
+    ((out)->tail) = __oc_slice_str(s, __OC_ADD(i, ((sep).len)), ((s).len));
+    return true;
+}
+
+oc_string substr(oc_string s, size_t start, size_t len) {
+    return __oc_slice_str(s, start, __OC_ADD(start, len));
+}
+
+oc_string cstr_to_string(uint8_t* cstr) {
+    size_t len = 0;
+    while ((__OC_AT((cstr), (len)) != 0)) {
+    len = __OC_ADD(len, 1);
+    }
+    return (oc_string){ .ptr = cstr, .len = len };
+}
+
+bool is_digit(uint8_t c) {
+    if ((c < 48)) {
+    return false;
+    }
+    return (c <= 57);
+}
+
+bool is_upper(uint8_t c) {
+    if ((c < 65)) {
+    return false;
+    }
+    return (c <= 90);
+}
+
+bool is_lower(uint8_t c) {
+    if ((c < 97)) {
+    return false;
+    }
+    return (c <= 122);
+}
+
+bool is_alpha(uint8_t c) {
+    if (is_upper(c)) {
+    return true;
+    }
+    return is_lower(c);
+}
+
 bool is_space(uint8_t c) {
     if ((c == 32)) {
     return true;
     }
-    if ((c == 9)) {
+    if ((c < 9)) {
+    return false;
+    }
+    return (c <= 13);
+}
+
+uint8_t to_upper(uint8_t c) {
+    if (is_lower(c)) {
+    return __OC_SUB(c, 32);
+    }
+    return c;
+}
+
+uint8_t to_lower(uint8_t c) {
+    if (is_upper(c)) {
+    return __OC_ADD(c, 32);
+    }
+    return c;
+}
+
+uint8_t* str_alloc(Arena* arena, size_t n) {
+    uint8_t* p = arena_alloc(arena, n);
+    if ((((size_t)(p)) == 0)) {
+    sys_write(2, (((oc_string){ .ptr = (const uint8_t*)("panic: arena out of memory\n"), .len = sizeof("panic: arena out of memory\n") - 1 }).ptr), 27);
+    sys_exit(1);
+    }
+    return p;
+}
+
+uint8_t* str_grow(Arena* arena, uint8_t* buf, size_t len, size_t cap) {
+    if ((__OC_ADD(((size_t)(buf)), cap) == __OC_ADD(((size_t)(((arena)->buffer))), ((arena)->offset)))) {
+    str_alloc(arena, cap);
+    return buf;
+    }
+    uint8_t* bigger = str_alloc(arena, __OC_MUL(cap, 2));
+    size_t i = 0;
+    while ((i < len)) {
+    __OC_AT((bigger), (i)) = __OC_AT((buf), (i));
+    i = __OC_ADD(i, 1);
+    }
+    return bigger;
+}
+
+oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
+    size_t total = __OC_ADD(((a).len), ((b).len));
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t i = 0;
+    while ((i < ((a).len))) {
+    __OC_AT((buf), (i)) = __oc_index_str(a, i);
+    i = __OC_ADD(i, 1);
+    }
+    size_t j = 0;
+    while ((j < ((b).len))) {
+    __OC_AT((buf), (__OC_ADD(((a).len), j))) = __oc_index_str(b, j);
+    j = __OC_ADD(j, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_repeat(Arena* arena, oc_string s, size_t n) {
+    size_t total = __OC_MUL(((s).len), n);
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    while ((pos < total)) {
+    __OC_AT((buf), (pos)) = __oc_index_str(s, __OC_MOD(pos, ((s).len)));
+    pos = __OC_ADD(pos, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_join(Arena* arena, oc_string* parts, size_t count, oc_string sep) {
+    if ((count == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    size_t total = __OC_MUL(((sep).len), __OC_SUB(count, 1));
+    size_t i = 0;
+    while ((i < count)) {
+    total = __OC_ADD(total, ((__OC_AT((parts), (i))).len));
+    i = __OC_ADD(i, 1);
+    }
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    i = 0;
+    while ((i < count)) {
+    if ((i > 0)) {
+    size_t k = 0;
+    while ((k < ((sep).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(sep, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
+    }
+    }
+    oc_string part = __OC_AT((parts), (i));
+    size_t k = 0;
+    while ((k < ((part).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(part, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_replace(Arena* arena, oc_string s, oc_string from, oc_string to) {
+    size_t count = 0;
+    if ((((from).len) > 0)) {
+    size_t i = 0;
+    while ((__OC_ADD(i, ((from).len)) <= ((s).len))) {
+    if (str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((from).len))), from)) {
+    count = __OC_ADD(count, 1);
+    i = __OC_ADD(i, ((from).len));
+    }
+    else {
+    i = __OC_ADD(i, 1);
+    }
+    }
+    }
+    size_t total = __OC_ADD(__OC_SUB(((s).len), __OC_MUL(count, ((from).len))), __OC_MUL(count, ((to).len)));
+    if ((total == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, total);
+    size_t pos = 0;
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    bool hit = false;
+    if ((count > 0)) {
+    if ((__OC_ADD(i, ((from).len)) <= ((s).len))) {
+    hit = str_eq(__oc_slice_str(s, i, __OC_ADD(i, ((from).len))), from);
+    }
+    }
+    if (hit) {
+    size_t k = 0;
+    while ((k < ((to).len))) {
+    __OC_AT((buf), (pos)) = __oc_index_str(to, k);
+    pos = __OC_ADD(pos, 1);
+    k = __OC_ADD(k, 1);
+    }
+    i = __OC_ADD(i, ((from).len));
+    }
+    else {
+    __OC_AT((buf), (pos)) = __oc_index_str(s, i);
+    pos = __OC_ADD(pos, 1);
+    i = __OC_ADD(i, 1);
+    }
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
+}
+
+oc_string str_to_upper(Arena* arena, oc_string s) {
+    if ((((s).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, ((s).len));
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((buf), (i)) = to_upper(__oc_index_str(s, i));
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+oc_string str_to_lower(Arena* arena, oc_string s) {
+    if ((((s).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    uint8_t* buf = str_alloc(arena, ((s).len));
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((buf), (i)) = to_lower(__oc_index_str(s, i));
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
+}
+
+StrBuf strbuf_init(Arena* arena, size_t cap) {
+    size_t c = cap;
+    if ((c < 16)) {
+    c = 16;
+    }
+    return (StrBuf){ .arena = arena, .buf = str_alloc(arena, c), .len = 0, .cap = c };
+}
+
+void strbuf_push(StrBuf* b, uint8_t c) {
+    if ((((b)->len) == ((b)->cap))) {
+    ((b)->buf) = str_grow(((b)->arena), ((b)->buf), ((b)->len), ((b)->cap));
+    ((b)->cap) = __OC_MUL(((b)->cap), 2);
+    }
+    __OC_AT((((b)->buf)), (((b)->len))) = c;
+    ((b)->len) = __OC_ADD(((b)->len), 1);
+}
+
+void strbuf_push_str(StrBuf* b, oc_string s) {
+    while ((__OC_ADD(((b)->len), ((s).len)) > ((b)->cap))) {
+    ((b)->buf) = str_grow(((b)->arena), ((b)->buf), ((b)->len), ((b)->cap));
+    ((b)->cap) = __OC_MUL(((b)->cap), 2);
+    }
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    __OC_AT((((b)->buf)), (__OC_ADD(((b)->len), i))) = __oc_index_str(s, i);
+    i = __OC_ADD(i, 1);
+    }
+    ((b)->len) = __OC_ADD(((b)->len), ((s).len));
+}
+
+oc_string strbuf_to_string(StrBuf* b) {
+    return (oc_string){ .ptr = ((uint8_t*)(((b)->buf))), .len = ((b)->len) };
+}
+
+uint64_t digit_value(uint8_t c) {
+    if (is_digit(c)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 48)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    if ((c >= 97)) {
+    if ((c <= 102)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 87)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    if ((c >= 65)) {
+    if ((c <= 70)) {
+    return ({ __auto_type _v = (__OC_SUB(c, 55)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    }
+    return 99;
+}
+
+ParsedU64 parse_digits_u64(oc_string s, uint64_t radix) {
+    ParsedU64 fail = (ParsedU64){ .ok = false, .value = 0 };
+    if ((((s).len) == 0)) {
+    return fail;
+    }
+    if ((radix < 2)) {
+    return fail;
+    }
+    if ((radix > 16)) {
+    return fail;
+    }
+    uint64_t v = 0;
+    size_t i = 0;
+    while ((i < ((s).len))) {
+    uint64_t d = digit_value(__oc_index_str(s, i));
+    if ((d >= radix)) {
+    return fail;
+    }
+    if ((v > __OC_DIV(__OC_SUB(18446744073709551615ULL, d), radix))) {
+    return fail;
+    }
+    v = __OC_ADD(__OC_MUL(v, radix), d);
+    i = __OC_ADD(i, 1);
+    }
+    return (ParsedU64){ .ok = true, .value = v };
+}
+
+ParsedU64 parse_u64_radix(oc_string s, uint32_t radix) {
+    oc_string digits = s;
+    if ((((s).len) > 0)) {
+    if ((__oc_index_str(s, 0) == 43)) {
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    }
+    return parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+}
+
+ParsedI64 parse_i64_radix(oc_string s, uint32_t radix) {
+    ParsedI64 fail = (ParsedI64){ .ok = false, .value = 0 };
+    bool neg = false;
+    oc_string digits = s;
+    if ((((s).len) > 0)) {
+    if ((__oc_index_str(s, 0) == 45)) {
+    neg = true;
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    else {
+    if ((__oc_index_str(s, 0) == 43)) {
+    digits = __oc_slice_str(s, 1, ((s).len));
+    }
+    }
+    }
+    ParsedU64 mag = parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    if ((!((mag).ok))) {
+    return fail;
+    }
+    if (neg) {
+    if ((((mag).value) > 9223372036854775808ULL)) {
+    return fail;
+    }
+    if ((((mag).value) == 9223372036854775808ULL)) {
+    return (ParsedI64){ .ok = true, .value = (-9223372036854775807LL - 1) };
+    }
+    return (ParsedI64){ .ok = true, .value = __OC_SUB(0, ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; })) };
+    }
+    if ((((mag).value) > 9223372036854775807)) {
+    return fail;
+    }
+    return (ParsedI64){ .ok = true, .value = ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }) };
+}
+
+ParsedU64 parse_u64(oc_string s) {
+    return parse_u64_radix(s, 10);
+}
+
+ParsedI64 parse_i64(oc_string s) {
+    return parse_i64_radix(s, 10);
+}
+
+size_t fmt_digits_back(uint8_t* buf, size_t end, uint64_t v, uint64_t radix) {
+    size_t pos = end;
+    uint64_t x = v;
+    while ((pos > 0)) {
+    pos = __OC_SUB(pos, 1);
+    uint64_t d = __OC_MOD(x, radix);
+    if ((d < 10)) {
+    __OC_AT((buf), (pos)) = ({ __auto_type _v = (__OC_ADD(48, d)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    }
+    else {
+    __OC_AT((buf), (pos)) = ({ __auto_type _v = (__OC_ADD(87, d)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    }
+    x = __OC_DIV(x, radix);
+    if ((x == 0)) {
+    break;
+    }
+    }
+    return pos;
+}
+
+oc_string int_text(Arena* arena, bool neg, uint64_t mag, uint64_t radix) {
+    uint8_t tmp[24] = {0};
+    size_t start = fmt_digits_back(((uint8_t*)((&(tmp)))), 24, mag, radix);
+    size_t len = __OC_SUB(24, start);
+    if (neg) {
+    len = __OC_ADD(len, 1);
+    }
+    uint8_t* buf = str_alloc(arena, len);
+    size_t pos = 0;
+    if (neg) {
+    __OC_AT((buf), (0)) = 45;
+    pos = 1;
+    }
+    size_t i = start;
+    while ((i < 24)) {
+    __OC_AT((buf), (pos)) = __OC_AT((tmp), (i));
+    pos = __OC_ADD(pos, 1);
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len };
+}
+
+uint64_t i64_magnitude(int64_t n) {
+    if ((n >= 0)) {
+    return ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    }
+    return __OC_ADD(({ __auto_type _v = (__OC_SUB(0, __OC_ADD(n, 1))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1);
+}
+
+oc_string u64_to_str(Arena* arena, uint64_t n) {
+    return int_text(arena, false, n, 10);
+}
+
+oc_string i64_to_str(Arena* arena, int64_t n) {
+    return int_text(arena, (n < 0), i64_magnitude(n), 10);
+}
+
+oc_string u64_to_hex(Arena* arena, uint64_t n) {
+    return int_text(arena, false, n, 16);
+}
+
+void print_str(oc_string s) {
+    sys_write(1, ((s).ptr), ((s).len));
+}
+
+void print_int_text(bool neg, uint64_t mag, uint64_t radix) {
+    uint8_t tmp[24] = {0};
+    size_t start = fmt_digits_back(((uint8_t*)((&(tmp)))), 24, mag, radix);
+    if (neg) {
+    sys_write(1, (((oc_string){ .ptr = (const uint8_t*)("-"), .len = sizeof("-") - 1 }).ptr), 1);
+    }
+    oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(tmp)))), .len = 24 };
+    print_str(__oc_slice_str(all, start, 24));
+}
+
+void print_u64(uint64_t n) {
+    print_int_text(false, n, 10);
+}
+
+void print_i64(int64_t n) {
+    print_int_text((n < 0), i64_magnitude(n), 10);
+}
+
+void print_hex(uint64_t n) {
+    print_int_text(false, n, 16);
+}
+
+ReadLine read_line(Arena* arena) {
+    size_t cap = 128;
+    uint8_t* buf = str_alloc(arena, cap);
+    size_t len = 0;
+    bool got = false;
+    uint8_t c[1] = {0};
+    bool reading = true;
+    while (reading) {
+    int64_t n = sys_read(0, ((uint8_t*)((&(c)))), 1);
+    if ((n <= 0)) {
+    reading = false;
+    }
+    else {
+    got = true;
+    if ((__OC_AT((c), (0)) == 10)) {
+    reading = false;
+    }
+    else {
+    if ((len == cap)) {
+    buf = str_grow(arena, buf, len, cap);
+    cap = __OC_MUL(cap, 2);
+    }
+    __OC_AT((buf), (len)) = __OC_AT((c), (0));
+    len = __OC_ADD(len, 1);
+    }
+    }
+    }
+    if ((!got)) {
+    return (ReadLine){ .ok = false, .line = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    if ((len > 0)) {
+    if ((__OC_AT((buf), (__OC_SUB(len, 1))) == 13)) {
+    len = __OC_SUB(len, 1);
+    }
+    }
+    return (ReadLine){ .ok = true, .line = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+}
+
+ReadAll read_all(Arena* arena) {
+    size_t cap = 4096;
+    uint8_t* buf = str_alloc(arena, cap);
+    size_t len = 0;
+    bool reading = true;
+    while (reading) {
+    if ((len == cap)) {
+    buf = str_grow(arena, buf, len, cap);
+    cap = __OC_MUL(cap, 2);
+    }
+    int64_t n = sys_read(0, ((uint8_t*)((buf + len))), __OC_SUB(cap, len));
+    if ((n < 0)) {
+    return (ReadAll){ .ok = false, .data = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    if ((n == 0)) {
+    reading = false;
+    }
+    else {
+    len = __OC_ADD(len, ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    }
+    return (ReadAll){ .ok = true, .data = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+}
+
+ParsedI64 read_i64(void) {
+    uint8_t buf[64] = {0};
+    size_t len = 0;
+    bool got = false;
+    bool too_long = false;
+    uint8_t c[1] = {0};
+    bool reading = true;
+    while (reading) {
+    int64_t n = sys_read(0, ((uint8_t*)((&(c)))), 1);
+    if ((n <= 0)) {
+    reading = false;
+    }
+    else {
+    got = true;
+    if ((__OC_AT((c), (0)) == 10)) {
+    reading = false;
+    }
+    else {
+    if ((len < 64)) {
+    __OC_AT((buf), (len)) = __OC_AT((c), (0));
+    len = __OC_ADD(len, 1);
+    }
+    else {
+    too_long = true;
+    }
+    }
+    }
+    }
+    bool ok = got;
+    if (too_long) {
+    ok = false;
+    }
+    int64_t value = 0;
+    if (ok) {
+    oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(buf)))), .len = 64 };
+    ParsedI64 r = parse_i64(trim(__oc_slice_str(all, 0, len)));
+    ok = ((r).ok);
+    value = ((r).value);
+    }
+    return (ParsedI64){ .ok = ok, .value = value };
+}
+
+int32_t read_int(void) {
+    ParsedI64 r = read_i64();
+    if ((!((r).ok))) {
+    return 0;
+    }
+    if ((((r).value) < (-2147483648))) {
+    return 0;
+    }
+    if ((((r).value) > 2147483647)) {
+    return 0;
+    }
+    return ({ __auto_type _v = (((r).value)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+}
+
+uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
+    size_t len = ((path).len);
+    if ((len > 4095)) {
+    len = 4095;
+    }
+    size_t i = 0;
+    while ((i < len)) {
+    __OC_AT((out_buf), (i)) = __oc_index_str(path, i);
+    i = __OC_ADD(i, 1);
+    }
+    __OC_AT((out_buf), (len)) = 0;
+    return ((uint8_t*)(out_buf));
+}
+
+int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
+    if ((fd < 0)) {
+    return (-1);
+    }
+    int64_t n = sys_read(fd, out_buf, max_len);
+    sys_close(fd);
+    return n;
+}
+
+bool write_file(oc_string path, oc_string content) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
+    if ((fd < 0)) {
+    return false;
+    }
+    int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
+    sys_close(fd);
+    return (n >= 0);
+}
+
+bool chmod_exec(oc_string path) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    return (sys_chmod(p, OC_MODE_EXEC) == 0);
+}
+
+bool unlink_file(oc_string path) {
+    uint8_t pbuf[4096] = {0};
+    uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
+    return (sys_unlink(p) == 0);
+}
+
+bool is_keyword(uint32_t tag) {
+    if ((tag >= 10)) {
+    if ((tag <= 24)) {
     return true;
     }
-    if ((c == 13)) {
-    return true;
     }
     return false;
 }
 
-bool is_digit(uint8_t c) {
-    if ((c >= 48)) {
-    if ((c <= 57)) {
-    return true;
-    }
-    }
-    return false;
+Lexer lexer_init(oc_string source) {
+    return (Lexer){ .source = source, .index = 0, .line = 1, .col = 1 };
 }
 
 bool is_hex_digit(uint8_t c) {
@@ -2228,20 +2915,6 @@ void print_err_ret_arena(oc_string arena) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
 }
 
-bool starts_with(oc_string s, oc_string prefix) {
-    if ((((s).len) < ((prefix).len))) {
-    return false;
-    }
-    size_t i = 0;
-    while ((i < ((prefix).len))) {
-    if ((__oc_index_str(s, i) != __oc_index_str(prefix, i))) {
-    return false;
-    }
-    i = __OC_ADD(i, 1);
-    }
-    return true;
-}
-
 bool is_scalar_value_type(oc_string t) {
     if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("i32"), .len = sizeof("i32") - 1 })) {
     return true;
@@ -2751,6 +3424,9 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_BOOL)) {
@@ -2849,6 +3525,16 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     }
     oc_string lt = validator_expr_type(v, ((expr)->left));
     oc_string rt = validator_expr_type(v, ((expr)->right));
+    if (is_untyped_float(((expr)->left))) {
+    if (is_float_type_name(rt)) {
+    return rt;
+    }
+    }
+    if (is_untyped_float(((expr)->right))) {
+    if (is_float_type_name(lt)) {
+    return lt;
+    }
+    }
     if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 })) {
     return lt;
     }
@@ -2867,6 +3553,103 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     return rt;
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool is_int_literal(AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    return is_int_literal(((expr)->left));
+    }
+    return false;
+    }
+    return (((expr)->tag) == NODE_INT);
+}
+
+bool is_untyped_float(AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    return (((((expr)->type_name)).len) == 0);
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    return is_untyped_float(((expr)->left));
+    }
+    return false;
+    }
+    if ((((expr)->tag) != NODE_BINARY)) {
+    return false;
+    }
+    bool arith = (((((expr)->tok)).tag) == TOK_PLUS);
+    if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    arith = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_STAR)) {
+    arith = true;
+    }
+    if ((((((expr)->tok)).tag) == TOK_SLASH)) {
+    arith = true;
+    }
+    if ((!arith)) {
+    return false;
+    }
+    if (is_untyped_float(((expr)->left))) {
+    if (is_untyped_float(((expr)->right))) {
+    return true;
+    }
+    return is_int_literal(((expr)->right));
+    }
+    if (is_untyped_float(((expr)->right))) {
+    return is_int_literal(((expr)->left));
+    }
+    return false;
+}
+
+void bind_float_literals(AstNode* expr, oc_string t) {
+    if ((expr == ((AstNode*)(0)))) {
+    return;
+    }
+    if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) == 0)) {
+    ((expr)->type_name) = t;
+    }
+    return;
+    }
+    if ((((expr)->tag) == NODE_UNARY)) {
+    bind_float_literals(((expr)->left), t);
+    return;
+    }
+    if ((((expr)->tag) == NODE_BINARY)) {
+    bind_float_literals(((expr)->left), t);
+    bind_float_literals(((expr)->right), t);
+    }
+}
+
+void bind_to_target(oc_string target, AstNode* value) {
+    if ((!str_eq(target, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 }))) {
+    return;
+    }
+    if (is_untyped_float(value)) {
+    bind_float_literals(value, (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 });
+    }
+}
+
+bool is_scalar_load(Validator* v, AstNode* expr) {
+    if ((expr == ((AstNode*)(0)))) {
+    return false;
+    }
+    bool load = (((expr)->tag) == NODE_INDEX);
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    load = true;
+    }
+    if ((!load)) {
+    return false;
+    }
+    return is_scalar_value_type(validator_expr_type(v, expr));
 }
 
 bool validator_is_float(Validator* v, AstNode* expr) {
@@ -3055,6 +3838,7 @@ bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, 
     if ((value == ((AstNode*)(0)))) {
     return true;
     }
+    bind_to_target(target, value);
     if ((((value)->tag) == NODE_ARRAY_INIT)) {
     oc_string elem = array_elem_type(target);
     if ((((elem).len) > 0)) {
@@ -3436,6 +4220,16 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     ((v)->has_error) = true;
     return false;
     }
+    if (is_untyped_float(((expr)->right))) {
+    if ((!is_untyped_float(((expr)->left)))) {
+    bind_to_target(validator_expr_type(v, ((expr)->left)), ((expr)->right));
+    }
+    }
+    if (is_untyped_float(((expr)->left))) {
+    if ((!is_untyped_float(((expr)->right)))) {
+    bind_to_target(validator_expr_type(v, ((expr)->right)), ((expr)->left));
+    }
+    }
     oc_string lt = validator_expr_type(v, ((expr)->left));
     oc_string rt = validator_expr_type(v, ((expr)->right));
     if (is_float_type_name(lt)) {
@@ -3465,6 +4259,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return check_expr_use(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_CAST)) {
+    bind_to_target(((expr)->type_name), ((expr)->left));
     return check_expr_use(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_ADDRESS_OF)) {
@@ -3600,6 +4395,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     else {
     oc_string id = get_ident_name(((stmt)->left));
+    if (is_scalar_load(v, ((stmt)->left))) {
+    id = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     if ((((id).len) > 0)) {
     int32_t idx = validator_find_var(v, id);
     if ((idx >= 0)) {
@@ -3701,6 +4499,9 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     oc_string tgt_opt = get_ident_name(((stmt)->left));
     oc_string val_ident = get_ident_name(((stmt)->right));
+    if (is_scalar_load(v, ((stmt)->right))) {
+    val_ident = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     oc_string rhs_arena = get_expr_arena_borrow(v, ((stmt)->right));
     if ((((rhs_arena).len) > 0)) {
     if ((((tgt_opt).len) > 0)) {
@@ -3782,6 +4583,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (ptr_escape) {
+    print_src_loc(((v)->srcmap), ((stmt)->tok));
     printf("%s\n", "error: borrowed pointer escapes enclosing scope");
     ((v)->has_error) = true;
     return false;
@@ -3813,6 +4615,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (val_escape) {
+    print_src_loc(((v)->srcmap), ((stmt)->tok));
     printf("%s\n", "error: borrowed pointer escapes enclosing scope");
     ((v)->has_error) = true;
     return false;
@@ -3975,6 +4778,13 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
 bool validate_program(AstNode* root, SourceMap* m) {
     if ((!check_calls_resolved(root, m, ((root)->left)))) {
     return false;
+    }
+    AstNode* top = ((root)->left);
+    while ((top != ((AstNode*)(0)))) {
+    if ((((top)->tag) == NODE_LET)) {
+    bind_to_target(((top)->type_name), ((top)->left));
+    }
+    top = ((top)->next);
     }
     FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { 0 }, .borrows = { false }, .count = 0 };
     AstNode* decl = ((root)->left);
@@ -4172,6 +4982,81 @@ void cg_fchk_close(CodeBuffer* out, Token tok) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\")"), .len = sizeof("\")") - 1 });
 }
 
+bool is_c_reserved(oc_string name) {
+    oc_string words[56] = {0};
+    __OC_AT((words), (0)) = (oc_string){ .ptr = (const uint8_t*)("auto"), .len = sizeof("auto") - 1 };
+    __OC_AT((words), (1)) = (oc_string){ .ptr = (const uint8_t*)("break"), .len = sizeof("break") - 1 };
+    __OC_AT((words), (2)) = (oc_string){ .ptr = (const uint8_t*)("case"), .len = sizeof("case") - 1 };
+    __OC_AT((words), (3)) = (oc_string){ .ptr = (const uint8_t*)("char"), .len = sizeof("char") - 1 };
+    __OC_AT((words), (4)) = (oc_string){ .ptr = (const uint8_t*)("const"), .len = sizeof("const") - 1 };
+    __OC_AT((words), (5)) = (oc_string){ .ptr = (const uint8_t*)("continue"), .len = sizeof("continue") - 1 };
+    __OC_AT((words), (6)) = (oc_string){ .ptr = (const uint8_t*)("default"), .len = sizeof("default") - 1 };
+    __OC_AT((words), (7)) = (oc_string){ .ptr = (const uint8_t*)("do"), .len = sizeof("do") - 1 };
+    __OC_AT((words), (8)) = (oc_string){ .ptr = (const uint8_t*)("double"), .len = sizeof("double") - 1 };
+    __OC_AT((words), (9)) = (oc_string){ .ptr = (const uint8_t*)("else"), .len = sizeof("else") - 1 };
+    __OC_AT((words), (10)) = (oc_string){ .ptr = (const uint8_t*)("enum"), .len = sizeof("enum") - 1 };
+    __OC_AT((words), (11)) = (oc_string){ .ptr = (const uint8_t*)("extern"), .len = sizeof("extern") - 1 };
+    __OC_AT((words), (12)) = (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 };
+    __OC_AT((words), (13)) = (oc_string){ .ptr = (const uint8_t*)("for"), .len = sizeof("for") - 1 };
+    __OC_AT((words), (14)) = (oc_string){ .ptr = (const uint8_t*)("goto"), .len = sizeof("goto") - 1 };
+    __OC_AT((words), (15)) = (oc_string){ .ptr = (const uint8_t*)("if"), .len = sizeof("if") - 1 };
+    __OC_AT((words), (16)) = (oc_string){ .ptr = (const uint8_t*)("inline"), .len = sizeof("inline") - 1 };
+    __OC_AT((words), (17)) = (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    __OC_AT((words), (18)) = (oc_string){ .ptr = (const uint8_t*)("long"), .len = sizeof("long") - 1 };
+    __OC_AT((words), (19)) = (oc_string){ .ptr = (const uint8_t*)("register"), .len = sizeof("register") - 1 };
+    __OC_AT((words), (20)) = (oc_string){ .ptr = (const uint8_t*)("restrict"), .len = sizeof("restrict") - 1 };
+    __OC_AT((words), (21)) = (oc_string){ .ptr = (const uint8_t*)("return"), .len = sizeof("return") - 1 };
+    __OC_AT((words), (22)) = (oc_string){ .ptr = (const uint8_t*)("short"), .len = sizeof("short") - 1 };
+    __OC_AT((words), (23)) = (oc_string){ .ptr = (const uint8_t*)("signed"), .len = sizeof("signed") - 1 };
+    __OC_AT((words), (24)) = (oc_string){ .ptr = (const uint8_t*)("sizeof"), .len = sizeof("sizeof") - 1 };
+    __OC_AT((words), (25)) = (oc_string){ .ptr = (const uint8_t*)("static"), .len = sizeof("static") - 1 };
+    __OC_AT((words), (26)) = (oc_string){ .ptr = (const uint8_t*)("struct"), .len = sizeof("struct") - 1 };
+    __OC_AT((words), (27)) = (oc_string){ .ptr = (const uint8_t*)("switch"), .len = sizeof("switch") - 1 };
+    __OC_AT((words), (28)) = (oc_string){ .ptr = (const uint8_t*)("typedef"), .len = sizeof("typedef") - 1 };
+    __OC_AT((words), (29)) = (oc_string){ .ptr = (const uint8_t*)("union"), .len = sizeof("union") - 1 };
+    __OC_AT((words), (30)) = (oc_string){ .ptr = (const uint8_t*)("unsigned"), .len = sizeof("unsigned") - 1 };
+    __OC_AT((words), (31)) = (oc_string){ .ptr = (const uint8_t*)("void"), .len = sizeof("void") - 1 };
+    __OC_AT((words), (32)) = (oc_string){ .ptr = (const uint8_t*)("volatile"), .len = sizeof("volatile") - 1 };
+    __OC_AT((words), (33)) = (oc_string){ .ptr = (const uint8_t*)("while"), .len = sizeof("while") - 1 };
+    __OC_AT((words), (34)) = (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    __OC_AT((words), (35)) = (oc_string){ .ptr = (const uint8_t*)("alignas"), .len = sizeof("alignas") - 1 };
+    __OC_AT((words), (36)) = (oc_string){ .ptr = (const uint8_t*)("alignof"), .len = sizeof("alignof") - 1 };
+    __OC_AT((words), (37)) = (oc_string){ .ptr = (const uint8_t*)("constexpr"), .len = sizeof("constexpr") - 1 };
+    __OC_AT((words), (38)) = (oc_string){ .ptr = (const uint8_t*)("nullptr"), .len = sizeof("nullptr") - 1 };
+    __OC_AT((words), (39)) = (oc_string){ .ptr = (const uint8_t*)("static_assert"), .len = sizeof("static_assert") - 1 };
+    __OC_AT((words), (40)) = (oc_string){ .ptr = (const uint8_t*)("thread_local"), .len = sizeof("thread_local") - 1 };
+    __OC_AT((words), (41)) = (oc_string){ .ptr = (const uint8_t*)("typeof"), .len = sizeof("typeof") - 1 };
+    __OC_AT((words), (42)) = (oc_string){ .ptr = (const uint8_t*)("typeof_unqual"), .len = sizeof("typeof_unqual") - 1 };
+    __OC_AT((words), (43)) = (oc_string){ .ptr = (const uint8_t*)("asm"), .len = sizeof("asm") - 1 };
+    __OC_AT((words), (44)) = (oc_string){ .ptr = (const uint8_t*)("int8_t"), .len = sizeof("int8_t") - 1 };
+    __OC_AT((words), (45)) = (oc_string){ .ptr = (const uint8_t*)("int16_t"), .len = sizeof("int16_t") - 1 };
+    __OC_AT((words), (46)) = (oc_string){ .ptr = (const uint8_t*)("int32_t"), .len = sizeof("int32_t") - 1 };
+    __OC_AT((words), (47)) = (oc_string){ .ptr = (const uint8_t*)("int64_t"), .len = sizeof("int64_t") - 1 };
+    __OC_AT((words), (48)) = (oc_string){ .ptr = (const uint8_t*)("uint8_t"), .len = sizeof("uint8_t") - 1 };
+    __OC_AT((words), (49)) = (oc_string){ .ptr = (const uint8_t*)("uint16_t"), .len = sizeof("uint16_t") - 1 };
+    __OC_AT((words), (50)) = (oc_string){ .ptr = (const uint8_t*)("uint32_t"), .len = sizeof("uint32_t") - 1 };
+    __OC_AT((words), (51)) = (oc_string){ .ptr = (const uint8_t*)("uint64_t"), .len = sizeof("uint64_t") - 1 };
+    __OC_AT((words), (52)) = (oc_string){ .ptr = (const uint8_t*)("size_t"), .len = sizeof("size_t") - 1 };
+    __OC_AT((words), (53)) = (oc_string){ .ptr = (const uint8_t*)("oc_string"), .len = sizeof("oc_string") - 1 };
+    __OC_AT((words), (54)) = (oc_string){ .ptr = (const uint8_t*)("NULL"), .len = sizeof("NULL") - 1 };
+    __OC_AT((words), (55)) = (oc_string){ .ptr = (const uint8_t*)("errno"), .len = sizeof("errno") - 1 };
+    size_t i = 0;
+    while ((i < 56)) {
+    if (str_eq(__OC_AT((words), (i)), name)) {
+    return true;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+}
+
+void buf_append_ident(CodeBuffer* buf, oc_string name) {
+    buf_append(buf, name);
+    if (is_c_reserved(name)) {
+    buf_append(buf, (oc_string){ .ptr = (const uint8_t*)("__oc"), .len = sizeof("__oc") - 1 });
+    }
+}
+
 oc_string buf_to_string(CodeBuffer* buf) {
     return (oc_string){ .ptr = ((uint8_t*)(((buf)->buffer))), .len = ((buf)->len) };
 }
@@ -4288,11 +5173,28 @@ void emit_c_type(oc_string type_name, CodeBuffer* out) {
     }
     }
     oc_string base = __oc_slice_str(type_name, base_start, ((type_name).len));
-    buf_append(out, to_c_type(base));
+    buf_append_c_type(out, base);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
     return;
     }
-    buf_append(out, to_c_type(type_name));
+    buf_append_c_type(out, type_name);
+}
+
+void buf_append_c_type(CodeBuffer* out, oc_string t) {
+    oc_string c = to_c_type(t);
+    bool user_type = str_eq(c, t);
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    user_type = false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("void"), .len = sizeof("void") - 1 })) {
+    user_type = false;
+    }
+    if (user_type) {
+    buf_append_ident(out, t);
+    }
+    else {
+    buf_append(out, c);
+    }
 }
 
 bool is_type_ptr(oc_string t) {
@@ -4475,6 +5377,9 @@ oc_string cg_float_type(AstNode* expr, CodeBuffer* out) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_CAST)) {
@@ -4655,6 +5560,9 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
     buf_append(out, ((((expr)->tok)).slice));
+    if (str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("f"), .len = sizeof("f") - 1 });
+    }
     return;
     }
     if ((((expr)->tag) == NODE_STRING)) {
@@ -4670,7 +5578,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     return;
     }
     if ((((expr)->tag) == NODE_IDENT)) {
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     return;
     }
     if ((((expr)->tag) == NODE_UNARY)) {
@@ -4927,18 +5835,18 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     else {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")."), .len = sizeof(").") - 1 });
     }
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
     if ((((expr)->tag) == NODE_STRUCT_INIT)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
-    buf_append(out, to_c_type(((((expr)->tok)).slice)));
+    buf_append_c_type(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("){ "), .len = sizeof("){ ") - 1 });
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("."), .len = sizeof(".") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((f)->left), out);
     if ((((f)->next) != ((AstNode*)(0)))) {
@@ -4989,7 +5897,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_ident(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* arg = ((expr)->left);
     while ((arg != ((AstNode*)(0)))) {
@@ -5159,9 +6067,9 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     if ((((arg)->tag) == NODE_IDENT)) {
     if (is_u8_array_type(cg_var_type(out, ((((arg)->tok)).slice)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\"%.*s\\n\", (int)sizeof("), .len = sizeof("    printf(\"%.*s\\n\", (int)sizeof(") - 1 });
-    buf_append(out, ((((arg)->tok)).slice));
+    buf_append_ident(out, ((((arg)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), (const char*)"), .len = sizeof("), (const char*)") - 1 });
-    buf_append(out, ((((arg)->tok)).slice));
+    buf_append_ident(out, ((((arg)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
     return;
     }
@@ -5260,7 +6168,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     oc_string elem_str = __oc_slice_str(((stmt)->type_name), __OC_ADD(close_idx, 1), ((((stmt)->type_name)).len));
     emit_c_type(elem_str, out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((stmt)->tok)).slice));
+    buf_append_ident(out, ((((stmt)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
     buf_append(out, sz_str);
     bool use_zero_init = true;
@@ -5315,7 +6223,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__auto_type"), .len = sizeof("__auto_type") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((stmt)->tok)).slice));
+    buf_append_ident(out, ((((stmt)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((stmt)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
@@ -5664,7 +6572,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("uint32_t"), .len = sizeof("uint32_t") - 1 });
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((g_decl)->tok)).slice));
+    buf_append_ident(out, ((((g_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((g_decl)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
@@ -5676,9 +6584,9 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((s_decl != ((AstNode*)(0)))) {
     if ((((s_decl)->tag) == NODE_STRUCT_DECL)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct "), .len = sizeof("typedef struct ") - 1 });
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
     }
     s_decl = ((s_decl)->next);
@@ -5691,7 +6599,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     if (str_eq(((s_decl)->type_name), (oc_string){ .ptr = (const uint8_t*)("packed"), .len = sizeof("packed") - 1 })) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__attribute__((packed)) "), .len = sizeof("__attribute__((packed)) ") - 1 });
     }
-    buf_append(out, ((((s_decl)->tok)).slice));
+    buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" {\n"), .len = sizeof(" {\n") - 1 });
     AstNode* f = ((s_decl)->left);
     while ((f != ((AstNode*)(0)))) {
@@ -5714,7 +6622,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     oc_string elem_str = __oc_slice_str(((f)->type_name), __OC_ADD(close_idx, 1), ((((f)->type_name)).len));
     emit_c_type(elem_str, out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
     buf_append(out, sz_str);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("];\n"), .len = sizeof("];\n") - 1 });
@@ -5722,7 +6630,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((f)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((f)->tok)).slice));
+    buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
     }
     f = ((f)->next);
@@ -5751,7 +6659,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((decl)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, fn_name);
+    buf_append_ident(out, fn_name);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* param = ((decl)->left);
     if ((param == ((AstNode*)(0)))) {
@@ -5761,7 +6669,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((param != ((AstNode*)(0)))) {
     emit_c_type(((param)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((param)->tok)).slice));
+    buf_append_ident(out, ((((param)->tok)).slice));
     if ((((param)->next) != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     }
@@ -5832,7 +6740,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     else {
     emit_c_type(((decl)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, fn_name);
+    buf_append_ident(out, fn_name);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("("), .len = sizeof("(") - 1 });
     AstNode* param = ((decl)->left);
     if ((param == ((AstNode*)(0)))) {
@@ -5842,7 +6750,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     while ((param != ((AstNode*)(0)))) {
     emit_c_type(((param)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
-    buf_append(out, ((((param)->tok)).slice));
+    buf_append_ident(out, ((((param)->tok)).slice));
     if ((((param)->next) != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
     }
@@ -6014,7 +6922,7 @@ void ng_emit_iat_call(NativeGen* ng, CodeBuffer* code, size_t slot) {
     elf_append_u32(code, 0);
 }
 
-uint64_t parse_u64(oc_string s) {
+uint64_t parse_literal_u64(oc_string s) {
     uint64_t res = 0;
     if ((((s).len) > 2)) {
     if ((__oc_index_str(s, 0) == 48)) {
@@ -6290,7 +7198,7 @@ size_t ng_parse_array_len(oc_string t) {
     if ((close_idx >= ((t).len))) {
     return 0;
     }
-    return ({ __auto_type _v = (parse_u64(__oc_slice_str(t, 1, close_idx))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
+    return ({ __auto_type _v = (parse_literal_u64(__oc_slice_str(t, 1, close_idx))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
 }
 
 oc_string ng_parse_array_elem(oc_string t) {
@@ -6428,6 +7336,9 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     return ((((expr)->tok)).slice);
     }
     if ((((expr)->tag) == NODE_FLOAT)) {
+    if ((((((expr)->type_name)).len) > 0)) {
+    return ((expr)->type_name);
+    }
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
     }
     if ((((expr)->tag) == NODE_IDENT)) {
@@ -7329,6 +8240,63 @@ void ng_emit_stderr_write(NativeGen* ng, CodeBuffer* code, bool is_win) {
     }
 }
 
+void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t disp, bool at_rsp) {
+    if ((width == 1)) {
+    buf_append_u8(code, 136);
+    }
+    else {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    }
+    if (at_rsp) {
+    buf_append_u8(code, __OC_ADD(132, __OC_MUL(reg, 8)));
+    buf_append_u8(code, 36);
+    }
+    else {
+    buf_append_u8(code, __OC_ADD(133, __OC_MUL(reg, 8)));
+    }
+    elf_append_i32(code, disp);
+}
+
+void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp) {
+    int32_t alen = ({ __auto_type _v = (ng_parse_array_len(arr_t)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    oc_string elem_t = ng_parse_array_elem(arr_t);
+    int32_t stride = ng_type_stride(elem_t);
+    int32_t bytes = __OC_MUL(alen, stride);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 49);
+    buf_append_u8(code, 192);
+    int32_t z = 0;
+    while ((__OC_ADD(z, 8) <= bytes)) {
+    ng_emit_store_disp(code, 0, 8, __OC_ADD(off, z), at_rsp);
+    z = __OC_ADD(z, 8);
+    }
+    while ((z < bytes)) {
+    ng_emit_store_disp(code, 0, 1, __OC_ADD(off, z), at_rsp);
+    z = __OC_ADD(z, 1);
+    }
+    AstNode* el = ((init)->left);
+    int32_t k = 0;
+    while ((el != ((AstNode*)(0)))) {
+    if ((k >= alen)) {
+    break;
+    }
+    ng_emit_expr_as(ng, code, data, el, elem_t);
+    int32_t el_off = __OC_ADD(off, __OC_MUL(k, stride));
+    if ((stride == 1)) {
+    ng_emit_store_disp(code, 0, 1, el_off, at_rsp);
+    }
+    else {
+    ng_emit_store_disp(code, 0, 8, el_off, at_rsp);
+    if ((stride == 16)) {
+    ng_emit_store_disp(code, 2, 8, __OC_ADD(el_off, 8), at_rsp);
+    }
+    }
+    k = __OC_ADD(k, 1);
+    el = ((el)->next);
+    }
+}
+
 oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx) {
     AstNode* decl = ((((ng)->root))->left);
     while ((decl != ((AstNode*)(0)))) {
@@ -7475,7 +8443,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_INT)) {
-    uint64_t val = parse_u64(((((expr)->tok)).slice));
+    uint64_t val = parse_literal_u64(((((expr)->tok)).slice));
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
     elf_append_u64(code, val);
@@ -7484,7 +8452,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     if ((((expr)->tag) == NODE_FLOAT)) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
-    elf_append_u64(code, ng_literal_bits(ng, ((((expr)->tok)).slice), false));
+    elf_append_u64(code, ng_literal_bits(ng, ((((expr)->tok)).slice), str_eq(((expr)->type_name), (oc_string){ .ptr = (const uint8_t*)("f32"), .len = sizeof("f32") - 1 })));
     return;
     }
     if ((((expr)->tag) == NODE_BOOL)) {
@@ -7529,6 +8497,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     int32_t s_sz = ng_find_struct_size(ng, vt);
+    if ((s_sz > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct larger than 32 bytes cannot be copied by value; use a pointer to it"), .len = sizeof("native codegen error: a struct larger than 32 bytes cannot be copied by value; use a pointer to it") - 1 });
+    }
     if ((s_sz > 0)) {
     ng_emit_disp_load_rax(code, off);
     if ((s_sz >= 16)) {
@@ -7605,6 +8576,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 88);
     return;
     }
+    if ((ng_find_struct_size(ng, ((((expr)->tok)).slice)) > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly"), .len = sizeof("native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly") - 1 });
+    }
     buf_append_u8(code, 72);
     buf_append_u8(code, 131);
     buf_append_u8(code, 236);
@@ -7613,7 +8587,17 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
     int32_t f_w = ng_field_width(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
-    ng_emit_expr_as(ng, code, data, ((f)->left), ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
+    oc_string f_type = ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
+    if ((((f_type).len) > 0)) {
+    if ((__oc_index_str(f_type, 0) == 91)) {
+    if ((((((f)->left))->tag) == NODE_ARRAY_INIT)) {
+    ng_emit_array_init_at(ng, code, data, f_off, f_type, ((f)->left), true);
+    f = ((f)->next);
+    continue;
+    }
+    }
+    }
+    ng_emit_expr_as(ng, code, data, ((f)->left), f_type);
     int32_t f_words = ng_value_words(ng, ng_find_field_type(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice)));
     if ((f_words > 1)) {
     if ((__OC_ADD(f_off, __OC_MUL(f_words, 8)) <= 32)) {
@@ -7831,7 +8815,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     if ((((((expr)->tok)).tag) == TOK_MINUS)) {
     if ((((expr)->left) != ((AstNode*)(0)))) {
     if ((((((expr)->left))->tag) == NODE_INT)) {
-    uint64_t mag = parse_u64(((((((expr)->left))->tok)).slice));
+    uint64_t mag = parse_literal_u64(((((((expr)->left))->tok)).slice));
     if ((mag == 2147483648)) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 184);
@@ -8528,10 +9512,18 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     a = ((a)->next);
     }
-    if ((reg_count > 6)) {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: call passes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
+    bool stack_args = (reg_count > 6);
+    if (stack_args) {
+    size_t r = 0;
+    while ((r < 6)) {
+    ng_emit_load_arg_reg(code, r, ({ __auto_type _v = (__OC_MUL(__OC_SUB(__OC_SUB(reg_count, 1), r), 8)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    r = __OC_ADD(r, 1);
+    }
     }
     size_t idx = reg_count;
+    if (stack_args) {
+    idx = 0;
+    }
     while ((idx > 0)) {
     idx = __OC_SUB(idx, 1);
     if ((idx == 0)) {
@@ -8638,6 +9630,18 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     }
+    if (stack_args) {
+    bool direct = (!is_sys);
+    if ((((fn_name).len) > 6)) {
+    if (str_eq(__oc_slice_str(fn_name, 0, 6), (oc_string){ .ptr = (const uint8_t*)("win32_"), .len = sizeof("win32_") - 1 })) {
+    direct = false;
+    }
+    }
+    if ((!direct)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: system calls and win32_* imports take at most 6 register words"), .len = sizeof("native codegen error: system calls and win32_* imports take at most 6 register words") - 1 });
+    return;
+    }
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_host_target"), .len = sizeof("sys_host_target") - 1 })) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 199);
@@ -8708,6 +9712,12 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_add_fixup(ng, ((code)->len), ((((expr)->tok)).slice), false);
     buf_append_u8(code, 232);
     elf_append_u32(code, 0);
+    if (stack_args) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 129);
+    buf_append_u8(code, 196);
+    elf_append_u32(code, ({ __auto_type _v = (__OC_MUL(reg_count, 8)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    }
     return;
     }
 }
@@ -8902,6 +9912,15 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
     oc_string f_type = ng_find_field_type(ng, t_name, ((((f)->tok)).slice));
+    if ((((f_type).len) > 0)) {
+    if ((__oc_index_str(f_type, 0) == 91)) {
+    if ((((((f)->left))->tag) == NODE_ARRAY_INIT)) {
+    ng_emit_array_init_at(ng, code, data, __OC_ADD(base_off, f_off), f_type, ((f)->left), false);
+    f = ((f)->next);
+    continue;
+    }
+    }
+    }
     ng_emit_expr_as(ng, code, data, ((f)->left), f_type);
     int32_t f_words = ng_value_words(ng, f_type);
     if ((f_words > 1)) {
@@ -9372,6 +10391,50 @@ void ng_emit_store_param_reg(CodeBuffer* code, size_t reg_idx, int32_t off) {
     }
 }
 
+void ng_emit_load_arg_reg(CodeBuffer* code, size_t reg_idx, uint32_t disp) {
+    uint8_t rex = 72;
+    uint8_t modrm = 188;
+    if ((reg_idx == 1)) {
+    modrm = 180;
+    }
+    else {
+    if ((reg_idx == 2)) {
+    modrm = 148;
+    }
+    else {
+    if ((reg_idx == 3)) {
+    modrm = 140;
+    }
+    else {
+    if ((reg_idx == 4)) {
+    rex = 76;
+    modrm = 132;
+    }
+    else {
+    if ((reg_idx == 5)) {
+    rex = 76;
+    modrm = 140;
+    }
+    }
+    }
+    }
+    }
+    buf_append_u8(code, rex);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, modrm);
+    buf_append_u8(code, 36);
+    elf_append_u32(code, disp);
+}
+
+void ng_emit_store_param(CodeBuffer* code, size_t reg_idx, size_t total, int32_t off) {
+    if ((reg_idx < 6)) {
+    ng_emit_store_param_reg(code, reg_idx, off);
+    return;
+    }
+    ng_emit_disp_load_rax(code, ({ __auto_type _v = (__OC_ADD(16, __OC_MUL(__OC_SUB(__OC_SUB(total, 1), reg_idx), 8))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    ng_emit_disp_store_rax(code, off);
+}
+
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off) {
     if ((((ng)->fn_count) < 256)) {
     __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = name;
@@ -9840,7 +10903,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     }
     }
     else {
-    c_val = parse_u64(((((lit)->tok)).slice));
+    c_val = parse_literal_u64(((((lit)->tok)).slice));
     if (negative) {
     c_val = __OC_WRAP(sub, (0), (c_val));
     }
@@ -9921,6 +10984,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     ((ng)->curr_off) = 0;
     ((ng)->scope_depth) = 0;
     ((ng)->cur_ret) = ((decl)->type_name);
+    if ((ng_find_struct_size(ng, ((decl)->type_name)) > 32)) {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: a function cannot return a struct larger than 32 bytes; return it through a pointer parameter"), .len = sizeof("native codegen error: a function cannot return a struct larger than 32 bytes; return it through a pointer parameter") - 1 });
+    }
     AstNode* p = ((decl)->left);
     int32_t param_bytes = 0;
     while ((p != ((AstNode*)(0)))) {
@@ -9977,28 +11043,40 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     has_frame = true;
     elf_append_u32(code, stack_sz);
     }
+    size_t total_words = 0;
+    size_t tw = 0;
+    p = ((decl)->left);
+    while ((p != ((AstNode*)(0)))) {
+    total_words = __OC_ADD(total_words, 1);
+    if (__OC_AT((((ng)->var_is_slice)), (tw))) {
+    total_words = __OC_ADD(total_words, 1);
+    }
+    int32_t tw_sz = ng_find_struct_size(ng, __OC_AT((((ng)->var_types)), (tw)));
+    if ((tw_sz > 8)) {
+    total_words = __OC_ADD(total_words, ({ __auto_type _v = (__OC_DIV(__OC_SUB(tw_sz, 1), 8)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    tw = __OC_ADD(tw, 1);
+    p = ((p)->next);
+    }
     p = ((decl)->left);
     size_t reg_idx = 0;
     size_t p_var_idx = 0;
     while ((p != ((AstNode*)(0)))) {
     int32_t off = __OC_AT((((ng)->var_offsets)), (p_var_idx));
-    ng_emit_store_param_reg(code, reg_idx, off);
+    ng_emit_store_param(code, reg_idx, total_words, off);
     reg_idx = __OC_ADD(reg_idx, 1);
     if (__OC_AT((((ng)->var_is_slice)), (p_var_idx))) {
-    ng_emit_store_param_reg(code, reg_idx, __OC_SUB(off, 8));
+    ng_emit_store_param(code, reg_idx, total_words, __OC_SUB(off, 8));
     reg_idx = __OC_ADD(reg_idx, 1);
     }
     int32_t p_word = 8;
     while ((p_word < ng_find_struct_size(ng, __OC_AT((((ng)->var_types)), (p_var_idx))))) {
-    ng_emit_store_param_reg(code, reg_idx, __OC_ADD(off, p_word));
+    ng_emit_store_param(code, reg_idx, total_words, __OC_ADD(off, p_word));
     reg_idx = __OC_ADD(reg_idx, 1);
     p_word = __OC_ADD(p_word, 8);
     }
     p_var_idx = __OC_ADD(p_var_idx, 1);
     p = ((p)->next);
-    }
-    if ((reg_idx > 6)) {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)"), .len = sizeof("native codegen error: function takes more than 6 register words (a string counts as 2, a struct as 1 per 8 bytes)") - 1 });
     }
     if ((body_block != ((AstNode*)(0)))) {
     AstNode* stmt = ((body_block)->left);
@@ -10440,14 +11518,6 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     return ok;
 }
 
-oc_string cstr_to_string(uint8_t* cstr) {
-    size_t len = 0;
-    while ((__OC_AT((cstr), (len)) != 0)) {
-    len = __OC_ADD(len, 1);
-    }
-    return (oc_string){ .ptr = cstr, .len = len };
-}
-
 bool is_safe_path(oc_string s, bool allow_backslash) {
     if ((((s).len) == 0)) {
     return false;
@@ -10542,25 +11612,6 @@ oc_string arena_dup_str(Arena* arena, oc_string s) {
     i = __OC_ADD(i, 1);
     }
     return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((s).len) };
-}
-
-oc_string str_concat(Arena* arena, oc_string a, oc_string b) {
-    size_t total = __OC_ADD(((a).len), ((b).len));
-    if ((total == 0)) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
-    }
-    uint8_t* buf = arena_alloc(arena, total);
-    size_t i = 0;
-    while ((i < ((a).len))) {
-    __OC_AT((buf), (i)) = __oc_index_str(a, i);
-    i = __OC_ADD(i, 1);
-    }
-    size_t j = 0;
-    while ((j < ((b).len))) {
-    __OC_AT((buf), (__OC_ADD(((a).len), j))) = __oc_index_str(b, j);
-    j = __OC_ADD(j, 1);
-    }
-    return (oc_string){ .ptr = ((uint8_t*)(buf)), .len = total };
 }
 
 bool is_path_sep(uint8_t c) {

@@ -1,0 +1,8 @@
+// A literal adopts the type of its partner (issue #59), but two typed operands keep the
+// usual rule: f32 + f64 computes in f64, and storing that in an f32 needs .as(f32).
+fn main() {
+    let a: f32 = 1.5;
+    let d: f64 = 2.0;
+    let s: f32 = a + d;
+    print(s);
+}

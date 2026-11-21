@@ -43,6 +43,7 @@
         <a href="#std-os" class="sidebar-link">OC-OS(3) Targets &amp; Portability</a>
         <a href="#std-mem" class="sidebar-link">OC-MEM(3) Arena Alloc</a>
         <a href="#std-fs" class="sidebar-link">OC-FS(3) Hardened I/O</a>
+        <a href="#std-str" class="sidebar-link">OC-STR(3) Strings</a>
         <a href="#std-io" class="sidebar-link">OC-IO(3) Standard I/O</a>
         <a href="#std-net" class="sidebar-link">OC-NET(3) Sockets</a>
         <a href="#std-math" class="sidebar-link">OC-MATH(3) Checked Math</a>
@@ -80,7 +81,8 @@
         <pre><code>// Importing modules into oC source units
 import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_reset, arena_deinit
 import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_exec, unlink_file
-import "std/io.oc"    // OC-IO(3):    print, read_int, sys_read
+import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace, StrBuf, parse_i64
+import "std/io.oc"    // OC-IO(3):    read_line, read_all, read_i64, read_int (deprecated), sys_read
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
 import "std/os.oc"    // OC-OS(3):    OC_PROT_*, OC_MAP_*, OC_O_*, OC_MODE_*, OC_AF_*, OC_SOCK_*, OC_TARGET_*, sys_host_target
@@ -556,6 +558,65 @@ fn main() {
         </div>
       </section>
 
+      <!-- SECTION: STD/STR -->
+      <section id="std-str">
+        <h2>OC-STR(3) &mdash; `std/str.oc` Strings</h2>
+        <p>
+          A <code>string</code> is a <code>{ptr, len}</code> view of bytes; nothing here relies on a NUL terminator. Three rules hold throughout: functions that only look at a string return slices of their input and never allocate; functions that build a new string take an <code>Arena</code>, so the validator rejects using the result after that arena is reset or deinitialized; and running out of arena space panics with <code>panic: arena out of memory</code> instead of returning a null view. Classification is ASCII only.
+        </p>
+
+        <div class="fn-box">
+          <h3>Comparison and views</h3>
+          <div class="fn-sig">fn str_eq(a: string, b: string) -&gt; bool<br>fn starts_with(s: string, prefix: string) -&gt; bool &nbsp; fn ends_with(s: string, suffix: string) -&gt; bool<br>fn find(s: string, needle: string) -&gt; i64 &nbsp; fn contains(s: string, needle: string) -&gt; bool<br>fn trim(s: string) -&gt; string &nbsp; fn trim_start(s: string) -&gt; string &nbsp; fn trim_end(s: string) -&gt; string<br>fn substr(s: string, start: usize, len: usize) -&gt; string<br>fn split_once(s: string, sep: string, out: *mut Split) -&gt; bool &nbsp; struct Split { head: string, tail: string }<br>fn cstr_to_string(cstr: *u8) -&gt; string</div>
+          <p>
+            <code>find</code> returns the index of the first occurrence, or -1; an empty needle is found at 0. <code>trim</code> removes ASCII whitespace (space, tab, newline, vertical tab, form feed, carriage return) from both ends. <code>substr</code> panics with <code>slice index out of bounds</code> when the range leaves the string. <code>split_once</code> fills <code>out</code> with the parts before and after the first separator and returns true, or returns false with <code>out.head</code> set to all of <code>s</code>. It uses an out parameter because the native backend returns at most 32 bytes, and <code>{ok, head, tail}</code> would be 40.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>ASCII classification</h3>
+          <div class="fn-sig">fn is_digit(c: u8) -&gt; bool &nbsp; fn is_alpha(c: u8) -&gt; bool &nbsp; fn is_space(c: u8) -&gt; bool &nbsp; fn is_upper(c: u8) -&gt; bool &nbsp; fn is_lower(c: u8) -&gt; bool<br>fn to_upper(c: u8) -&gt; u8 &nbsp; fn to_lower(c: u8) -&gt; u8</div>
+          <p>
+            Bytes of 128 and above are neither letters, digits nor spaces, and <code>to_upper</code> / <code>to_lower</code> leave them unchanged.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Building strings in an arena</h3>
+          <div class="fn-sig">fn str_concat(arena: *mut Arena, a: string, b: string) -&gt; string<br>fn str_repeat(arena: *mut Arena, s: string, n: usize) -&gt; string<br>fn str_join(arena: *mut Arena, parts: *string, count: usize, sep: string) -&gt; string<br>fn str_replace(arena: *mut Arena, s: string, from: string, to: string) -&gt; string<br>fn str_to_upper(arena: *mut Arena, s: string) -&gt; string &nbsp; fn str_to_lower(arena: *mut Arena, s: string) -&gt; string<br>fn str_alloc(arena: *mut Arena, n: usize) -&gt; *mut u8</div>
+          <p>
+            <code>str_join</code> takes a pointer to an array of strings: <code>str_join(&amp;mut a, (&amp;words).as(*string), 3, ", ")</code>. <code>str_replace</code> replaces every non-overlapping occurrence from left to right; an empty <code>from</code> matches nothing. An empty result is <code>""</code> and allocates nothing.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>StrBuf: building a string piece by piece</h3>
+          <div class="fn-sig">struct StrBuf { arena: *mut Arena, buf: *mut u8, len: usize, cap: usize }<br>fn strbuf_init(arena: *mut Arena, cap: usize) -&gt; StrBuf<br>fn strbuf_push(b: *mut StrBuf, c: u8) &nbsp; fn strbuf_push_str(b: *mut StrBuf, s: string)<br>fn strbuf_to_string(b: *StrBuf) -&gt; string</div>
+          <p>
+            A growable buffer in an arena (at least 16 bytes to start). When full it doubles, in place if it is the arena's latest allocation, so pushing <em>n</em> bytes costs O(<em>n</em>) in total; a chain of <code>str_concat</code> calls copies the whole string every time. <code>strbuf_to_string</code> is a view of the bytes pushed so far, not a copy. The validator treats a <code>StrBuf</code> like any arena string: using it after <code>arena_reset</code> is a compile error.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>Parsing and formatting integers</h3>
+          <div class="fn-sig">fn parse_i64(s: string) -&gt; ParsedI64 &nbsp; fn parse_u64(s: string) -&gt; ParsedU64<br>fn parse_i64_radix(s: string, radix: u32) -&gt; ParsedI64 &nbsp; fn parse_u64_radix(s: string, radix: u32) -&gt; ParsedU64<br>struct ParsedI64 { ok: bool, value: i64 } &nbsp; struct ParsedU64 { ok: bool, value: u64 }<br>fn i64_to_str(arena: *mut Arena, n: i64) -&gt; string &nbsp; fn u64_to_str(arena: *mut Arena, n: u64) -&gt; string &nbsp; fn u64_to_hex(arena: *mut Arena, n: u64) -&gt; string<br>fn print_str(s: string) &nbsp; fn print_i64(n: i64) &nbsp; fn print_u64(n: u64) &nbsp; fn print_hex(n: u64)</div>
+          <p>
+            A parser takes the whole string: an optional sign (<code>+</code>, or <code>-</code> for the signed versions) and at least one digit. Empty input, any other character (spaces included, so <code>trim</code> first), and a value outside the type's range give <code>ok = false</code> and <code>value = 0</code>. <code>radix</code> is 2 to 16, without a prefix (<code>parse_u64_radix("ff", 16)</code>). <code>u64_to_hex</code> writes lowercase digits without <code>0x</code> or padding. The <code>print_*</code> functions write to stdout without a newline, so a line can be built piece by piece; <code>print</code> always ends its line.
+          </p>
+        </div>
+
+        <pre><code>import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut kv: Split = Split { head: "", tail: "" };
+    if split_once("  name = Ada ", "=", &amp;mut kv) {
+        print(str_concat(&amp;mut a, "Hello, ", trim(kv.tail))); // Hello, Ada
+    }
+    arena_deinit(&amp;mut a);
+}</code></pre>
+      </section>
+
       <!-- SECTION: STD/IO -->
       <section id="std-io">
         <h2>OC-IO(3) &mdash; `std/io.oc` Standard Input &amp; Output</h2>
@@ -572,25 +633,39 @@ fn main() {
         </div>
 
         <div class="fn-box">
-          <h3>print_f64 (<code>std/fmt.oc</code>)</h3>
-          <div class="fn-sig">fn print_f64(x: f64, digits: u32)</div>
+          <h3>print_f64, f64_to_str, parse_f64 (<code>std/fmt.oc</code>)</h3>
+          <div class="fn-sig">fn print_f64(x: f64, digits: u32) &nbsp; fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -&gt; string<br>fn parse_f64(s: string) -&gt; ParsedF64 &nbsp; struct ParsedF64 { ok: bool, value: f64 }</div>
           <p>
-            <code>print</code> shows a float with six decimals (<code>3.750000</code>, or <code>9.007199e+15</code> in scientific form). <code>print_f64</code> prints <code>x</code> with <code>digits</code> significant digits (1 to 40) in the format of C's <code>printf("%.<em>digits</em>g\n", x)</code>: fixed notation when the decimal exponent is between -4 and <code>digits</code>, scientific otherwise, trailing zeros removed. 17 digits always identify an <code>f64</code> exactly: <code>print_f64(0.1, 17)</code> prints <code>0.10000000000000001</code>. The digits are correctly rounded (halves to even) because they come from the exact decimal value of <code>x</code>. NaN, infinities and negative zero print as with <code>print</code>. It lives in its own module because the exact conversion adds about 10 KB to a native binary.
+            <code>print</code> shows a float with six decimals (<code>3.750000</code>, or <code>9.007199e+15</code> in scientific form). <code>print_f64</code> prints <code>x</code> with <code>digits</code> significant digits (1 to 40) in the format of C's <code>printf("%.<em>digits</em>g\n", x)</code>: fixed notation when the decimal exponent is between -4 and <code>digits</code>, scientific otherwise, trailing zeros removed. 17 digits always identify an <code>f64</code> exactly: <code>print_f64(0.1, 17)</code> prints <code>0.10000000000000001</code>. The digits are correctly rounded (halves to even) because they come from the exact decimal value of <code>x</code>. NaN, infinities and negative zero print as with <code>print</code>. <code>f64_to_str</code> returns the same text, without the newline, in an arena.
+          </p>
+          <p>
+            <code>parse_f64</code> reads an optional sign, digits with at most one point, and an optional exponent (<code>-2.5e-3</code>, <code>.5</code>, <code>5.</code>), or <code>inf</code>, <code>infinity</code> and <code>nan</code> in any case. Anything else, including surrounding spaces, gives <code>ok = false</code>. The result is the nearest <code>f64</code>, ties to even, like C's <code>strtod</code>: the decimal is turned into an exact ratio of big integers and divided, so even inputs exactly halfway between two doubles round correctly. Up to 800 significant digits take part exactly; further digits only break ties. Magnitudes beyond the <code>f64</code> range give <code>inf</code>, and below it 0 or a subnormal. <code>parse_f64</code> of the text from <code>print_f64(x, 17)</code> gives back exactly <code>x</code>.
+          </p>
+          <p>
+            These live in their own module because the exact conversions, with <code>std/str.oc</code> which they use, add about 35 KB to a native binary.
           </p>
         </div>
 
         <div class="fn-box">
-          <h3>read_int</h3>
-          <div class="fn-sig">fn read_int() i32</div>
+          <h3>read_line, read_all</h3>
+          <div class="fn-sig">fn read_line(arena: *mut Arena) -&gt; ReadLine &nbsp; struct ReadLine { ok: bool, line: string }<br>fn read_all(arena: *mut Arena) -&gt; ReadAll &nbsp; struct ReadAll { ok: bool, data: string }</div>
           <p>
-            Reads characters directly from standard input (<code>fd = 0</code>) using <code>sys_read</code>, filters ASCII characters between <code>'0'</code> (48) and <code>'9'</code> (57), and builds an integer. Ignores trailing newlines and non-numeric characters. The result is an ordinary <code>i32</code>: validate it before using it as a length, index or path.
+            <code>read_line</code> returns the next line of standard input without its line break (<code>"\n"</code> or <code>"\r\n"</code>). A last line without a line break is still returned; after it, <code>ok</code> is false. The line is built in the arena, which grows the buffer as needed, so its length is limited only by the arena: a line that does not fit panics with <code>arena out of memory</code>. Size the arena for the longest line you accept. <code>read_line</code> reads one byte per system call, so it never takes input beyond the line it returns. <code>read_all</code> reads the rest of standard input in large blocks; <code>ok</code> is false only if reading fails.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>read_i64, read_int</h3>
+          <div class="fn-sig">fn read_i64() -&gt; ParsedI64 &nbsp; fn read_int() -&gt; i32</div>
+          <p>
+            <code>read_i64</code> reads one line and parses it with <code>parse_i64</code>, ignoring spaces around the number. <code>ok</code> is false at end of input, for a line that is not a number (<code>"7x"</code>), and for a line longer than 64 bytes; the whole line is consumed in every case. <code>read_int</code> is deprecated because it cannot report failure: it returns the same number, or 0 at end of input, for a non-number, or for a value outside <code>i32</code>. The values are ordinary data: validate them before using them as a length, index or path.
           </p>
         </div>
 
         <!-- Example Card 4: IO -->
         <div class="example-card">
           <div class="example-header">
-            <span class="example-title">Example: Formatted Stream I/O &amp; Numeric Extraction</span>
+            <span class="example-title">Example: Reading a Line and a Number</span>
             
           </div>
           <div class="example-grid">
@@ -602,10 +677,14 @@ fn main() {
               <pre><code>import "std/io.oc";
 
 fn main() {
-    print("Enter numeric configuration port: ");
-    let port: i32 = read_int();
-    print("Parsed configuration integer:");
-    print(port);
+    let mut a: Arena = arena_init(4096);
+    print("Name?");
+    let r: ReadLine = read_line(&amp;mut a);
+    if r.ok { print(str_concat(&amp;mut a, "Hello, ", trim(r.line))); }
+    print("Port?");
+    let port: ParsedI64 = read_i64();
+    if port.ok { print(port.value); } else { print("not a number"); }
+    arena_deinit(&amp;mut a);
 }</code></pre>
             </div>
             <div class="output-pane">
@@ -614,13 +693,16 @@ fn main() {
                 
               </div>
               <pre><code><span class="term-cmd">$ occ run io_demo.oc</span>
-<span class="term-out">Enter numeric configuration port: 8080</span>
-<span class="term-out">Parsed configuration integer:</span>
+<span class="term-out">Name?</span>
+<span class="term-out">  Ada</span>
+<span class="term-pass">Hello, Ada</span>
+<span class="term-out">Port?</span>
+<span class="term-out">8080</span>
 <span class="term-pass">8080</span></code></pre>
             </div>
           </div>
           <div class="explanation-box">
-            <strong>Dataflow Taint Tracking (planned, not implemented):</strong> values read via <code>sys_read</code> or <code>read_int</code> are ordinary values. The compiler does not yet stop them from reaching file paths or slice indices unvalidated; bounds and overflow checks still apply at run time.
+            <strong>Dataflow Taint Tracking (planned, not implemented):</strong> values read via <code>sys_read</code>, <code>read_line</code> or <code>read_i64</code> are ordinary values. The compiler does not yet stop them from reaching file paths or slice indices unvalidated; bounds and overflow checks still apply at run time.
           </div>
         </div>
       </section>

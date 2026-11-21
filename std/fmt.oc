@@ -1,10 +1,14 @@
-// Number formatting beyond what print does.
+// Floating-point text: print_f64, f64_to_str and parse_f64.
 //
 // print_f64(x, digits) prints an f64 with up to 40 significant digits, in the format of C's
-// printf("%.<digits>g\n", x). It is a separate import because the exact conversion takes
-// about 10 KB of native code, which programs that only print() floats should not carry.
+// printf("%.<digits>g\n", x); f64_to_str gives the same text as a string. parse_f64 reads
+// decimal text back, correctly rounded. Both directions use exact integer arithmetic, so
+// the results are identical on both backends. This is a separate import because, with
+// std/str.oc which it uses, it adds about 35 KB of native code, which programs that only
+// print() floats should not carry.
 
-import "std/sys/float.oc";
+import "sys/float.oc";
+import "str.oc";
 
 // ---------------------------------------------------------------------------------------
 // print_f64(x, digits): x with `digits` significant digits (1 to 40), in the format of C's
@@ -242,16 +246,18 @@ fn fmt_put_g(o: *mut u8, start: usize, v: f64, p: usize) -> usize {
     return fmt_put_u64(o, n, mag.as(u64));
 }
 
-fn print_f64(x: f64, digits: u32) {
+// Writes x with `digits` significant digits (1 to 40) to o, which must hold 64 bytes; returns
+// the length. The text of print_f64 without the newline.
+fn fmt_format_f64(o: *mut u8, x: f64, digits: u32) -> usize {
     if !(x <= x) {
-        sys_write(1, "NaN\n".ptr, 4);
-        return;
+        o[0] = 78; // NaN
+        o[1] = 97;
+        o[2] = 78;
+        return 3;
     }
     let mut p: usize = digits.as(usize);
     if p < 1 { p = 1; }
     if p > 40 { p = 40; }
-    let mut out: [64]u8 = [0];
-    let o: *mut u8 = (&mut out).as(*mut u8);
     let mut n: usize = 0;
     let mut v: f64 = x;
     if v < 0.0 {
@@ -263,14 +269,347 @@ fn print_f64(x: f64, digits: u32) {
         o[n] = 105;
         o[n + 1] = 110;
         o[n + 2] = 102;
-        n = n + 3;
-    } else if v <= 0.0 {
-        n = 0; // zero, either sign
-        o[0] = 48;
-        n = 1;
-    } else {
-        n = fmt_put_g(o, n, v, p);
+        return n + 3;
     }
+    if v <= 0.0 { // zero, either sign
+        o[0] = 48;
+        return 1;
+    }
+    return fmt_put_g(o, n, v, p);
+}
+
+fn print_f64(x: f64, digits: u32) {
+    let mut out: [64]u8 = [0];
+    let o: *mut u8 = (&mut out).as(*mut u8);
+    let n: usize = fmt_format_f64(o, x, digits);
     o[n] = 10;
     sys_write(1, o.as(*u8), n + 1);
 }
+
+// The text of print_f64(x, digits), without the newline, in the arena.
+fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -> string {
+    let mut out: [64]u8 = [0];
+    let n: usize = fmt_format_f64((&mut out).as(*mut u8), x, digits);
+    let buf: *mut u8 = str_alloc(arena, n);
+    let mut i: usize = 0;
+    while i < n {
+        buf[i] = out[i];
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: n };
+}
+
+// ---------------------------------------------------------------------------------------
+// parse_f64(s): decimal text to the nearest f64 (ties to even), like C's strtod.
+//
+// Accepted: an optional sign, digits with at most one '.', at least one digit, and an
+// optional exponent (e or E, optional sign, digits); also inf, infinity and nan in any
+// case. Nothing else, not even spaces (trim first): anything else gives ok = false.
+// Magnitudes beyond the f64 range give inf, and below it 0 or a subnormal, as in IEEE 754.
+// Up to 800 significant digits take part exactly; further digits only break ties.
+// The value is computed exactly: the decimal is an integer ratio N / D, and the quotient
+// is found with big-integer long division, so the result is always correctly rounded.
+// ---------------------------------------------------------------------------------------
+
+struct ParsedF64 {
+    ok: bool,
+    value: f64,
+}
+
+// Big integers below are little-endian 32-bit limbs; a length counts limbs up to the
+// highest nonzero one.
+
+fn big_norm(l: *mut u32, n: usize) -> usize {
+    let mut len: usize = n;
+    while len > 0 {
+        if l[len - 1] != 0 { break; }
+        len = len - 1;
+    }
+    return len;
+}
+
+// l = l * f + add (f, add < 2^32).
+fn big_mul_add(l: *mut u32, n: usize, f: u64, add: u64) -> usize {
+    let mut carry: u64 = add;
+    let mut i: usize = 0;
+    while i < n {
+        let t: u64 = (l[i].as(u64) * f) + carry;
+        l[i] = (t & 4294967295).as(u32);
+        carry = t >> 32;
+        i = i + 1;
+    }
+    if carry > 0 {
+        l[n] = carry.as(u32);
+        return n + 1;
+    }
+    return n;
+}
+
+fn big_bitlen(l: *mut u32, n: usize) -> u64 {
+    if n == 0 { return 0; }
+    let mut top: u32 = l[n - 1];
+    let mut bits: u64 = (n - 1).as(u64) * 32;
+    while top > 0 {
+        bits = bits + 1;
+        top = top >> 1;
+    }
+    return bits;
+}
+
+// l <<= bits, in place.
+fn big_shl(l: *mut u32, n: usize, bits: u64) -> usize {
+    if n == 0 { return 0; }
+    let ls: usize = (bits / 32).as(usize);
+    let r: u64 = bits % 32;
+    let mut j: usize = n + ls + 1;
+    while j > ls {
+        j = j - 1;
+        let src: usize = j - ls;
+        let mut v: u64 = 0;
+        if src < n { v = l[src].as(u64) << r; }
+        if r > 0 {
+            if src > 0 { v = v | (l[src - 1].as(u64) >> (32 - r)); }
+        }
+        l[j] = (v & 4294967295).as(u32);
+    }
+    let mut k: usize = 0;
+    while k < ls {
+        l[k] = 0;
+        k = k + 1;
+    }
+    return big_norm(l, n + ls + 1);
+}
+
+// l >>= 1, in place.
+fn big_shr1(l: *mut u32, n: usize) -> usize {
+    let mut i: usize = 0;
+    while i < n {
+        let mut v: u64 = l[i].as(u64) >> 1;
+        if i + 1 < n { v = v | ((l[i + 1].as(u64) & 1) << 31); }
+        l[i] = v.as(u32);
+        i = i + 1;
+    }
+    return big_norm(l, n);
+}
+
+fn big_cmp(a: *mut u32, na: usize, b: *mut u32, nb: usize) -> i32 {
+    if na != nb {
+        if na > nb { return 1; }
+        return -1;
+    }
+    let mut i: usize = na;
+    while i > 0 {
+        i = i - 1;
+        if a[i] != b[i] {
+            if a[i] > b[i] { return 1; }
+            return -1;
+        }
+    }
+    return 0;
+}
+
+// a -= b, requires a >= b.
+fn big_sub(a: *mut u32, na: usize, b: *mut u32, nb: usize) -> usize {
+    let mut borrow: u64 = 0;
+    let mut i: usize = 0;
+    while i < na {
+        let mut bi: u64 = borrow;
+        if i < nb { bi = bi + b[i].as(u64); }
+        let ai: u64 = a[i].as(u64);
+        if ai >= bi {
+            a[i] = (ai - bi).as(u32);
+            borrow = 0;
+        } else {
+            a[i] = ((ai + 4294967296) - bi).as(u32);
+            borrow = 1;
+        }
+        i = i + 1;
+    }
+    return big_norm(a, na);
+}
+
+fn fmt_pow2(e: i64) -> f64 {
+    let mut v: f64 = 1.0;
+    let mut k: i64 = e;
+    while k > 0 {
+        v = v * 2.0;
+        k = k - 1;
+    }
+    while k < 0 {
+        v = v * 0.5;
+        k = k + 1;
+    }
+    return v;
+}
+
+// Case-insensitive equality with a lowercase word.
+fn fmt_word_is(s: string, word: string) -> bool {
+    if s.len != word.len { return false; }
+    let mut i: usize = 0;
+    while i < s.len {
+        if to_lower(s[i]) != word[i] { return false; }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn parse_f64(s: string) -> ParsedF64 {
+    let fail: ParsedF64 = ParsedF64 { ok: false, value: 0.0 };
+    let mut i: usize = 0;
+    let mut neg: bool = false;
+    if s.len > 0 {
+        if s[0] == 45 { neg = true; i = 1; }
+        else if s[0] == 43 { i = 1; }
+    }
+    let rest: string = s[i..s.len];
+    let mut special: bool = false;
+    let mut sv: f64 = 0.0;
+    if fmt_word_is(rest, "inf") { special = true; sv = 1.0e308 * 10.0; }
+    if fmt_word_is(rest, "infinity") { special = true; sv = 1.0e308 * 10.0; }
+    if fmt_word_is(rest, "nan") {
+        let z: f64 = 0.0;
+        special = true;
+        sv = z / z;
+    }
+    if special {
+        if neg { sv = -sv; }
+        return ParsedF64 { ok: true, value: sv };
+    }
+
+    // Significant digits (leading zeros dropped) and the power of ten they are scaled by.
+    let mut dig: [800]u8 = [0];
+    let mut nd: usize = 0;
+    let mut e10: i64 = 0;
+    let mut seen_digit: bool = false;
+    let mut after_point: bool = false;
+    let mut trunc: bool = false; // a nonzero digit beyond the 800 kept ones
+    while i < s.len {
+        let c: u8 = s[i];
+        if c == 46 { // '.'
+            if after_point { return fail; }
+            after_point = true;
+        } else if is_digit(c) {
+            seen_digit = true;
+            if nd == 0 {
+                if c == 48 {
+                    if after_point { e10 = e10 - 1; }
+                } else {
+                    dig[0] = c - 48;
+                    nd = 1;
+                    if after_point { e10 = e10 - 1; }
+                }
+            } else if nd < 800 {
+                dig[nd] = c - 48;
+                nd = nd + 1;
+                if after_point { e10 = e10 - 1; }
+            } else {
+                if !after_point { e10 = e10 + 1; }
+                if c != 48 { trunc = true; }
+            }
+        } else {
+            break;
+        }
+        i = i + 1;
+    }
+    if !seen_digit { return fail; }
+    if i < s.len {
+        if to_lower(s[i]) != 101 { return fail; } // 'e'
+        i = i + 1;
+        let mut eneg: bool = false;
+        if i < s.len {
+            if s[i] == 45 { eneg = true; i = i + 1; }
+            else if s[i] == 43 { i = i + 1; }
+        }
+        if i >= s.len { return fail; }
+        let mut ev: i64 = 0;
+        while i < s.len {
+            if !is_digit(s[i]) { return fail; }
+            if ev < 100000 { ev = (ev * 10) + (s[i] - 48).as(i64); } // saturates; far out of range anyway
+            i = i + 1;
+        }
+        if eneg { ev = -ev; }
+        e10 = e10 + ev;
+    }
+    let mut result: f64 = 0.0;
+    if nd > 0 {
+        let mag: i64 = nd.as(i64) + e10; // the value is below 10^mag
+        if mag > 310 {
+            result = 1.0e308 * 10.0;
+        } else if mag >= -325 {
+            result = fmt_exact_ratio((&mut dig).as(*mut u8), nd, e10, trunc);
+        }
+    }
+    if neg { result = -result; }
+    return ParsedF64 { ok: true, value: result };
+}
+
+// The f64 nearest to D * 10^e10, where D is the integer with decimal digits d[0..nd].
+fn fmt_exact_ratio(d: *mut u8, nd: usize, e10: i64, trunc: bool) -> f64 {
+    let mut num_l: [136]u32 = [0];
+    let mut den_l: [136]u32 = [0];
+    let num: *mut u32 = (&mut num_l).as(*mut u32);
+    let den: *mut u32 = (&mut den_l).as(*mut u32);
+    let mut nn: usize = 0;
+    let mut k: usize = 0;
+    while k < nd {
+        nn = big_mul_add(num, nn, 10, d[k].as(u64));
+        k = k + 1;
+    }
+    den[0] = 1;
+    let mut dn: usize = 1;
+    let mut t: i64 = e10;
+    if t < 0 { t = -t; }
+    while t >= 9 {
+        if e10 > 0 { nn = big_mul_add(num, nn, 1000000000, 0); } else { dn = big_mul_add(den, dn, 1000000000, 0); }
+        t = t - 9;
+    }
+    while t > 0 {
+        if e10 > 0 { nn = big_mul_add(num, nn, 10, 0); } else { dn = big_mul_add(den, dn, 10, 0); }
+        t = t - 1;
+    }
+    // Scale so the quotient q = num * 2^shift / den lies in [2^54, 2^56).
+    let shift: i64 = 55 - (big_bitlen(num, nn).as(i64) - big_bitlen(den, dn).as(i64));
+    if shift > 0 { nn = big_shl(num, nn, shift.as(u64)); }
+    if shift < 0 { dn = big_shl(den, dn, (-shift).as(u64)); }
+    // Long division, one quotient bit at a time; num ends up as the remainder.
+    dn = big_shl(den, dn, 55);
+    let mut q: u64 = 0;
+    let mut bit: u32 = 0;
+    while bit < 56 {
+        q = q * 2;
+        if big_cmp(num, nn, den, dn) >= 0 {
+            nn = big_sub(num, nn, den, dn);
+            q = q + 1;
+        }
+        dn = big_shr1(den, dn);
+        bit = bit + 1;
+    }
+    let mut sticky: bool = trunc;
+    if nn > 0 { sticky = true; }
+    // The value is (q + a fraction, if sticky) * 2^-shift. Round q to the f64 grid.
+    let mut qbits: i64 = 0;
+    let mut qq: u64 = q;
+    while qq > 0 {
+        qbits = qbits + 1;
+        qq = qq >> 1;
+    }
+    let e2: i64 = (qbits - 1) - shift; // the value is in [2^e2, 2^(e2 + 1))
+    if e2 > 1023 { return 1.0e308 * 10.0; }
+    let mut p: i64 = 53;
+    if e2 < -1022 { p = e2 + 1075; } // subnormal: fewer significant bits
+    if p < 0 { return 0.0; }
+    let drop: i64 = qbits - p;
+    let mut m: u64 = q >> drop.as(u64);
+    let rem: u64 = q - (m << drop.as(u64));
+    let half: u64 = (1).as(u64) << (drop - 1).as(u64);
+    let mut up: bool = rem > half;
+    if rem == half {
+        if sticky { up = true; }
+        if (m & 1) == 1 { up = true; }
+    }
+    if up { m = m + 1; }
+    // m <= 2^53 and the power of two is between 2^-1074 and 2^971: the product is exact (or
+    // overflows to inf when rounding carried past the largest f64).
+    return m.as(f64) * fmt_pow2(drop - shift);
+}
+

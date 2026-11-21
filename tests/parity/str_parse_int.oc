@@ -1,0 +1,77 @@
+// Integer parsing and formatting in std/str.oc (issue #60, phase 2): sign handling,
+// range limits, junk and empty input (ok = false), radix 2 to 16, and text output.
+// Generated; both backends must print str_parse_int.expected exactly.
+import "std/str.oc";
+
+fn show_i(r: ParsedI64) {
+    print(r.ok);
+    print(r.value);
+}
+
+fn show_u(r: ParsedU64) {
+    print(r.ok);
+    print(r.value);
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    show_i(parse_i64("0"));
+    show_i(parse_i64("42"));
+    show_i(parse_i64("-42"));
+    show_i(parse_i64("+7"));
+    show_i(parse_i64("-0"));
+    show_i(parse_i64("007"));
+    show_i(parse_i64("9223372036854775807"));
+    show_i(parse_i64("-9223372036854775808"));
+    show_i(parse_i64("9223372036854775808"));
+    show_i(parse_i64("-9223372036854775809"));
+    show_i(parse_i64("99999999999999999999"));
+    show_i(parse_i64(""));
+    show_i(parse_i64("-"));
+    show_i(parse_i64("+"));
+    show_i(parse_i64("1a2"));
+    show_i(parse_i64("12 "));
+    show_i(parse_i64(" 12"));
+    show_i(parse_i64("--1"));
+    show_i(parse_i64("+-1"));
+    show_i(parse_i64("1.5"));
+    show_i(parse_i64("0x10"));
+    show_i(parse_i64("1_000"));
+    show_i(parse_i64_radix("ff", 16));
+    show_i(parse_i64_radix("-ff", 16));
+    show_i(parse_i64_radix("FF", 16));
+    show_i(parse_i64_radix("777", 8));
+    show_i(parse_i64_radix("8", 8));
+    show_i(parse_i64_radix("-1010", 2));
+    show_i(parse_i64_radix("102", 2));
+    show_i(parse_i64_radix("7fffffffffffffff", 16));
+    show_i(parse_i64_radix("8000000000000000", 16));
+    show_i(parse_i64_radix("-8000000000000000", 16));
+    show_i(parse_i64_radix("z", 16));
+    show_u(parse_u64("0"));
+    show_u(parse_u64("18446744073709551615"));
+    show_u(parse_u64("18446744073709551616"));
+    show_u(parse_u64("+5"));
+    show_u(parse_u64("-5"));
+    show_u(parse_u64(""));
+    show_u(parse_u64_radix("ffffffffffffffff", 16));
+    show_u(parse_u64_radix("10000000000000000", 16));
+    show_u(parse_u64_radix("11", 3));
+    show_u(parse_u64_radix("1", 1));
+    show_u(parse_u64_radix("1", 17));
+    print(i64_to_str(&mut a, 0));
+    print(i64_to_str(&mut a, 7));
+    print(i64_to_str(&mut a, -7));
+    print(i64_to_str(&mut a, 1234567890123));
+    print(i64_to_str(&mut a, -9223372036854775808));
+    print(i64_to_str(&mut a, 9223372036854775807));
+    print(u64_to_str(&mut a, 0));
+    print(u64_to_str(&mut a, 18446744073709551615));
+    print(u64_to_hex(&mut a, 0));
+    print(u64_to_hex(&mut a, 255));
+    print(u64_to_hex(&mut a, 48879));
+    print(u64_to_hex(&mut a, 18446744073709551615));
+    print_str("n="); print_i64(-12); print_str(" u="); print_u64(18446744073709551615); print_str(" h="); print_hex(3054); print_str("\n");
+    print_i64(-9223372036854775808); print_str("\n");
+    arena_deinit(&mut a);
+}

@@ -1,0 +1,7 @@
+// A string builder that runs out of arena space panics instead of writing through null.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(16);
+    print(str_repeat(&mut a, "abc", 100));
+}
