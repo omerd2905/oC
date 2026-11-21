@@ -251,7 +251,7 @@ All 4 suites completed successfully.</code></pre>
               <td><em>none</em></td>
               <td><em>Disabled</em></td>
               <td>
-                Panics at the first floating-point operation whose result is NaN or infinite, instead of letting the value propagate as IEEE 754 defines. A debugging aid: some algorithms use infinity on purpose.
+                Panics at the first floating-point operation whose result is NaN or infinite, instead of letting the value propagate as IEEE 754 defines. The panic names the operation, for example <code>panic: floating-point result is NaN or infinite at prog.oc:5:22</code>. A debugging aid: some algorithms use infinity on purpose.
               </td>
             </tr>
             <tr>
@@ -382,7 +382,7 @@ hello.exe: PE32+ AMD64 OK, W^X sections .text/.rdata, imports KERNEL32!ExitProce
         </p>
         <ul>
           <li><strong>Arguments:</strong> at most 6 register words per call and per function signature. A string counts as 2, a struct as 1 per 8 bytes, every other value as 1. A struct larger than 32 bytes cannot be passed by value; pass a pointer to it.</li>
-          <li><strong>Per program:</strong> 256 functions, 1024 call sites, 512 data relocations, 128 top-level constants, 256 KB of machine code and 64 KB of data.</li>
+          <li><strong>Per program:</strong> 256 functions, 1024 call sites, 4096 data relocations, 128 top-level constants, 256 KB of machine code and 64 KB of data.</li>
           <li><strong>Targets:</strong> <code>x86_64</code> only (Linux ELF64 and Windows PE32+); no optimization passes.</li>
         </ul>
         <p>
