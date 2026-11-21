@@ -2326,6 +2326,8 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     ng.var_scope[ng.var_count] = ng.scope_depth;
                     ng.var_arr_len[ng.var_count] = arr_len;
                     ng.var_count = ng.var_count + 1;
+                } else {
+                    ng_fail(ng, "native codegen error: too many variables in one function (256)");
                 }
 
                 // Zero-fill array using rep stosq
@@ -2400,6 +2402,8 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 ng.var_scope[ng.var_count] = ng.scope_depth;
                 ng.var_arr_len[ng.var_count] = 0;
                 ng.var_count = ng.var_count + 1;
+            } else {
+                ng_fail(ng, "native codegen error: too many variables in one function (256)");
             }
             if stmt.left != (0).as(*mut AstNode) {
                 if stmt.left.tag == NODE_STRUCT_INIT {
@@ -2450,6 +2454,8 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             ng.var_scope[ng.var_count] = ng.scope_depth;
             ng.var_arr_len[ng.var_count] = 0;
             ng.var_count = ng.var_count + 1;
+        } else {
+            ng_fail(ng, "native codegen error: too many variables in one function (256)");
         }
         ng_emit_disp_store_rax(code, off);
         if is_slice {
@@ -3266,6 +3272,8 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                     ng.const_types[ng.const_count] = c_type;
                     ng.const_vals[ng.const_count] = c_val;
                     ng.const_count = ng.const_count + 1;
+                } else {
+                    ng_fail(ng, "native codegen error: too many top-level constants (128)");
                 }
             }
         } else if scan.tag == NODE_FN {
@@ -3363,6 +3371,8 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                             param_bytes = param_bytes + (p_sz - 8);
                             ng.var_offsets[ng.var_count - 1] = ng.curr_off;
                         }
+                    } else {
+                        ng_fail(ng, "native codegen error: too many variables in one function (256)");
                     }
                     p = p.next;
                 }
