@@ -4687,6 +4687,12 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     is_literal = true;
     }
     if ((((((expr)->tok)).tag) == TOK_MINUS)) {
+    if (is_literal) {
+    if (str_eq(((((((expr)->left))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("9223372036854775808"), .len = sizeof("9223372036854775808") - 1 })) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(-9223372036854775807LL - 1)"), .len = sizeof("(-9223372036854775807LL - 1)") - 1 });
+    return;
+    }
+    }
     if ((!is_literal)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_SUB(0, "), .len = sizeof("__OC_SUB(0, ") - 1 });
     codegen_expr(((expr)->left), out);

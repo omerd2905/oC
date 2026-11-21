@@ -700,6 +700,14 @@ fn main() {
         </p>
 
         <div class="fn-box">
+          <h3>Integer limits</h3>
+          <div class="fn-sig">let I8_MIN, I8_MAX: i8 &nbsp; let I16_MIN, I16_MAX: i16 &nbsp; let I32_MIN, I32_MAX: i32 &nbsp; let I64_MIN, I64_MAX: i64<br>let U8_MAX: u8 &nbsp; let U16_MAX: u16 &nbsp; let U32_MAX: u32 &nbsp; let U64_MAX: u64 &nbsp; let USIZE_MAX: usize</div>
+          <p>
+            The smallest and largest value of each integer type (the unsigned minimum is 0). One step beyond any of them panics with <code>integer overflow</code>. A literal works too: <code>-9223372036854775808</code> is the most negative <code>i64</code>, so <code>-9223372036854775807 - 1</code> is not needed.
+          </p>
+        </div>
+
+        <div class="fn-box">
           <h3>min, max, clamp, abs, sign</h3>
           <div class="fn-sig">fn min_T(a: T, b: T) -&gt; T<br>fn max_T(a: T, b: T) -&gt; T<br>fn clamp_T(x: T, lo: T, hi: T) -&gt; T<br>fn abs_i32(x: i32) -&gt; i32 &nbsp; fn abs_i64(x: i64) -&gt; i64<br>fn sign_i32(x: i32) -&gt; i32 &nbsp; fn sign_i64(x: i64) -&gt; i32</div>
           <p>

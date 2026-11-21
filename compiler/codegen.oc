@@ -508,6 +508,15 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
         }
         if cg_float_type(expr.left, out).len > 0 { is_literal = true; } // floats: plain -x
         if expr.tok.tag == TOK_MINUS {
+            if is_literal {
+                if str_eq(expr.left.tok.slice, "9223372036854775808") {
+                    // The most negative i64: 9223372036854775808 has no signed C type, and
+                    // negating it as unsigned only reaches INT64_MIN by implementation-defined
+                    // conversion.
+                    buf_append(out, "(-9223372036854775807LL - 1)");
+                    return;
+                }
+            }
             if !is_literal {
                 // -x is 0 - x with the usual overflow check (-INT_MIN does not fit).
                 buf_append(out, "__OC_SUB(0, ");
