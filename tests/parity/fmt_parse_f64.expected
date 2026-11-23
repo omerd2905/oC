@@ -7,9 +7,9 @@
 0
 1.7976931348623157e+308
 1.7976931348623157e+308
-inf
+reject
 0
-inf
+reject
 0.5
 5
 3
@@ -23,9 +23,9 @@ inf
 1.0000000000000001e-30
 2.2250738585072009e-308
 2.2250738585072014e-308
-inf
--inf
-NaN
+reject
+reject
+reject
 reject
 reject
 reject
@@ -200,4 +200,22 @@ reject
 9.0893442818235217e+97
 1.0000000000000002
 1
+reject
+reject
+0
+reject
+reject
+1e+308
+-1.7976931348623157e+308
+inf
+-inf
+NaN
+NaN
+inf
+-inf
+inf
+1.7976931348623157e+308
+2.5
+reject
+reject
 exit 0

@@ -300,12 +300,16 @@ fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -> string {
 }
 
 // ---------------------------------------------------------------------------------------
-// parse_f64(s): decimal text to the nearest f64 (ties to even), like C's strtod.
+// parse_f64(s): decimal text to the nearest f64 (ties to even).
 //
 // Accepted: an optional sign, digits with at most one '.', at least one digit, and an
-// optional exponent (e or E, optional sign, digits); also inf, infinity and nan in any
-// case. Nothing else, not even spaces (trim first): anything else gives ok = false.
-// Magnitudes beyond the f64 range give inf, and below it 0 or a subnormal, as in IEEE 754.
+// optional exponent (e or E, optional sign, digits). Nothing else, not even spaces (trim
+// first). ok = true always means a finite value: a number too large for f64 (1e999, or
+// 1.7976931348623159e308, which rounds to infinity) gives ok = false, like an out-of-range
+// parse_i64, and so do "inf" and "nan". Values too small give 0 or a subnormal (ok = true).
+//
+// parse_f64_ieee(s) is the IEEE 754 / strtod variant: it also accepts inf, infinity and
+// nan in any case, and turns overflow into an infinity with ok = true.
 // Up to 800 significant digits take part exactly; further digits only break ties.
 // The value is computed exactly: the decimal is an integer ratio N / D, and the quotient
 // is found with big-integer long division, so the result is always correctly rounded.
@@ -454,6 +458,19 @@ fn fmt_word_is(s: string, word: string) -> bool {
 }
 
 fn parse_f64(s: string) -> ParsedF64 {
+    let r: ParsedF64 = parse_f64_text(s, false);
+    if !r.ok { return r; }
+    if r.value > 1.7976931348623157e308 { return ParsedF64 { ok: false, value: 0.0 }; }
+    if r.value < -1.7976931348623157e308 { return ParsedF64 { ok: false, value: 0.0 }; }
+    return r;
+}
+
+fn parse_f64_ieee(s: string) -> ParsedF64 {
+    return parse_f64_text(s, true);
+}
+
+// The parser behind both; `ieee` allows inf, infinity and nan.
+fn parse_f64_text(s: string, ieee: bool) -> ParsedF64 {
     let fail: ParsedF64 = ParsedF64 { ok: false, value: 0.0 };
     let mut i: usize = 0;
     let mut neg: bool = false;
@@ -472,6 +489,7 @@ fn parse_f64(s: string) -> ParsedF64 {
         sv = z / z;
     }
     if special {
+        if !ieee { return fail; }
         if neg { sv = -sv; }
         return ParsedF64 { ok: true, value: sv };
     }
