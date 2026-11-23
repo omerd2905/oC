@@ -3262,6 +3262,15 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
 }
 
 oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name) {
+    if (str_eq(s_name, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("*u8"), .len = sizeof("*u8") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     AstNode* decl = ((((v)->program))->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_STRUCT_DECL)) {
@@ -3964,12 +3973,16 @@ oc_string contains_stack_ref(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     AstNode* a = ((expr)->left);
+    size_t ai = 0;
     while ((a != ((AstNode*)(0)))) {
+    if ((!fx_param_borrows(((v)->fx), ((((expr)->tok)).slice), ai))) {
     oc_string s = contains_stack_ref(v, a);
     if ((((s).len) > 0)) {
     return s;
     }
+    }
     a = ((a)->next);
+    ai = __OC_ADD(ai, 1);
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }

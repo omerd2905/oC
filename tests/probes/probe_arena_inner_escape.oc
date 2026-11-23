@@ -1,0 +1,16 @@
+// A string borrowed (through read_line) from an arena declared inside the loop must not be
+// kept in a variable that outlives the loop: the arena is gone by then.
+import "std/mem.oc";
+import "std/io.oc";
+
+fn main() {
+    let mut keep: string = "";
+    let mut once: bool = true;
+    while once {
+        let mut inner: Arena = arena_init(4096);
+        let r: ReadLine = read_line(&mut inner);
+        keep = r.line;
+        once = false;
+    }
+    print(keep);
+}

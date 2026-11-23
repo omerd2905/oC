@@ -1,0 +1,16 @@
+// A line read into an arena must not be used after that arena is reset, even when it was
+// copied to a variable outside the loop that read it.
+import "std/mem.oc";
+import "std/io.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut keep: string = "";
+    while true {
+        let r: ReadLine = read_line(&mut a);
+        if !r.ok { break; }
+        keep = r.line;
+    }
+    arena_reset(&mut a);
+    print(keep);
+}

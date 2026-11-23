@@ -1088,6 +1088,11 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
 // array's name, or "" when `expr` is not such a slice.
 // Declared type of field `f_name` of struct `s_name` ("" if unknown).
 fn validator_field_type(v: *mut Validator, s_name: string, f_name: string) -> string {
+    if str_eq(s_name, "string") { // the built-in fat slice
+        if str_eq(f_name, "len") { return "usize"; }
+        if str_eq(f_name, "ptr") { return "*u8"; }
+        return "";
+    }
     let mut decl: *mut AstNode = v.program.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_STRUCT_DECL {
@@ -1571,10 +1576,17 @@ fn contains_stack_ref(v: *mut Validator, expr: *mut AstNode) -> string {
         if str_eq(expr.tok.slice, "sys_unlink") { return ""; }
         if str_eq(expr.tok.slice, "sys_connect") { return ""; }
         let mut a: *mut AstNode = expr.left;
+        let mut ai: usize = 0;
         while a != (0).as(*mut AstNode) {
-            let s: string = contains_stack_ref(v, a);
-            if s.len > 0 { return s; }
+            // `&mut arena` passed to a function whose result points into that arena is not
+            // a stack reference: the result is tracked as an arena borrow instead, valid
+            // wherever the arena is (get_arena_source).
+            if !fx_param_borrows(v.fx, expr.tok.slice, ai) {
+                let s: string = contains_stack_ref(v, a);
+                if s.len > 0 { return s; }
+            }
             a = a.next;
+            ai = ai + 1;
         }
         return "";
     }
