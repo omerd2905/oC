@@ -156,6 +156,72 @@ fn buf_append_ident(buf: *mut CodeBuffer, name: string) {
     if is_c_reserved(name) { buf_append(buf, "__oc"); }
 }
 
+// One byte of a string literal's text (the part between the quotes) starting at raw[k], with
+// escapes decoded: \n \t \r \0 \\ \" and \xNN. The validator has already rejected any other
+// escape. Both backends decode through this, so a literal means the same bytes on both.
+struct LitByte {
+    b: u8,
+    next: usize,
+}
+
+fn hex_digit_value(c: u8) -> u8 {
+    if c >= 48 { if c <= 57 { return c - 48; } }
+    if c >= 97 { if c <= 102 { return c - 87; } }
+    if c >= 65 { if c <= 70 { return c - 55; } }
+    return 255;
+}
+
+fn lit_next_byte(raw: string, k: usize) -> LitByte {
+    let c: u8 = raw[k];
+    if c != 92 { return LitByte { b: c, next: k + 1 }; }
+    if k + 1 >= raw.len { return LitByte { b: c, next: k + 1 }; }
+    let e: u8 = raw[k + 1];
+    if e == 110 { return LitByte { b: 10, next: k + 2 }; } // \n
+    if e == 116 { return LitByte { b: 9, next: k + 2 }; }  // \t
+    if e == 114 { return LitByte { b: 13, next: k + 2 }; } // \r
+    if e == 48 { return LitByte { b: 0, next: k + 2 }; }   // \0
+    if e == 92 { return LitByte { b: 92, next: k + 2 }; }  // \\
+    if e == 34 { return LitByte { b: 34, next: k + 2 }; }  // \"
+    if e == 120 {                                           // \xNN
+        if k + 3 < raw.len {
+            let hi: u8 = hex_digit_value(raw[k + 2]);
+            let lo: u8 = hex_digit_value(raw[k + 3]);
+            if hi < 16 {
+                if lo < 16 { return LitByte { b: (hi * 16) + lo, next: k + 4 }; }
+            }
+        }
+    }
+    return LitByte { b: c, next: k + 1 };
+}
+
+// A string literal token as a C literal: every byte that is not plain printable ASCII is
+// written as a 3-digit octal escape, so C's own escape rules (greedy \x, octal, \?,
+// trigraphs) never apply to oC source text.
+fn buf_append_c_literal(out: *mut CodeBuffer, tok_text: string) {
+    let raw: string = tok_text[1..tok_text.len - 1];
+    buf_append_u8(out, 34);
+    let mut k: usize = 0;
+    while k < raw.len {
+        let lb: LitByte = lit_next_byte(raw, k);
+        let b: u8 = lb.b;
+        let mut plain: bool = b >= 32;
+        if b > 126 { plain = false; }
+        if b == 34 { plain = false; }  // "
+        if b == 92 { plain = false; }  // \
+        if b == 63 { plain = false; }  // ? (trigraphs)
+        if plain {
+            buf_append_u8(out, b);
+        } else {
+            buf_append_u8(out, 92);
+            buf_append_u8(out, 48 + (b / 64));
+            buf_append_u8(out, 48 + ((b / 8) % 8));
+            buf_append_u8(out, 48 + (b % 8));
+        }
+        k = lb.next;
+    }
+    buf_append_u8(out, 34);
+}
+
 fn buf_to_string(buf: *mut CodeBuffer) -> string {
     return string {
         ptr: buf.buffer.as(*u8),
@@ -530,9 +596,9 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
 
     if expr.tag == NODE_STRING {
         buf_append(out, "(oc_string){ .ptr = (const uint8_t*)(");
-        buf_append(out, expr.tok.slice);
+        buf_append_c_literal(out, expr.tok.slice);
         buf_append(out, "), .len = sizeof(");
-        buf_append(out, expr.tok.slice);
+        buf_append_c_literal(out, expr.tok.slice);
         buf_append(out, ") - 1 }");
         return;
     }
@@ -931,9 +997,12 @@ fn codegen_print(node: *mut AstNode, out: *mut CodeBuffer) {
     let arg: *mut AstNode = node.left;
     if arg != (0).as(*mut AstNode) {
         if arg.tag == NODE_STRING {
-            buf_append(out, "    printf(\"%s\\n\", ");
-            buf_append(out, arg.tok.slice);
-            buf_append(out, ");\n");
+            // fwrite, not printf("%s"): a literal may contain \0, and print writes all its bytes.
+            buf_append(out, "    fwrite(");
+            buf_append_c_literal(out, arg.tok.slice);
+            buf_append(out, ", 1, sizeof(");
+            buf_append_c_literal(out, arg.tok.slice);
+            buf_append(out, ") - 1, stdout); fputc('\\n', stdout);\n");
             return;
         }
         if arg.tag == NODE_IDENT {

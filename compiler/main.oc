@@ -759,6 +759,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let combined_src: string = buf_to_string(&mut combined_buf);
 
     let mut parser: Parser = parser_init(combined_src, &mut arena);
+    parser.srcmap = &loader.map;
+    if parser.current.tag == TOK_ERROR { parser_report_lex_error(&mut parser, parser.current); }
     let prog: *mut AstNode = parse_program(&mut parser);
     if parser.has_error {
         print("compilation aborted due to parse errors");

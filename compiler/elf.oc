@@ -698,49 +698,10 @@ fn ng_append_unescaped_str(data: *mut CodeBuffer, raw: string) -> usize {
     let mut k: usize = 0;
     let mut emitted: usize = 0;
     while k < raw.len {
-        let c: u8 = raw[k];
-        if c == 92 {
-            if k + 1 < raw.len {
-                let nc: u8 = raw[k + 1];
-                if nc == 110 {
-                    buf_append_u8(data, 10);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else if nc == 116 {
-                    buf_append_u8(data, 9);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else if nc == 114 {
-                    buf_append_u8(data, 13);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else if nc == 48 {
-                    buf_append_u8(data, 0);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else if nc == 92 {
-                    buf_append_u8(data, 92);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else if nc == 34 {
-                    buf_append_u8(data, 34);
-                    emitted = emitted + 1;
-                    k = k + 2;
-                } else {
-                    buf_append_u8(data, c);
-                    emitted = emitted + 1;
-                    k = k + 1;
-                }
-            } else {
-                buf_append_u8(data, c);
-                emitted = emitted + 1;
-                k = k + 1;
-            }
-        } else {
-            buf_append_u8(data, c);
-            emitted = emitted + 1;
-            k = k + 1;
-        }
+        let lb: LitByte = lit_next_byte(raw, k);
+        buf_append_u8(data, lb.b);
+        emitted = emitted + 1;
+        k = lb.next;
     }
     return emitted;
 }

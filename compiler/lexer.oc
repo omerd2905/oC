@@ -292,14 +292,26 @@ fn lexer_next(lex: *mut Lexer) -> Token {
     if c == 34 {
         lex.index = lex.index + 1;
         lex.col = lex.col + 1;
+        let mut closed: bool = false;
         while lex.index < lex.source.len {
             let sc: u8 = lex.source[lex.index];
             if sc == 92 {
+                let mut escaped_newline: bool = false;
+                if lex.index + 1 < lex.source.len {
+                    escaped_newline = lex.source[lex.index + 1] == 10;
+                }
                 lex.index = lex.index + 2;
-                lex.col = lex.col + 2;
+                if escaped_newline {
+                    lex.line = lex.line + 1;
+                    lex.col = 1;
+                } else {
+                    lex.col = lex.col + 2;
+                }
+                if lex.index > lex.source.len { lex.index = lex.source.len; } // backslash at end of input
             } else if sc == 34 {
                 lex.index = lex.index + 1;
                 lex.col = lex.col + 1;
+                closed = true;
                 break;
             } else {
                 if sc == 10 {
@@ -312,8 +324,10 @@ fn lexer_next(lex: *mut Lexer) -> Token {
             }
         }
         let slice: string = lex.source[start_idx..lex.index];
+        let mut str_tag: u32 = TOK_STRING;
+        if !closed { str_tag = TOK_ERROR; } // reported by the parser, with its position
         return Token {
-            tag: TOK_STRING,
+            tag: str_tag,
             slice: slice,
             line: tok_line,
             col: tok_col,
@@ -444,9 +458,7 @@ fn lexer_next(lex: *mut Lexer) -> Token {
     else if c == 94 { tag = TOK_CARET; }
     else if c == 126 { tag = TOK_TILDE; }
     else {
-        print("lexical error: unexpected character at line");
-        print(tok_line);
-        tag = TOK_ERROR;
+        tag = TOK_ERROR; // reported by the parser, with its position
     }
 
     return Token {

@@ -291,6 +291,7 @@ typedef struct VarInfo VarInfo;
 typedef struct FnEffects FnEffects;
 typedef struct Validator Validator;
 typedef struct CodeBuffer CodeBuffer;
+typedef struct LitByte LitByte;
 typedef struct NativeGen NativeGen;
 typedef struct ModuleLoader ModuleLoader;
 
@@ -368,6 +369,7 @@ struct Parser {
     bool allow_struct_init;
     bool has_error;
     int32_t loop_depth;
+    SourceMap* srcmap;
 };
 
 struct VarInfo {
@@ -427,6 +429,11 @@ struct CodeBuffer {
     size_t flt_count;
     bool fp_trap;
     SourceMap* srcmap;
+};
+
+struct LitByte {
+    uint8_t b;
+    size_t next;
 };
 
 struct NativeGen {
@@ -556,6 +563,8 @@ uint32_t check_keyword(oc_string s);
 Token lexer_next(Lexer* lex);
 int32_t srcmap_file(SourceMap* m, uint32_t line);
 AstNode* ast_alloc_node(Arena* arena, uint32_t tag, Token tok);
+void parser_report_lex_error(Parser* p, Token tok);
+void parser_error(Parser* p, Token tok, oc_string msg);
 Parser parser_init(oc_string source, Arena* arena);
 void parser_advance(Parser* p);
 Token parser_expect(Parser* p, uint32_t expected_tag);
@@ -609,6 +618,8 @@ oc_string strip_ptr_type(oc_string t);
 AstNode* program_find_fn(AstNode* program, oc_string name);
 AstNode* validator_find_fn(Validator* v, oc_string name);
 bool is_builtin_fn(oc_string name);
+bool is_hex_char(uint8_t c);
+bool check_string_escapes(SourceMap* m, AstNode* node);
 bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
 bool is_int_literal(AstNode* expr);
@@ -641,6 +652,9 @@ void buf_append_src_loc(CodeBuffer* buf, SourceMap* m, Token tok, bool c_escape)
 void cg_fchk_close(CodeBuffer* out, Token tok);
 bool is_c_reserved(oc_string name);
 void buf_append_ident(CodeBuffer* buf, oc_string name);
+uint8_t hex_digit_value(uint8_t c);
+LitByte lit_next_byte(oc_string raw, size_t k);
+void buf_append_c_literal(CodeBuffer* out, oc_string tok_text);
 oc_string buf_to_string(CodeBuffer* buf);
 void buf_deinit(CodeBuffer* buf);
 oc_string to_c_type(oc_string type_name);
@@ -990,7 +1004,7 @@ uint8_t to_lower(uint8_t c) {
 uint8_t* str_alloc(Arena* arena, size_t n) {
     uint8_t* p = arena_alloc(arena, n);
     if ((((size_t)(p)) == 0)) {
-    sys_write(2, (((oc_string){ .ptr = (const uint8_t*)("panic: arena out of memory\n"), .len = sizeof("panic: arena out of memory\n") - 1 }).ptr), 27);
+    sys_write(2, (((oc_string){ .ptr = (const uint8_t*)("panic: arena out of memory\012"), .len = sizeof("panic: arena out of memory\012") - 1 }).ptr), 27);
     sys_exit(1);
     }
     return p;
@@ -1865,16 +1879,31 @@ Token lexer_next(Lexer* lex) {
     if ((c == 34)) {
     ((lex)->index) = __OC_ADD(((lex)->index), 1);
     ((lex)->col) = __OC_ADD(((lex)->col), 1);
+    bool closed = false;
     while ((((lex)->index) < ((((lex)->source)).len))) {
     uint8_t sc = __oc_index_str(((lex)->source), ((lex)->index));
     if ((sc == 92)) {
+    bool escaped_newline = false;
+    if ((__OC_ADD(((lex)->index), 1) < ((((lex)->source)).len))) {
+    escaped_newline = (__oc_index_str(((lex)->source), __OC_ADD(((lex)->index), 1)) == 10);
+    }
     ((lex)->index) = __OC_ADD(((lex)->index), 2);
+    if (escaped_newline) {
+    ((lex)->line) = __OC_ADD(((lex)->line), 1);
+    ((lex)->col) = 1;
+    }
+    else {
     ((lex)->col) = __OC_ADD(((lex)->col), 2);
+    }
+    if ((((lex)->index) > ((((lex)->source)).len))) {
+    ((lex)->index) = ((((lex)->source)).len);
+    }
     }
     else {
     if ((sc == 34)) {
     ((lex)->index) = __OC_ADD(((lex)->index), 1);
     ((lex)->col) = __OC_ADD(((lex)->col), 1);
+    closed = true;
     break;
     }
     else {
@@ -1890,7 +1919,11 @@ Token lexer_next(Lexer* lex) {
     }
     }
     oc_string slice = __oc_slice_str(((lex)->source), start_idx, ((lex)->index));
-    return (Token){ .tag = TOK_STRING, .slice = slice, .line = tok_line, .col = tok_col };
+    uint32_t str_tag = TOK_STRING;
+    if ((!closed)) {
+    str_tag = TOK_ERROR;
+    }
+    return (Token){ .tag = str_tag, .slice = slice, .line = tok_line, .col = tok_col };
     }
     if ((__OC_ADD(((lex)->index), 1) < ((((lex)->source)).len))) {
     uint8_t next_c = __oc_index_str(((lex)->source), __OC_ADD(((lex)->index), 1));
@@ -2042,8 +2075,6 @@ Token lexer_next(Lexer* lex) {
     tag = TOK_TILDE;
     }
     else {
-    printf("%s\n", "lexical error: unexpected character at line");
-    __oc_print(tok_line);
     tag = TOK_ERROR;
     }
     }
@@ -2097,6 +2128,40 @@ AstNode* ast_alloc_node(Arena* arena, uint32_t tag, Token tok) {
     return node;
 }
 
+void parser_report_lex_error(Parser* p, Token tok) {
+    print_src_loc(((p)->srcmap), tok);
+    if ((((((tok).slice)).len) > 0)) {
+    if ((__oc_index_str(((tok).slice), 0) == 34)) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: unterminated string literal (a backslash escapes the next character, so \134\042 does not end a string)\012"), .len = sizeof("error: unterminated string literal (a backslash escapes the next character, so \134\042 does not end a string)\012") - 1 });
+    return;
+    }
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: unexpected character '"), .len = sizeof("error: unexpected character '") - 1 });
+    print_str_raw(((tok).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
+}
+
+void parser_error(Parser* p, Token tok, oc_string msg) {
+    if ((((tok).tag) == TOK_ERROR)) {
+    return;
+    }
+    if ((((tok).tag) == TOK_EOF)) {
+    if (((p)->has_error)) {
+    return;
+    }
+    }
+    print_src_loc(((p)->srcmap), tok);
+    print_str_raw(msg);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" '"), .len = sizeof(" '") - 1 });
+    if ((((tok).tag) == TOK_EOF)) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("end of input"), .len = sizeof("end of input") - 1 });
+    }
+    else {
+    print_str_raw(((tok).slice));
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
+}
+
 Parser parser_init(oc_string source, Arena* arena) {
     Lexer lex = lexer_init(source);
     Token cur = lexer_next((&(lex)));
@@ -2104,13 +2169,14 @@ Parser parser_init(oc_string source, Arena* arena) {
     if ((((cur).tag) == TOK_ERROR)) {
     err = true;
     }
-    return (Parser){ .lex = lex, .current = cur, .arena = arena, .allow_struct_init = true, .has_error = err, .loop_depth = 0 };
+    return (Parser){ .lex = lex, .current = cur, .arena = arena, .allow_struct_init = true, .has_error = err, .loop_depth = 0, .srcmap = ((SourceMap*)(0)) };
 }
 
 void parser_advance(Parser* p) {
     ((p)->current) = lexer_next((&(((p)->lex))));
     if ((((((p)->current)).tag) == TOK_ERROR)) {
     ((p)->has_error) = true;
+    parser_report_lex_error(p, ((p)->current));
     }
 }
 
@@ -2120,9 +2186,7 @@ Token parser_expect(Parser* p, uint32_t expected_tag) {
     parser_advance(p);
     }
     else {
-    printf("%s\n", "parse error: unexpected token");
-    __oc_print(((tok).tag));
-    __oc_print(((tok).slice));
+    parser_error(p, tok, (oc_string){ .ptr = (const uint8_t*)("parse error: unexpected"), .len = sizeof("parse error: unexpected") - 1 });
     ((p)->has_error) = true;
     }
     return tok;
@@ -2331,8 +2395,7 @@ AstNode* parse_primary(Parser* p) {
     parser_expect(p, TOK_RPAREN);
     return inner;
     }
-    printf("%s\n", "parse error: unexpected token in expression");
-    __oc_print(((tok).slice));
+    parser_error(p, tok, (oc_string){ .ptr = (const uint8_t*)("parse error: unexpected in an expression:"), .len = sizeof("parse error: unexpected in an expression:") - 1 });
     ((p)->has_error) = true;
     parser_advance(p);
     return ((AstNode*)(0));
@@ -2703,7 +2766,7 @@ AstNode* parse_stmt(Parser* p) {
     parser_advance(p);
     parser_expect(p, TOK_SEMICOLON);
     if ((((p)->loop_depth) <= 0)) {
-    printf("%s\n", "parse error: 'break' outside of loop");
+    fwrite("parse error: 'break' outside of loop", 1, sizeof("parse error: 'break' outside of loop") - 1, stdout); fputc('\n', stdout);
     ((p)->has_error) = true;
     }
     return ast_alloc_node(((p)->arena), NODE_BREAK, tok);
@@ -2713,7 +2776,7 @@ AstNode* parse_stmt(Parser* p) {
     parser_advance(p);
     parser_expect(p, TOK_SEMICOLON);
     if ((((p)->loop_depth) <= 0)) {
-    printf("%s\n", "parse error: 'continue' outside of loop");
+    fwrite("parse error: 'continue' outside of loop", 1, sizeof("parse error: 'continue' outside of loop") - 1, stdout); fputc('\n', stdout);
     ((p)->has_error) = true;
     }
     return ast_alloc_node(((p)->arena), NODE_CONTINUE, tok);
@@ -2868,7 +2931,7 @@ void print_err_ref_invalidated(oc_string name, oc_string bv) {
     print_str_raw(name);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("' invalidated by mutable operation on '"), .len = sizeof("' invalidated by mutable operation on '") - 1 });
     print_str_raw(bv);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
 }
 
 void print_err_uaf_reset(oc_string name, oc_string arena) {
@@ -2876,7 +2939,7 @@ void print_err_uaf_reset(oc_string name, oc_string arena) {
     print_str_raw(name);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("' used after arena '"), .len = sizeof("' used after arena '") - 1 });
     print_str_raw(arena);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' was reset\n"), .len = sizeof("' was reset\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' was reset\012"), .len = sizeof("' was reset\012") - 1 });
 }
 
 void print_err_uaf_deinit(oc_string name, oc_string arena) {
@@ -2884,7 +2947,7 @@ void print_err_uaf_deinit(oc_string name, oc_string arena) {
     print_str_raw(name);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("' used after arena '"), .len = sizeof("' used after arena '") - 1 });
     print_str_raw(arena);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' was deinitialized\n"), .len = sizeof("' was deinitialized\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' was deinitialized\012"), .len = sizeof("' was deinitialized\012") - 1 });
 }
 
 void print_err_borrow_escape(oc_string src, oc_string tgt) {
@@ -2892,7 +2955,7 @@ void print_err_borrow_escape(oc_string src, oc_string tgt) {
     print_str_raw(src);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("' does not live long enough (escapes into '"), .len = sizeof("' does not live long enough (escapes into '") - 1 });
     print_str_raw(tgt);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("')\n"), .len = sizeof("')\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("')\012"), .len = sizeof("')\012") - 1 });
 }
 
 void print_err_cross_arena(oc_string arena, oc_string tgt) {
@@ -2900,19 +2963,19 @@ void print_err_cross_arena(oc_string arena, oc_string tgt) {
     print_str_raw(arena);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("' escapes into longer-lived target '"), .len = sizeof("' escapes into longer-lived target '") - 1 });
     print_str_raw(tgt);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
 }
 
 void print_err_ret_local(oc_string src) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot return reference to local stack variable '"), .len = sizeof("error: cannot return reference to local stack variable '") - 1 });
     print_str_raw(src);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
 }
 
 void print_err_ret_arena(oc_string arena) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot return reference to locally allocated arena '"), .len = sizeof("error: cannot return reference to locally allocated arena '") - 1 });
     print_str_raw(arena);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\n"), .len = sizeof("'\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
 }
 
 bool is_scalar_value_type(oc_string t) {
@@ -2987,7 +3050,7 @@ bool validator_mark_deinit(Validator* v, oc_string name) {
     return true;
     }
     if ((((v)->deinit_count) >= 128)) {
-    printf("%s\n", "security error: validator deinit table capacity exceeded");
+    fwrite("security error: validator deinit table capacity exceeded", 1, sizeof("security error: validator deinit table capacity exceeded") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -3402,6 +3465,104 @@ bool is_builtin_fn(oc_string name) {
     return false;
 }
 
+bool is_hex_char(uint8_t c) {
+    if (is_digit(c)) {
+    return true;
+    }
+    if ((c >= 97)) {
+    if ((c <= 102)) {
+    return true;
+    }
+    }
+    if ((c >= 65)) {
+    return (c <= 70);
+    }
+    return false;
+}
+
+bool check_string_escapes(SourceMap* m, AstNode* node) {
+    bool ok = true;
+    AstNode* n = node;
+    while ((n != ((AstNode*)(0)))) {
+    if ((((n)->tag) == NODE_STRING)) {
+    oc_string text = ((((n)->tok)).slice);
+    Token at = ((n)->tok);
+    ((at).col) = __OC_ADD(((at).col), 1);
+    size_t k = 1;
+    while ((__OC_ADD(k, 1) < ((text).len))) {
+    uint8_t c = __oc_index_str(text, k);
+    if ((c == 10)) {
+    ((at).line) = __OC_ADD(((at).line), 1);
+    ((at).col) = 1;
+    k = __OC_ADD(k, 1);
+    }
+    else {
+    if ((c == 92)) {
+    uint8_t e = __oc_index_str(text, __OC_ADD(k, 1));
+    bool good = false;
+    size_t width = 2;
+    if ((e == 110)) {
+    good = true;
+    }
+    if ((e == 116)) {
+    good = true;
+    }
+    if ((e == 114)) {
+    good = true;
+    }
+    if ((e == 48)) {
+    good = true;
+    }
+    if ((e == 92)) {
+    good = true;
+    }
+    if ((e == 34)) {
+    good = true;
+    }
+    if ((e == 120)) {
+    width = 4;
+    if ((__OC_ADD(k, 3) < __OC_SUB(((text).len), 1))) {
+    if (is_hex_char(__oc_index_str(text, __OC_ADD(k, 2)))) {
+    if (is_hex_char(__oc_index_str(text, __OC_ADD(k, 3)))) {
+    good = true;
+    }
+    }
+    }
+    if ((!good)) {
+    print_src_loc(m, at);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: \134x needs exactly two hex digits, as in \134x41\012"), .len = sizeof("error: \134x needs exactly two hex digits, as in \134x41\012") - 1 });
+    ok = false;
+    good = true;
+    }
+    }
+    if ((!good)) {
+    print_src_loc(m, at);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: unknown escape sequence '"), .len = sizeof("error: unknown escape sequence '") - 1 });
+    print_str_raw(__oc_slice_str(text, k, __OC_ADD(k, 2)));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' (oC has \134n \134t \134r \1340 \134\134 \134\042 and \134xNN)\012"), .len = sizeof("' (oC has \134n \134t \134r \1340 \134\134 \134\042 and \134xNN)\012") - 1 });
+    ok = false;
+    }
+    k = __OC_ADD(k, width);
+    ((at).col) = __OC_ADD(((at).col), ({ __auto_type _v = (width); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    }
+    else {
+    k = __OC_ADD(k, 1);
+    ((at).col) = __OC_ADD(((at).col), 1);
+    }
+    }
+    }
+    }
+    if ((!check_string_escapes(m, ((n)->left)))) {
+    ok = false;
+    }
+    if ((!check_string_escapes(m, ((n)->right)))) {
+    ok = false;
+    }
+    n = ((n)->next);
+    }
+    return ok;
+}
+
 bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node) {
     bool ok = true;
     AstNode* n = node;
@@ -3412,7 +3573,7 @@ bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node) {
     print_src_loc(m, ((n)->tok));
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: undefined function '"), .len = sizeof("error: undefined function '") - 1 });
     print_str_raw(((((n)->tok)).slice));
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\n"), .len = sizeof("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\012"), .len = sizeof("' (declare it with `fn`, or with `extern fn` if it lives outside oC)\012") - 1 });
     ok = false;
     }
     }
@@ -3676,7 +3837,7 @@ bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* va
     print_str_raw(place);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("; write .as("), .len = sizeof("; write .as(") - 1 });
     print_str_raw(target);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("), which checks that the value fits\n"), .len = sizeof("), which checks that the value fits\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("), which checks that the value fits\012"), .len = sizeof("), which checks that the value fits\012") - 1 });
     ((v)->has_error) = true;
     return false;
 }
@@ -3793,7 +3954,7 @@ bool validator_check_lossless_to_float(Validator* v, oc_string target, AstNode* 
     print_str_raw(((((lit)->tok)).slice));
     print_str_raw((oc_string){ .ptr = (const uint8_t*)(").as("), .len = sizeof(").as(") - 1 });
     print_str_raw(target);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)(") to accept the rounding\n"), .len = sizeof(") to accept the rounding\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(") to accept the rounding\012"), .len = sizeof(") to accept the rounding\012") - 1 });
     ((v)->has_error) = true;
     return false;
     }
@@ -3824,7 +3985,7 @@ bool validator_check_lossless_to_float(Validator* v, oc_string target, AstNode* 
     print_str_raw(target);
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("), which rounds to the nearest "), .len = sizeof("), which rounds to the nearest ") - 1 });
     print_str_raw(target);
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     ((v)->has_error) = true;
     return false;
 }
@@ -4033,7 +4194,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if ((((expr)->tag) == NODE_IDENT)) {
     if ((((((v)->initializing_var)).len) > 0)) {
     if (str_eq(((((expr)->tok)).slice), ((v)->initializing_var))) {
-    printf("%s\n", "security error: variable used in its own initializer (CWE-457)");
+    fwrite("security error: variable used in its own initializer (CWE-457)", 1, sizeof("security error: variable used in its own initializer (CWE-457)") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4168,7 +4329,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     if (is_raw_ptr) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot slice raw pointer '"), .len = sizeof("error: cannot slice raw pointer '") - 1 });
     print_str_raw(((((((expr)->left))->tok)).slice));
-    print_str_raw((oc_string){ .ptr = (const uint8_t*)("': it has no length (slice a string or a [N]T array)\n"), .len = sizeof("': it has no length (slice a string or a [N]T array)\n") - 1 });
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("': it has no length (slice a string or a [N]T array)\012"), .len = sizeof("': it has no length (slice a string or a [N]T array)\012") - 1 });
     ((v)->has_error) = true;
     return false;
     }
@@ -4191,7 +4352,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return false;
     }
     if (validator_is_float(v, ((expr)->right))) {
-    printf("%s\n", "error: an index must be an integer; convert the float with .as(usize)");
+    fwrite("error: an index must be an integer; convert the float with .as(usize)", 1, sizeof("error: an index must be an integer; convert the float with .as(usize)") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4208,7 +4369,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     is_equality = true;
     }
     if (is_equality) {
-    printf("%s\n", "error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN");
+    fwrite("error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN", 1, sizeof("error: == and != are not allowed on floats: rounding makes exact equality unreliable (0.1 + 0.2 is not 0.3). Compare with approx_eq(a, b, eps), or use is_nan(x) to test for NaN") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4229,7 +4390,7 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     int_only = true;
     }
     if (int_only) {
-    printf("%s\n", "error: the operators % & | ^ << >> are defined for integers only, not for floats");
+    fwrite("error: the operators % & | ^ << >> are defined for integers only, not for floats", 1, sizeof("error: the operators % & | ^ << >> are defined for integers only, not for floats") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4389,7 +4550,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (is_arena_copy) {
-    printf("%s\n", "security error: Arena cannot be copied by value (linear resource)");
+    fwrite("security error: Arena cannot be copied by value (linear resource)", 1, sizeof("security error: Arena cannot be copied by value (linear resource)") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4449,7 +4610,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if ((((v)->vars_count) >= 512)) {
-    printf("%s\n", "security error: validator symbol table capacity exceeded");
+    fwrite("security error: validator symbol table capacity exceeded", 1, sizeof("security error: validator symbol table capacity exceeded") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4479,7 +4640,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     int32_t lhs_idx = validator_find_var(v, ((((((stmt)->left))->tok)).slice));
     if ((lhs_idx >= 0)) {
     if ((!((__OC_AT((((v)->vars)), (({ __auto_type _v = (lhs_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).is_mut))) {
-    printf("%s\n", "security error: cannot assign to immutable variable");
+    fwrite("security error: cannot assign to immutable variable", 1, sizeof("security error: cannot assign to immutable variable") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4498,7 +4659,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (is_arena_assign) {
-    printf("%s\n", "security error: Arena cannot be copied by value (linear resource)");
+    fwrite("security error: Arena cannot be copied by value (linear resource)", 1, sizeof("security error: Arena cannot be copied by value (linear resource)") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4597,7 +4758,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     if (ptr_escape) {
     print_src_loc(((v)->srcmap), ((stmt)->tok));
-    printf("%s\n", "error: borrowed pointer escapes enclosing scope");
+    fwrite("error: borrowed pointer escapes enclosing scope", 1, sizeof("error: borrowed pointer escapes enclosing scope") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4629,7 +4790,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     if (val_escape) {
     print_src_loc(((v)->srcmap), ((stmt)->tok));
-    printf("%s\n", "error: borrowed pointer escapes enclosing scope");
+    fwrite("error: borrowed pointer escapes enclosing scope", 1, sizeof("error: borrowed pointer escapes enclosing scope") - 1, stdout); fputc('\n', stdout);
     ((v)->has_error) = true;
     return false;
     }
@@ -4746,7 +4907,7 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
-    printf("%s\n", "security error: validator symbol table capacity exceeded");
+    fwrite("security error: validator symbol table capacity exceeded", 1, sizeof("security error: validator symbol table capacity exceeded") - 1, stdout); fputc('\n', stdout);
     ((v).has_error) = true;
     return false;
     }
@@ -4790,6 +4951,9 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
 
 bool validate_program(AstNode* root, SourceMap* m) {
     if ((!check_calls_resolved(root, m, ((root)->left)))) {
+    return false;
+    }
+    if ((!check_string_escapes(m, ((root)->left)))) {
     return false;
     }
     AstNode* top = ((root)->left);
@@ -4893,8 +5057,7 @@ AstNode* parse_program(Parser* p) {
     parser_advance(p);
     }
     else {
-    printf("%s\n", "parse error: unexpected top-level token");
-    __oc_print(((((p)->current)).slice));
+    parser_error(p, ((p)->current), (oc_string){ .ptr = (const uint8_t*)("parse error: unexpected at top level:"), .len = sizeof("parse error: unexpected at top level:") - 1 });
     ((p)->has_error) = true;
     parser_advance(p);
     }
@@ -4990,9 +5153,9 @@ void buf_append_src_loc(CodeBuffer* buf, SourceMap* m, Token tok, bool c_escape)
 }
 
 void cg_fchk_close(CodeBuffer* out, Token tok) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", \""), .len = sizeof(", \"") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", \042"), .len = sizeof(", \042") - 1 });
     buf_append_src_loc(out, ((out)->srcmap), tok, true);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\")"), .len = sizeof("\")") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\042)"), .len = sizeof("\042)") - 1 });
 }
 
 bool is_c_reserved(oc_string name) {
@@ -5068,6 +5231,100 @@ void buf_append_ident(CodeBuffer* buf, oc_string name) {
     if (is_c_reserved(name)) {
     buf_append(buf, (oc_string){ .ptr = (const uint8_t*)("__oc"), .len = sizeof("__oc") - 1 });
     }
+}
+
+uint8_t hex_digit_value(uint8_t c) {
+    if ((c >= 48)) {
+    if ((c <= 57)) {
+    return __OC_SUB(c, 48);
+    }
+    }
+    if ((c >= 97)) {
+    if ((c <= 102)) {
+    return __OC_SUB(c, 87);
+    }
+    }
+    if ((c >= 65)) {
+    if ((c <= 70)) {
+    return __OC_SUB(c, 55);
+    }
+    }
+    return 255;
+}
+
+LitByte lit_next_byte(oc_string raw, size_t k) {
+    uint8_t c = __oc_index_str(raw, k);
+    if ((c != 92)) {
+    return (LitByte){ .b = c, .next = __OC_ADD(k, 1) };
+    }
+    if ((__OC_ADD(k, 1) >= ((raw).len))) {
+    return (LitByte){ .b = c, .next = __OC_ADD(k, 1) };
+    }
+    uint8_t e = __oc_index_str(raw, __OC_ADD(k, 1));
+    if ((e == 110)) {
+    return (LitByte){ .b = 10, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 116)) {
+    return (LitByte){ .b = 9, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 114)) {
+    return (LitByte){ .b = 13, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 48)) {
+    return (LitByte){ .b = 0, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 92)) {
+    return (LitByte){ .b = 92, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 34)) {
+    return (LitByte){ .b = 34, .next = __OC_ADD(k, 2) };
+    }
+    if ((e == 120)) {
+    if ((__OC_ADD(k, 3) < ((raw).len))) {
+    uint8_t hi = hex_digit_value(__oc_index_str(raw, __OC_ADD(k, 2)));
+    uint8_t lo = hex_digit_value(__oc_index_str(raw, __OC_ADD(k, 3)));
+    if ((hi < 16)) {
+    if ((lo < 16)) {
+    return (LitByte){ .b = __OC_ADD(__OC_MUL(hi, 16), lo), .next = __OC_ADD(k, 4) };
+    }
+    }
+    }
+    }
+    return (LitByte){ .b = c, .next = __OC_ADD(k, 1) };
+}
+
+void buf_append_c_literal(CodeBuffer* out, oc_string tok_text) {
+    oc_string raw = __oc_slice_str(tok_text, 1, __OC_SUB(((tok_text).len), 1));
+    buf_append_u8(out, 34);
+    size_t k = 0;
+    while ((k < ((raw).len))) {
+    LitByte lb = lit_next_byte(raw, k);
+    uint8_t b = ((lb).b);
+    bool plain = (b >= 32);
+    if ((b > 126)) {
+    plain = false;
+    }
+    if ((b == 34)) {
+    plain = false;
+    }
+    if ((b == 92)) {
+    plain = false;
+    }
+    if ((b == 63)) {
+    plain = false;
+    }
+    if (plain) {
+    buf_append_u8(out, b);
+    }
+    else {
+    buf_append_u8(out, 92);
+    buf_append_u8(out, __OC_ADD(48, __OC_DIV(b, 64)));
+    buf_append_u8(out, __OC_ADD(48, __OC_MOD(__OC_DIV(b, 8), 8)));
+    buf_append_u8(out, __OC_ADD(48, __OC_MOD(b, 8)));
+    }
+    k = ((lb).next);
+    }
+    buf_append_u8(out, 34);
 }
 
 oc_string buf_to_string(CodeBuffer* buf) {
@@ -5580,9 +5837,9 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     if ((((expr)->tag) == NODE_STRING)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("(oc_string){ .ptr = (const uint8_t*)("), .len = sizeof("(oc_string){ .ptr = (const uint8_t*)(") - 1 });
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_c_literal(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), .len = sizeof("), .len = sizeof("), .len = sizeof(") - 1 });
-    buf_append(out, ((((expr)->tok)).slice));
+    buf_append_c_literal(out, ((((expr)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") - 1 }"), .len = sizeof(") - 1 }") - 1 });
     return;
     }
@@ -5668,10 +5925,10 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" && _f < "), .len = sizeof(" && _f < ") - 1 });
     buf_append(out, float_cast_hi(((expr)->type_name)));
     if (str_eq(float_cast_lo(((expr)->type_name)), (oc_string){ .ptr = (const uint8_t*)("-1.0"), .len = sizeof("-1.0") - 1 })) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } (") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \042panic: invalid unsigned cast\134n\042); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \042panic: invalid unsigned cast\134n\042); exit(1); } (") - 1 });
     }
     else {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } (") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")) { fprintf(stderr, \042panic: invalid signed cast\134n\042); exit(1); } ("), .len = sizeof(")) { fprintf(stderr, \042panic: invalid signed cast\134n\042); exit(1); } (") - 1 });
     }
     emit_c_type(((expr)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")_f; })"), .len = sizeof(")_f; })") - 1 });
@@ -5741,7 +5998,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     }
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } ("), .len = sizeof(") { fprintf(stderr, \"panic: invalid unsigned cast\\n\"); exit(1); } (") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") { fprintf(stderr, \042panic: invalid unsigned cast\134n\042); exit(1); } ("), .len = sizeof(") { fprintf(stderr, \042panic: invalid unsigned cast\134n\042); exit(1); } (") - 1 });
     emit_c_type(((expr)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")_v; })"), .len = sizeof(")_v; })") - 1 });
     return;
@@ -5766,7 +6023,7 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     }
     }
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } ("), .len = sizeof(") { fprintf(stderr, \"panic: invalid signed cast\\n\"); exit(1); } (") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") { fprintf(stderr, \042panic: invalid signed cast\134n\042); exit(1); } ("), .len = sizeof(") { fprintf(stderr, \042panic: invalid signed cast\134n\042); exit(1); } (") - 1 });
     emit_c_type(((expr)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")_v; })"), .len = sizeof(")_v; })") - 1 });
     return;
@@ -6072,18 +6329,20 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     AstNode* arg = ((node)->left);
     if ((arg != ((AstNode*)(0)))) {
     if ((((arg)->tag) == NODE_STRING)) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\"%s\\n\", "), .len = sizeof("    printf(\"%s\\n\", ") - 1 });
-    buf_append(out, ((((arg)->tok)).slice));
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    fwrite("), .len = sizeof("    fwrite(") - 1 });
+    buf_append_c_literal(out, ((((arg)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", 1, sizeof("), .len = sizeof(", 1, sizeof(") - 1 });
+    buf_append_c_literal(out, ((((arg)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") - 1, stdout); fputc('\134n', stdout);\012"), .len = sizeof(") - 1, stdout); fputc('\134n', stdout);\012") - 1 });
     return;
     }
     if ((((arg)->tag) == NODE_IDENT)) {
     if (is_u8_array_type(cg_var_type(out, ((((arg)->tok)).slice)))) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\"%.*s\\n\", (int)sizeof("), .len = sizeof("    printf(\"%.*s\\n\", (int)sizeof(") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    printf(\042%.*s\134n\042, (int)sizeof("), .len = sizeof("    printf(\042%.*s\134n\042, (int)sizeof(") - 1 });
     buf_append_ident(out, ((((arg)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), (const char*)"), .len = sizeof("), (const char*)") - 1 });
     buf_append_ident(out, ((((arg)->tok)).slice));
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\012"), .len = sizeof(");\012") - 1 });
     return;
     }
     }
@@ -6092,7 +6351,7 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     if ((((print_ft).len) > 0)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    fmt_print_f64((double)("), .len = sizeof("    fmt_print_f64((double)(") - 1 });
     codegen_expr(arg, out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("));\n"), .len = sizeof("));\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("));\012"), .len = sizeof("));\012") - 1 });
     return;
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    __oc_print("), .len = sizeof("    __oc_print(") - 1 });
@@ -6104,7 +6363,7 @@ void codegen_print(AstNode* node, CodeBuffer* out) {
     else {
     codegen_expr(arg, out);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\012"), .len = sizeof(");\012") - 1 });
 }
 
 void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
@@ -6113,11 +6372,11 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     if ((((stmt)->left) == ((AstNode*)(0)))) {
     if (str_eq(((((stmt)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("break"), .len = sizeof("break") - 1 })) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    break;\n"), .len = sizeof("    break;\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    break;\012"), .len = sizeof("    break;\012") - 1 });
     return;
     }
     if (str_eq(((((stmt)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("continue"), .len = sizeof("continue") - 1 })) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    continue;\n"), .len = sizeof("    continue;\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    continue;\012"), .len = sizeof("    continue;\012") - 1 });
     return;
     }
     }
@@ -6201,7 +6460,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     else {
     if ((((first_el)->tag) == NODE_STRING)) {
-    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("\"\""), .len = sizeof("\"\"") - 1 })) {
+    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("\042\042"), .len = sizeof("\042\042") - 1 })) {
     is_single_zero = true;
     }
     }
@@ -6221,12 +6480,12 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     }
     if (use_zero_init) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("] = {0};\n"), .len = sizeof("] = {0};\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("] = {0};\012"), .len = sizeof("] = {0};\012") - 1 });
     }
     else {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("] = "), .len = sizeof("] = ") - 1 });
     codegen_expr(((stmt)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     }
     return;
     }
@@ -6239,7 +6498,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append_ident(out, ((((stmt)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((stmt)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     return;
     }
     if ((((stmt)->tag) == NODE_RETURN)) {
@@ -6248,7 +6507,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
     codegen_expr(((stmt)->left), out);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     return;
     }
     if ((((stmt)->tag) == NODE_ASSIGN)) {
@@ -6256,14 +6515,14 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     codegen_expr(((stmt)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((stmt)->right), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     return;
     }
     size_t scope_mark = ((out)->var_types_len);
     if ((((stmt)->tag) == NODE_IF)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if ("), .len = sizeof("    if (") - 1 });
     codegen_expr(((stmt)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\n"), .len = sizeof(") {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\012"), .len = sizeof(") {\012") - 1 });
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     AstNode* s = ((((stmt)->right))->left);
     while ((s != ((AstNode*)(0)))) {
@@ -6272,10 +6531,10 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     }
     ((out)->var_types_len) = scope_mark;
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\012"), .len = sizeof("    }\012") - 1 });
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->next) != ((AstNode*)(0)))) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    else {\n"), .len = sizeof("    else {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    else {\012"), .len = sizeof("    else {\012") - 1 });
     if ((((((((stmt)->right))->next))->tag) == NODE_IF)) {
     codegen_stmt(((((stmt)->right))->next), out);
     }
@@ -6287,7 +6546,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     }
     ((out)->var_types_len) = scope_mark;
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\012"), .len = sizeof("    }\012") - 1 });
     }
     }
     return;
@@ -6295,7 +6554,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     if ((((stmt)->tag) == NODE_WHILE)) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    while ("), .len = sizeof("    while (") - 1 });
     codegen_expr(((stmt)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\n"), .len = sizeof(") {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\012"), .len = sizeof(") {\012") - 1 });
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     AstNode* s = ((((stmt)->right))->left);
     while ((s != ((AstNode*)(0)))) {
@@ -6304,23 +6563,23 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     }
     ((out)->var_types_len) = scope_mark;
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\012"), .len = sizeof("    }\012") - 1 });
     return;
     }
     if ((((stmt)->tag) == NODE_BLOCK)) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    {\n"), .len = sizeof("    {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    {\012"), .len = sizeof("    {\012") - 1 });
     AstNode* s = ((stmt)->left);
     while ((s != ((AstNode*)(0)))) {
     codegen_stmt(s, out);
     s = ((s)->next);
     }
     ((out)->var_types_len) = scope_mark;
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\n"), .len = sizeof("    }\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    }\012"), .len = sizeof("    }\012") - 1 });
     return;
     }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    "), .len = sizeof("    ") - 1 });
     codegen_expr(stmt, out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
 }
 
 bool is_builtin_c_fn(oc_string fn_name) {
@@ -6388,141 +6647,141 @@ bool is_builtin_c_fn(oc_string fn_name) {
 }
 
 void codegen_program(AstNode* root, CodeBuffer* out) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \"-Wmain\"\n"), .len = sizeof("#pragma GCC diagnostic ignored \"-Wmain\"\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \"-Wdiscarded-qualifiers\"\n"), .len = sizeof("#pragma GCC diagnostic ignored \"-Wdiscarded-qualifiers\"\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \"-Wpointer-sign\"\n"), .len = sizeof("#pragma GCC diagnostic ignored \"-Wpointer-sign\"\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \"-Wincompatible-pointer-types\"\n"), .len = sizeof("#pragma GCC diagnostic ignored \"-Wincompatible-pointer-types\"\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdio.h>\n"), .len = sizeof("#include <stdio.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdint.h>\n"), .len = sizeof("#include <stdint.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdbool.h>\n"), .len = sizeof("#include <stdbool.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdlib.h>\n"), .len = sizeof("#include <stdlib.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <string.h>\n"), .len = sizeof("#include <string.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <fcntl.h>\n"), .len = sizeof("#include <fcntl.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/stat.h>\n"), .len = sizeof("#include <sys/stat.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <io.h>\n"), .len = sizeof("#include <io.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\n"), .len = sizeof("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\n"), .len = sizeof("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST _O_NOINHERIT\n"), .len = sizeof("#define O_CLOEXEC_HOST _O_NOINHERIT\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <unistd.h>\n"), .len = sizeof("#include <unistd.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/mman.h>\n"), .len = sizeof("#include <sys/mman.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/socket.h>\n"), .len = sizeof("#include <sys/socket.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef MAP_ANONYMOUS\n#define MAP_ANONYMOUS MAP_ANON\n#endif\n"), .len = sizeof("#ifndef MAP_ANONYMOUS\n#define MAP_ANONYMOUS MAP_ANON\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST O_CLOEXEC\n"), .len = sizeof("#define O_CLOEXEC_HOST O_CLOEXEC\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n"), .len = sizeof("#ifndef O_NOFOLLOW\n#define O_NOFOLLOW 0\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n"), .len = sizeof("#ifndef O_BINARY\n#define O_BINARY 0\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htons\n#undef htons\n#endif\n"), .len = sizeof("#ifdef htons\n#undef htons\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohs\n#undef ntohs\n#endif\n"), .len = sizeof("#ifdef ntohs\n#undef ntohs\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htonl\n#undef htonl\n#endif\n"), .len = sizeof("#ifdef htonl\n#undef htonl\n#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohl\n#undef ntohl\n#endif\n\n"), .len = sizeof("#ifdef ntohl\n#undef ntohl\n#endif\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n"), .len = sizeof("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\n"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\n"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }\n"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\n"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\n"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\n"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\n"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\n"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\n"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\n"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\n"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\n"), .len = sizeof("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n"), .len = sizeof("#ifdef _WIN32\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <direct.h>\n"), .len = sizeof("#include <direct.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) ? 0 : -1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) ? 0 : -1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\n"), .len = sizeof("#if defined(_WIN32)\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n"), .len = sizeof("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) ? -1 : (int64_t)n; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__)\n"), .len = sizeof("#elif defined(__APPLE__)\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <limits.h>\n"), .len = sizeof("#include <limits.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <mach-o/dyld.h>\n"), .len = sizeof("#include <mach-o/dyld.h>\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\n"), .len = sizeof("#else\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? readlink(\"/proc/self/exe\", buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\n"), .len = sizeof("#endif\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n"), .len = sizeof("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n"), .len = sizeof("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\n"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n"), .len = sizeof("#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n"), .len = sizeof("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 3; }\n"), .len = sizeof("#elif defined(__APPLE__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 3; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n"), .len = sizeof("#elif defined(__linux__) && defined(__x86_64__)\nstatic inline int32_t sys_host_target(void) { return 1; }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n"), .len = sizeof("#else\nstatic inline int32_t sys_host_target(void) { return 0; }\n#endif\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\n#define __OC_STDOUT_BUF _IONBF\n#else\n#define __OC_STDOUT_BUF _IOLBF\n#endif\n\n"), .len = sizeof("#ifdef _WIN32\n#define __OC_STDOUT_BUF _IONBF\n#else\n#define __OC_STDOUT_BUF _IOLBF\n#endif\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct {\n"), .len = sizeof("typedef struct {\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t* ptr;\n"), .len = sizeof("    const uint8_t* ptr;\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    size_t len;\n"), .len = sizeof("    size_t len;\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("} oc_string;\n\n"), .len = sizeof("} oc_string;\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_str(const char* s) { printf(\"%s\\n\", s); }\n"), .len = sizeof("static inline void __oc_print_str(const char* s) { printf(\"%s\\n\", s); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_u8_ptr(uint8_t* s) { printf(\"%s\\n\", (const char*)s); }\n"), .len = sizeof("static inline void __oc_print_u8_ptr(uint8_t* s) { printf(\"%s\\n\", (const char*)s); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_const_u8_ptr(const uint8_t* s) { printf(\"%s\\n\", (const char*)s); }\n"), .len = sizeof("static inline void __oc_print_const_u8_ptr(const uint8_t* s) { printf(\"%s\\n\", (const char*)s); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_oc_string(oc_string s) { printf(\"%.*s\\n\", (int)s.len, (const char*)s.ptr); }\n"), .len = sizeof("static inline void __oc_print_oc_string(oc_string s) { printf(\"%.*s\\n\", (int)s.len, (const char*)s.ptr); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_bool(bool b) { printf(\"%s\\n\", b ? \"true\" : \"false\"); }\n"), .len = sizeof("static inline void __oc_print_bool(bool b) { printf(\"%s\\n\", b ? \"true\" : \"false\"); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_u64(uint64_t u) { printf(\"%llu\\n\", (unsigned long long)u); }\n"), .len = sizeof("static inline void __oc_print_u64(uint64_t u) { printf(\"%llu\\n\", (unsigned long long)u); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_i64(int64_t i) { printf(\"%lld\\n\", (long long)i); }\n\n"), .len = sizeof("static inline void __oc_print_i64(int64_t i) { printf(\"%lld\\n\", (long long)i); }\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __oc_print(x) _Generic((x), \\\n"), .len = sizeof("#define __oc_print(x) _Generic((x), \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    char*: __oc_print_str, \\\n"), .len = sizeof("    char*: __oc_print_str, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const char*: __oc_print_str, \\\n"), .len = sizeof("    const char*: __oc_print_str, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    uint8_t*: __oc_print_u8_ptr, \\\n"), .len = sizeof("    uint8_t*: __oc_print_u8_ptr, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t*: __oc_print_const_u8_ptr, \\\n"), .len = sizeof("    const uint8_t*: __oc_print_const_u8_ptr, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    oc_string: __oc_print_oc_string, \\\n"), .len = sizeof("    oc_string: __oc_print_oc_string, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    bool: __oc_print_bool, \\\n"), .len = sizeof("    bool: __oc_print_bool, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    signed char: __oc_print_i64, \\\n"), .len = sizeof("    signed char: __oc_print_i64, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    short: __oc_print_i64, \\\n"), .len = sizeof("    short: __oc_print_i64, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    int: __oc_print_i64, \\\n"), .len = sizeof("    int: __oc_print_i64, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long: __oc_print_i64, \\\n"), .len = sizeof("    long: __oc_print_i64, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long long: __oc_print_i64, \\\n"), .len = sizeof("    long long: __oc_print_i64, \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    default: __oc_print_u64 \\\n"), .len = sizeof("    default: __oc_print_u64 \\\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")(x)\n\n"), .len = sizeof(")(x)\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {\n"), .len = sizeof("static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (start > end || end > s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite at %s\\n\", loc); exit(1); } _r; })\n\n"), .len = sizeof("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite at %s\\n\", loc); exit(1); } _r; })\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n"), .len = sizeof("    if (idx >= s.len) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return s.ptr[idx];\n"), .len = sizeof("    return s.ptr[idx];\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n"), .len = sizeof("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n"), .len = sizeof("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n"), .len = sizeof("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return a / b;\n"), .len = sizeof("    return a / b;\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t __oc_mod_check(int64_t a, int64_t b) {\n"), .len = sizeof("static inline int64_t __oc_mod_check(int64_t a, int64_t b) {\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n"), .len = sizeof("    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return a % b;\n"), .len = sizeof("    return a % b;\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \"panic: null pointer dereference\\n\"); exit(1); } _p; })\n"), .len = sizeof("#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \"panic: null pointer dereference\\n\"); exit(1); } _p; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a / _b; })\n"), .len = sizeof("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a / _b; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n"), .len = sizeof("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n"), .len = sizeof("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n"), .len = sizeof("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wmain\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wmain\042\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wdiscarded-qualifiers\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wdiscarded-qualifiers\042\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wpointer-sign\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wpointer-sign\042\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wincompatible-pointer-types\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wincompatible-pointer-types\042\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdio.h>\012"), .len = sizeof("#include <stdio.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdint.h>\012"), .len = sizeof("#include <stdint.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdbool.h>\012"), .len = sizeof("#include <stdbool.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdlib.h>\012"), .len = sizeof("#include <stdlib.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <string.h>\012"), .len = sizeof("#include <string.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <fcntl.h>\012"), .len = sizeof("#include <fcntl.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/stat.h>\012"), .len = sizeof("#include <sys/stat.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\012"), .len = sizeof("#ifdef _WIN32\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <io.h>\012"), .len = sizeof("#include <io.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\012"), .len = sizeof("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\012"), .len = sizeof("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST _O_NOINHERIT\012"), .len = sizeof("#define O_CLOEXEC_HOST _O_NOINHERIT\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <unistd.h>\012"), .len = sizeof("#include <unistd.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/mman.h>\012"), .len = sizeof("#include <sys/mman.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/socket.h>\012"), .len = sizeof("#include <sys/socket.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef MAP_ANONYMOUS\012#define MAP_ANONYMOUS MAP_ANON\012#endif\012"), .len = sizeof("#ifndef MAP_ANONYMOUS\012#define MAP_ANONYMOUS MAP_ANON\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST O_CLOEXEC\012"), .len = sizeof("#define O_CLOEXEC_HOST O_CLOEXEC\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\012"), .len = sizeof("#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_NOFOLLOW\012#define O_NOFOLLOW 0\012#endif\012"), .len = sizeof("#ifndef O_NOFOLLOW\012#define O_NOFOLLOW 0\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifndef O_BINARY\012#define O_BINARY 0\012#endif\012"), .len = sizeof("#ifndef O_BINARY\012#define O_BINARY 0\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htons\012#undef htons\012#endif\012"), .len = sizeof("#ifdef htons\012#undef htons\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohs\012#undef ntohs\012#endif\012"), .len = sizeof("#ifdef ntohs\012#undef ntohs\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef htonl\012#undef htonl\012#endif\012"), .len = sizeof("#ifdef htonl\012#undef htonl\012#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef ntohl\012#undef ntohl\012#endif\012\012"), .len = sizeof("#ifdef ntohl\012#undef ntohl\012#endif\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\012"), .len = sizeof("static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\012"), .len = sizeof("#ifdef _WIN32\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\012"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\012"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\012"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\012"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p \077 p : (void*)-1; }\012"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p \077 p : (void*)-1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) \077 0 : -1; }\012"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) \077 0 : -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) \077 _S_IWRITE : 0)); }\012"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) \077 _S_IWRITE : 0)); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\012"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\012"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\012"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\012"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\012"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\012"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\012"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\012"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\012"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\012"), .len = sizeof("#if defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\012"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { uint8_t sa[128]; if (len > sizeof sa) return -1; memcpy(sa, addr, len); sa[1] = sa[0]; sa[0] = (uint8_t)len; return (int32_t)connect(fd, (const struct sockaddr*)sa, (socklen_t)len); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\012"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { return (int32_t)connect(fd, (const struct sockaddr*)addr, (socklen_t)len); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\012"), .len = sizeof("#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\012"), .len = sizeof("#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\012"), .len = sizeof("#ifdef _WIN32\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <direct.h>\012"), .len = sizeof("#include <direct.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) \077 0 : -1; }\012"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return (_mktemp(tmpl) != 0 && _mkdir(tmpl) == 0) \077 0 : -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\012"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)_rmdir(path); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) \077 0 : -1; }\012"), .len = sizeof("static inline int32_t sys_mkdtemp(char* tmpl) { return mkdtemp(tmpl) \077 0 : -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\012"), .len = sizeof("static inline int32_t sys_rmdir(const char* path) { return (int32_t)rmdir(path); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\012"), .len = sizeof("#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\012"), .len = sizeof("#if defined(_WIN32)\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\012"), .len = sizeof("__declspec(dllimport) unsigned long __stdcall GetModuleFileNameA(void*, char*, unsigned long);\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) \077 -1 : (int64_t)n; }\012"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { unsigned long n = GetModuleFileNameA(0, buf, (unsigned long)cap); return (n == 0 || n >= cap) \077 -1 : (int64_t)n; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__)\012"), .len = sizeof("#elif defined(__APPLE__)\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <limits.h>\012"), .len = sizeof("#include <limits.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <mach-o/dyld.h>\012"), .len = sizeof("#include <mach-o/dyld.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\012"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { char raw[PATH_MAX]; char real[PATH_MAX]; uint32_t sz = sizeof raw; if (_NSGetExecutablePath(raw, &sz) != 0 || !realpath(raw, real)) return -1; size_t n = strlen(real); if (n >= cap) return -1; memcpy(buf, real, n + 1); return (int64_t)n; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap \077 readlink(\042/proc/self/exe\042, buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\012"), .len = sizeof("static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap \077 readlink(\042/proc/self/exe\042, buf, cap - 1) : -1; if (n <= 0) return -1; buf[n] = 0; return (int64_t)n; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#endif\012"), .len = sizeof("#endif\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\012"), .len = sizeof("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\012"), .len = sizeof("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\012"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\012static inline int32_t sys_host_target(void) { return 2; }\012"), .len = sizeof("#if defined(_WIN32)\012static inline int32_t sys_host_target(void) { return 2; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\012static inline int32_t sys_host_target(void) { return 4; }\012"), .len = sizeof("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\012static inline int32_t sys_host_target(void) { return 4; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 3; }\012"), .len = sizeof("#elif defined(__APPLE__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 3; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__linux__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 1; }\012"), .len = sizeof("#elif defined(__linux__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012static inline int32_t sys_host_target(void) { return 0; }\012#endif\012\012"), .len = sizeof("#else\012static inline int32_t sys_host_target(void) { return 0; }\012#endif\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\012#define __OC_STDOUT_BUF _IONBF\012#else\012#define __OC_STDOUT_BUF _IOLBF\012#endif\012\012"), .len = sizeof("#ifdef _WIN32\012#define __OC_STDOUT_BUF _IONBF\012#else\012#define __OC_STDOUT_BUF _IOLBF\012#endif\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("typedef struct {\012"), .len = sizeof("typedef struct {\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t* ptr;\012"), .len = sizeof("    const uint8_t* ptr;\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    size_t len;\012"), .len = sizeof("    size_t len;\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("} oc_string;\012\012"), .len = sizeof("} oc_string;\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_str(const char* s) { printf(\042%s\134n\042, s); }\012"), .len = sizeof("static inline void __oc_print_str(const char* s) { printf(\042%s\134n\042, s); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_u8_ptr(uint8_t* s) { printf(\042%s\134n\042, (const char*)s); }\012"), .len = sizeof("static inline void __oc_print_u8_ptr(uint8_t* s) { printf(\042%s\134n\042, (const char*)s); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_const_u8_ptr(const uint8_t* s) { printf(\042%s\134n\042, (const char*)s); }\012"), .len = sizeof("static inline void __oc_print_const_u8_ptr(const uint8_t* s) { printf(\042%s\134n\042, (const char*)s); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_oc_string(oc_string s) { printf(\042%.*s\134n\042, (int)s.len, (const char*)s.ptr); }\012"), .len = sizeof("static inline void __oc_print_oc_string(oc_string s) { printf(\042%.*s\134n\042, (int)s.len, (const char*)s.ptr); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_bool(bool b) { printf(\042%s\134n\042, b \077 \042true\042 : \042false\042); }\012"), .len = sizeof("static inline void __oc_print_bool(bool b) { printf(\042%s\134n\042, b \077 \042true\042 : \042false\042); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_u64(uint64_t u) { printf(\042%llu\134n\042, (unsigned long long)u); }\012"), .len = sizeof("static inline void __oc_print_u64(uint64_t u) { printf(\042%llu\134n\042, (unsigned long long)u); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void __oc_print_i64(int64_t i) { printf(\042%lld\134n\042, (long long)i); }\012\012"), .len = sizeof("static inline void __oc_print_i64(int64_t i) { printf(\042%lld\134n\042, (long long)i); }\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __oc_print(x) _Generic((x), \134\012"), .len = sizeof("#define __oc_print(x) _Generic((x), \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    char*: __oc_print_str, \134\012"), .len = sizeof("    char*: __oc_print_str, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const char*: __oc_print_str, \134\012"), .len = sizeof("    const char*: __oc_print_str, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    uint8_t*: __oc_print_u8_ptr, \134\012"), .len = sizeof("    uint8_t*: __oc_print_u8_ptr, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    const uint8_t*: __oc_print_const_u8_ptr, \134\012"), .len = sizeof("    const uint8_t*: __oc_print_const_u8_ptr, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    oc_string: __oc_print_oc_string, \134\012"), .len = sizeof("    oc_string: __oc_print_oc_string, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    bool: __oc_print_bool, \134\012"), .len = sizeof("    bool: __oc_print_bool, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    signed char: __oc_print_i64, \134\012"), .len = sizeof("    signed char: __oc_print_i64, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    short: __oc_print_i64, \134\012"), .len = sizeof("    short: __oc_print_i64, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    int: __oc_print_i64, \134\012"), .len = sizeof("    int: __oc_print_i64, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long: __oc_print_i64, \134\012"), .len = sizeof("    long: __oc_print_i64, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    long long: __oc_print_i64, \134\012"), .len = sizeof("    long long: __oc_print_i64, \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    default: __oc_print_u64 \134\012"), .len = sizeof("    default: __oc_print_u64 \134\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")(x)\012\012"), .len = sizeof(")(x)\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {\012"), .len = sizeof("static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (start > end || end > s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012"), .len = sizeof("    if (start > end || end > s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012"), .len = sizeof("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (idx >= s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012"), .len = sizeof("    if (idx >= s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return s.ptr[idx];\012"), .len = sizeof("    return s.ptr[idx];\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } &(a)[_i]; })))\012\012"), .len = sizeof("#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } &(a)[_i]; })))\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\012"), .len = sizeof("static inline int64_t __oc_div_check(int64_t a, int64_t b) {\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); }\012"), .len = sizeof("    if (b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return a / b;\012"), .len = sizeof("    return a / b;\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t __oc_mod_check(int64_t a, int64_t b) {\012"), .len = sizeof("static inline int64_t __oc_mod_check(int64_t a, int64_t b) {\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); }\012"), .len = sizeof("    if (b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return a % b;\012"), .len = sizeof("    return a % b;\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \042panic: null pointer dereference\134n\042); exit(1); } _p; })\012"), .len = sizeof("#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \042panic: null pointer dereference\134n\042); exit(1); } _p; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } _a / _b; })\012"), .len = sizeof("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } _a / _b; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } _a % _b; })\012"), .len = sizeof("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } _a % _b; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\012\012"), .len = sizeof("#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\012\012") - 1 });
     __OC_AT((((out)->ptr_fields)), (0)) = (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
     ((out)->ptr_fields_count) = 1;
     AstNode* scan_decl = ((root)->left);
@@ -6588,11 +6847,11 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append_ident(out, ((((g_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" = "), .len = sizeof(" = ") - 1 });
     codegen_expr(((g_decl)->left), out);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     }
     g_decl = ((g_decl)->next);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     AstNode* s_decl = ((root)->left);
     while ((s_decl != ((AstNode*)(0)))) {
     if ((((s_decl)->tag) == NODE_STRUCT_DECL)) {
@@ -6600,11 +6859,11 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append_ident(out, ((((s_decl)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
     buf_append_ident(out, ((((s_decl)->tok)).slice));
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     }
     s_decl = ((s_decl)->next);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     s_decl = ((root)->left);
     while ((s_decl != ((AstNode*)(0)))) {
     if ((((s_decl)->tag) == NODE_STRUCT_DECL)) {
@@ -6613,7 +6872,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__attribute__((packed)) "), .len = sizeof("__attribute__((packed)) ") - 1 });
     }
     buf_append_ident(out, ((((s_decl)->tok)).slice));
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" {\n"), .len = sizeof(" {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" {\012"), .len = sizeof(" {\012") - 1 });
     AstNode* f = ((s_decl)->left);
     while ((f != ((AstNode*)(0)))) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    "), .len = sizeof("    ") - 1 });
@@ -6638,17 +6897,17 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append_ident(out, ((((f)->tok)).slice));
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
     buf_append(out, sz_str);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("];\n"), .len = sizeof("];\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("];\012"), .len = sizeof("];\012") - 1 });
     }
     else {
     emit_c_type(((f)->type_name), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(" "), .len = sizeof(" ") - 1 });
     buf_append_ident(out, ((((f)->tok)).slice));
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\n"), .len = sizeof(";\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
     }
     f = ((f)->next);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("};\n\n"), .len = sizeof("};\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("};\012\012"), .len = sizeof("};\012\012") - 1 });
     }
     s_decl = ((s_decl)->next);
     }
@@ -6663,10 +6922,10 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     bool is_main = str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("main"), .len = sizeof("main") - 1 });
     if (is_main) {
     if ((((decl)->left) == ((AstNode*)(0)))) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(void);\n"), .len = sizeof("int main(void);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(void);\012"), .len = sizeof("int main(void);\012") - 1 });
     }
     else {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(int argc, char** argv);\n"), .len = sizeof("int main(int argc, char** argv);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(int argc, char** argv);\012"), .len = sizeof("int main(int argc, char** argv);\012") - 1 });
     }
     }
     else {
@@ -6689,12 +6948,12 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     param = ((param)->next);
     }
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\n"), .len = sizeof(");\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\012"), .len = sizeof(");\012") - 1 });
     }
     }
     decl = ((decl)->next);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
@@ -6733,12 +6992,12 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     bool is_main = str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("main"), .len = sizeof("main") - 1 });
     if (is_main) {
     if ((((decl)->left) == ((AstNode*)(0)))) {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(void) {\n"), .len = sizeof("int main(void) {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(void) {\012"), .len = sizeof("int main(void) {\012") - 1 });
     }
     else {
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(int argc, char** argv) {\n"), .len = sizeof("int main(int argc, char** argv) {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("int main(int argc, char** argv) {\012"), .len = sizeof("int main(int argc, char** argv) {\012") - 1 });
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\n"), .len = sizeof("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\012"), .len = sizeof("    setvbuf(stdout, NULL, __OC_STDOUT_BUF, 0);\012") - 1 });
     AstNode* body_block = ((decl)->right);
     if ((body_block != ((AstNode*)(0)))) {
     AstNode* stmt = ((body_block)->left);
@@ -6747,8 +7006,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     stmt = ((stmt)->next);
     }
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return 0;\n"), .len = sizeof("    return 0;\n") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return 0;\012"), .len = sizeof("    return 0;\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
     }
     else {
     emit_c_type(((decl)->type_name), out);
@@ -6770,14 +7029,14 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     param = ((param)->next);
     }
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\n"), .len = sizeof(") {\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(") {\012"), .len = sizeof(") {\012") - 1 });
     AstNode* body_block = ((decl)->right);
     AstNode* stmt = ((body_block)->left);
     while ((stmt != ((AstNode*)(0)))) {
     codegen_stmt(stmt, out);
     stmt = ((stmt)->next);
     }
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\n\n"), .len = sizeof("}\n\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
     }
     }
     }
@@ -7619,67 +7878,10 @@ size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw) {
     size_t k = 0;
     size_t emitted = 0;
     while ((k < ((raw).len))) {
-    uint8_t c = __oc_index_str(raw, k);
-    if ((c == 92)) {
-    if ((__OC_ADD(k, 1) < ((raw).len))) {
-    uint8_t nc = __oc_index_str(raw, __OC_ADD(k, 1));
-    if ((nc == 110)) {
-    buf_append_u8(data, 10);
+    LitByte lb = lit_next_byte(raw, k);
+    buf_append_u8(data, ((lb).b));
     emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    if ((nc == 116)) {
-    buf_append_u8(data, 9);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    if ((nc == 114)) {
-    buf_append_u8(data, 13);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    if ((nc == 48)) {
-    buf_append_u8(data, 0);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    if ((nc == 92)) {
-    buf_append_u8(data, 92);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    if ((nc == 34)) {
-    buf_append_u8(data, 34);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 2);
-    }
-    else {
-    buf_append_u8(data, c);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 1);
-    }
-    }
-    }
-    }
-    }
-    }
-    }
-    else {
-    buf_append_u8(data, c);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 1);
-    }
-    }
-    else {
-    buf_append_u8(data, c);
-    emitted = __OC_ADD(emitted, 1);
-    k = __OC_ADD(k, 1);
-    }
+    k = ((lb).next);
     }
     return emitted;
 }
@@ -9696,7 +9898,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     if ((slot < 0)) {
     if ((!((ng)->has_error))) {
-    printf("%s\n", "native codegen error: not a KERNEL32 import known to the PE emitter:");
+    fwrite("native codegen error: not a KERNEL32 import known to the PE emitter:", 1, sizeof("native codegen error: not a KERNEL32 import known to the PE emitter:") - 1, stdout); fputc('\n', stdout);
     __oc_print(fn_name);
     }
     ((ng)->has_error) = true;
@@ -9862,7 +10064,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     }
     if ((((first_el)->tag) == NODE_STRING)) {
-    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("\"\""), .len = sizeof("\"\"") - 1 })) {
+    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("\042\042"), .len = sizeof("\042\042") - 1 })) {
     skip_init = true;
     }
     }
@@ -10676,7 +10878,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     }
     }
     if ((!form_ok)) {
-    printf("%s\n", "native codegen error: unexpected data relocation form for PE32+");
+    fwrite("native codegen error: unexpected data relocation form for PE32+", 1, sizeof("native codegen error: unexpected data relocation form for PE32+") - 1, stdout); fputc('\n', stdout);
     return false;
     }
     uint8_t reg = __OC_SUB(__OC_AT((((code)->buffer)), (__OC_SUB(c_pos, 1))), 184);
@@ -10803,7 +11005,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     }
     pe_append_zeros(pe, __OC_SUB(file_size, ((pe)->len)));
     if ((((pe)->len) != file_size)) {
-    printf("%s\n", "native codegen error: PE32+ image size mismatch");
+    fwrite("native codegen error: PE32+ image size mismatch", 1, sizeof("native codegen error: PE32+ image size mismatch") - 1, stdout); fputc('\n', stdout);
     buf_deinit(pe);
     return false;
     }
@@ -11290,12 +11492,12 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     __OC_AT((traps), (5)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
     __OC_AT((traps), (6)) = (oc_string){ .ptr = (const uint8_t*)("__trap_fp"), .len = sizeof("__trap_fp") - 1 };
     oc_string trap_msgs[7] = {0};
-    __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\n"), .len = sizeof("panic: null pointer dereference\n") - 1 };
-    __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\n"), .len = sizeof("panic: slice index out of bounds\n") - 1 };
-    __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\n"), .len = sizeof("panic: integer overflow\n") - 1 };
-    __OC_AT((trap_msgs), (3)) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\n"), .len = sizeof("panic: division by zero\n") - 1 };
-    __OC_AT((trap_msgs), (4)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid signed cast\n"), .len = sizeof("panic: invalid signed cast\n") - 1 };
-    __OC_AT((trap_msgs), (5)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid unsigned cast\n"), .len = sizeof("panic: invalid unsigned cast\n") - 1 };
+    __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\012"), .len = sizeof("panic: null pointer dereference\012") - 1 };
+    __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\012"), .len = sizeof("panic: slice index out of bounds\012") - 1 };
+    __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\012"), .len = sizeof("panic: integer overflow\012") - 1 };
+    __OC_AT((trap_msgs), (3)) = (oc_string){ .ptr = (const uint8_t*)("panic: division by zero\012"), .len = sizeof("panic: division by zero\012") - 1 };
+    __OC_AT((trap_msgs), (4)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid signed cast\012"), .len = sizeof("panic: invalid signed cast\012") - 1 };
+    __OC_AT((trap_msgs), (5)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid unsigned cast\012"), .len = sizeof("panic: invalid unsigned cast\012") - 1 };
     __OC_AT((trap_msgs), (6)) = (oc_string){ .ptr = (const uint8_t*)("panic: floating-point result is NaN or infinite at "), .len = sizeof("panic: floating-point result is NaN or infinite at ") - 1 };
     size_t ti = 0;
     while ((ti < 7)) {
@@ -11800,7 +12002,7 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     }
     }
     if ((bytes < 0)) {
-    printf("%s\n", "error: failed to read file: ");
+    fwrite("error: failed to read file: ", 1, sizeof("error: failed to read file: ") - 1, stdout); fputc('\n', stdout);
     __oc_print(path);
     return false;
     }
@@ -11895,7 +12097,7 @@ bool load_module_recursive(oc_string path, oc_string base_dir, oc_string exe_dir
     }
     ((loader)->lines) = __OC_ADD(((loader)->lines), 1);
     buf_append(out, src);
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\n"), .len = sizeof("\n") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     return true;
 }
 
@@ -11983,12 +12185,12 @@ bool source_uses_floats(oc_string src) {
 }
 
 void print_usage(void) {
-    printf("%s\n", "Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]");
-    printf("%s\n", "       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)");
-    printf("%s\n", "       occ install | update | version | help   (also: --version, -v, --help, -h)");
-    printf("%s\n", "install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
-    printf("%s\n", "Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
-    printf("%s\n", "Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64");
+    fwrite("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]", 1, sizeof("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]") - 1, stdout); fputc('\n', stdout);
+    fwrite("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)", 1, sizeof("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)") - 1, stdout); fputc('\n', stdout);
+    fwrite("       occ install | update | version | help   (also: --version, -v, --help, -h)", 1, sizeof("       occ install | update | version | help   (also: --version, -v, --help, -h)") - 1, stdout); fputc('\n', stdout);
+    fwrite("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.", 1, sizeof("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.") - 1, stdout); fputc('\n', stdout);
+    fwrite("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)", 1, sizeof("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)") - 1, stdout); fputc('\n', stdout);
+    fwrite("Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64", 1, sizeof("Targets (default: host): linux-x86_64, windows-x86_64 (alias: windows), macos-x86_64, macos-aarch64") - 1, stdout); fputc('\n', stdout);
 }
 
 int32_t run_sys_cmd(oc_string cmd) {
@@ -12013,7 +12215,7 @@ oc_string exe_path(Arena* arena, oc_string argv0) {
 
 int32_t handle_update(int32_t host, oc_string repo) {
     CodeBuffer cmd = buf_init(8192);
-    printf("%s\n", "Updating oC from git...");
+    fwrite("Updating oC from git...", 1, sizeof("Updating oC from git...") - 1, stdout); fputc('\n', stdout);
     buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("git "), .len = sizeof("git ") - 1 });
     if ((((repo).len) > 0)) {
     buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("-C "), .len = sizeof("-C ") - 1 });
@@ -12023,25 +12225,25 @@ int32_t handle_update(int32_t host, oc_string repo) {
     buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("pull"), .len = sizeof("pull") - 1 });
     int32_t pull_ret = run_sys_cmd(buf_to_string((&(cmd))));
     if ((pull_ret != 0)) {
-    printf("%s\n", "error: 'git pull' failed. Make sure git is installed and occ lives in <oC checkout>/bin (checkout used:)");
+    fwrite("error: 'git pull' failed. Make sure git is installed and occ lives in <oC checkout>/bin (checkout used:)", 1, sizeof("error: 'git pull' failed. Make sure git is installed and occ lives in <oC checkout>/bin (checkout used:)") - 1, stdout); fputc('\n', stdout);
     __oc_print(repo);
     buf_deinit((&(cmd)));
     return 1;
     }
-    printf("%s\n", "Rebuilding oC compiler...");
+    fwrite("Rebuilding oC compiler...", 1, sizeof("Rebuilding oC compiler...") - 1, stdout); fputc('\n', stdout);
     ((cmd).len) = 0;
     if ((host == OC_TARGET_WINDOWS_X86_64)) {
     buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("if exist "), .len = sizeof("if exist ") - 1 });
     buf_append((&(cmd)), repo);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe move /y "), .len = sizeof("bin\\occ.exe move /y ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\134occ.exe move /y "), .len = sizeof("bin\134occ.exe move /y ") - 1 });
     buf_append((&(cmd)), repo);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe "), .len = sizeof("bin\\occ.exe ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\134occ.exe "), .len = sizeof("bin\134occ.exe ") - 1 });
     buf_append((&(cmd)), repo);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe.old >nul 2>&1 & gcc -O2 "), .len = sizeof("bin\\occ.exe.old >nul 2>&1 & gcc -O2 ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\134occ.exe.old >nul 2>&1 & gcc -O2 "), .len = sizeof("bin\134occ.exe.old >nul 2>&1 & gcc -O2 ") - 1 });
     buf_append((&(cmd)), repo);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bootstrap\\occ_bootstrap.c -o "), .len = sizeof("bootstrap\\occ_bootstrap.c -o ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bootstrap\134occ_bootstrap.c -o "), .len = sizeof("bootstrap\134occ_bootstrap.c -o ") - 1 });
     buf_append((&(cmd)), repo);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\\occ.exe"), .len = sizeof("bin\\occ.exe") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("bin\134occ.exe"), .len = sizeof("bin\134occ.exe") - 1 });
     }
     else {
     buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("cc -O2 "), .len = sizeof("cc -O2 ") - 1 });
@@ -12053,43 +12255,43 @@ int32_t handle_update(int32_t host, oc_string repo) {
     int32_t build_ret = run_sys_cmd(buf_to_string((&(cmd))));
     buf_deinit((&(cmd)));
     if ((build_ret != 0)) {
-    printf("%s\n", "error: failed to rebuild compiler from bootstrap/occ_bootstrap.c");
+    fwrite("error: failed to rebuild compiler from bootstrap/occ_bootstrap.c", 1, sizeof("error: failed to rebuild compiler from bootstrap/occ_bootstrap.c") - 1, stdout); fputc('\n', stdout);
     return 1;
     }
-    printf("%s\n", "Successfully updated oC!");
+    fwrite("Successfully updated oC!", 1, sizeof("Successfully updated oC!") - 1, stdout); fputc('\n', stdout);
     return 0;
 }
 
 int32_t handle_install(int32_t host, oc_string exe, oc_string exe_dir) {
     bool host_is_windows = (host == OC_TARGET_WINDOWS_X86_64);
     if ((!is_safe_path(exe, host_is_windows))) {
-    printf("%s\n", "error: cannot install: the path of this occ binary has characters that are unsafe on a command line:");
+    fwrite("error: cannot install: the path of this occ binary has characters that are unsafe on a command line:", 1, sizeof("error: cannot install: the path of this occ binary has characters that are unsafe on a command line:") - 1, stdout); fputc('\n', stdout);
     __oc_print(exe);
     return 1;
     }
     CodeBuffer cmd = buf_init(8192);
     if (host_is_windows) {
     oc_string bin_dir = __oc_slice_str(exe_dir, 0, __OC_SUB(((exe_dir).len), 1));
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("powershell -NoProfile -Command \"$d='"), .len = sizeof("powershell -NoProfile -Command \"$d='") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("powershell -NoProfile -Command \042$d='"), .len = sizeof("powershell -NoProfile -Command \042$d='") - 1 });
     buf_append((&(cmd)), bin_dir);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\""), .len = sizeof("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\"") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\042"), .len = sizeof("'; $p=[Environment]::GetEnvironmentVariable('Path','User'); if (-not $p) { $p='' }; if (($p -split ';') -notcontains $d) { [Environment]::SetEnvironmentVariable('Path', ($p.TrimEnd(';') + ';' + $d).TrimStart(';'), 'User') }\042") - 1 });
     }
     else {
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("mkdir -p \"$HOME/.local/bin\" && ln -sf "), .len = sizeof("mkdir -p \"$HOME/.local/bin\" && ln -sf ") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)("mkdir -p \042$HOME/.local/bin\042 && ln -sf "), .len = sizeof("mkdir -p \042$HOME/.local/bin\042 && ln -sf ") - 1 });
     buf_append((&(cmd)), exe);
-    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)(" \"$HOME/.local/bin/occ\""), .len = sizeof(" \"$HOME/.local/bin/occ\"") - 1 });
+    buf_append((&(cmd)), (oc_string){ .ptr = (const uint8_t*)(" \042$HOME/.local/bin/occ\042"), .len = sizeof(" \042$HOME/.local/bin/occ\042") - 1 });
     }
     int32_t ret = run_sys_cmd(buf_to_string((&(cmd))));
     buf_deinit((&(cmd)));
     if ((ret != 0)) {
-    printf("%s\n", "error: install failed");
+    fwrite("error: install failed", 1, sizeof("error: install failed") - 1, stdout); fputc('\n', stdout);
     return 1;
     }
     if (host_is_windows) {
-    printf("%s\n", "Added the oC bin directory to your user PATH. Open a new terminal, then run: occ --version");
+    fwrite("Added the oC bin directory to your user PATH. Open a new terminal, then run: occ --version", 1, sizeof("Added the oC bin directory to your user PATH. Open a new terminal, then run: occ --version") - 1, stdout); fputc('\n', stdout);
     }
     else {
-    printf("%s\n", "Linked ~/.local/bin/occ. If 'occ' is not found, add ~/.local/bin to your PATH.");
+    fwrite("Linked ~/.local/bin/occ. If 'occ' is not found, add ~/.local/bin to your PATH.", 1, sizeof("Linked ~/.local/bin/occ. If 'occ' is not found, add ~/.local/bin to your PATH.") - 1, stdout); fputc('\n', stdout);
     }
     return 0;
 }
@@ -12106,13 +12308,13 @@ int32_t handle_self_cmd(bool is_install, oc_string argv0) {
     ret = handle_install(host, exe, exe_dir);
     }
     else {
-    printf("%s\n", "error: cannot install: could not determine the absolute path of this occ binary");
+    fwrite("error: cannot install: could not determine the absolute path of this occ binary", 1, sizeof("error: cannot install: could not determine the absolute path of this occ binary") - 1, stdout); fputc('\n', stdout);
     }
     }
     else {
     oc_string up = (oc_string){ .ptr = (const uint8_t*)("../"), .len = sizeof("../") - 1 };
     if (host_is_windows) {
-    up = (oc_string){ .ptr = (const uint8_t*)("..\\"), .len = sizeof("..\\") - 1 };
+    up = (oc_string){ .ptr = (const uint8_t*)("..\134"), .len = sizeof("..\134") - 1 };
     }
     oc_string cand = str_concat((&(arena)), exe_dir, up);
     oc_string repo = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -12146,17 +12348,17 @@ int main(int argc, char** argv) {
     if ((i < argc)) {
     oc_string first = cstr_to_string(__OC_AT((argv), (i)));
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("version"), .len = sizeof("version") - 1 })) {
-    printf("%s\n", "oC 1.0.2");
+    fwrite("oC 1.0.2", 1, sizeof("oC 1.0.2") - 1, stdout); fputc('\n', stdout);
     return 0;
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("--version"), .len = sizeof("--version") - 1 })) {
-    printf("%s\n", "oC 1.0.2");
+    fwrite("oC 1.0.2", 1, sizeof("oC 1.0.2") - 1, stdout); fputc('\n', stdout);
     return 0;
     }
     else {
     if (str_eq(first, (oc_string){ .ptr = (const uint8_t*)("-v"), .len = sizeof("-v") - 1 })) {
-    printf("%s\n", "oC 1.0.2");
+    fwrite("oC 1.0.2", 1, sizeof("oC 1.0.2") - 1, stdout); fputc('\n', stdout);
     return 0;
     }
     else {
@@ -12222,7 +12424,7 @@ int main(int argc, char** argv) {
     i = __OC_ADD(i, 1);
     }
     else {
-    printf("%s\n", "error: --target requires a value");
+    fwrite("error: --target requires a value", 1, sizeof("error: --target requires a value") - 1, stdout); fputc('\n', stdout);
     return 1;
     }
     }
@@ -12255,7 +12457,7 @@ int main(int argc, char** argv) {
     else {
     if ((((arg).len) > 0)) {
     if ((__oc_index_str(arg, 0) == 45)) {
-    printf("%s\n", "error: unknown option:");
+    fwrite("error: unknown option:", 1, sizeof("error: unknown option:") - 1, stdout); fputc('\n', stdout);
     __oc_print(arg);
     print_usage();
     return 1;
@@ -12284,7 +12486,7 @@ int main(int argc, char** argv) {
     if (target_explicit) {
     target = parse_target_name(target_name);
     if ((target < 0)) {
-    printf("%s\n", "error: unknown --target (expected linux-x86_64, windows-x86_64, macos-x86_64 or macos-aarch64):");
+    fwrite("error: unknown --target (expected linux-x86_64, windows-x86_64, macos-x86_64 or macos-aarch64):", 1, sizeof("error: unknown --target (expected linux-x86_64, windows-x86_64, macos-x86_64 or macos-aarch64):") - 1, stdout); fputc('\n', stdout);
     __oc_print(target_name);
     return 1;
     }
@@ -12294,7 +12496,7 @@ int main(int argc, char** argv) {
     if ((target != OC_TARGET_WINDOWS_X86_64)) {
     if ((target != OC_TARGET_LINUX_X86_64)) {
     if (target_explicit) {
-    printf("%s\n", "error: --backend native emits linux-x86_64 (ELF64) or windows-x86_64 (PE32+); use --backend c for target:");
+    fwrite("error: --backend native emits linux-x86_64 (ELF64) or windows-x86_64 (PE32+); use --backend c for target:", 1, sizeof("error: --backend native emits linux-x86_64 (ELF64) or windows-x86_64 (PE32+); use --backend c for target:") - 1, stdout); fputc('\n', stdout);
     __oc_print(target_name);
     return 1;
     }
@@ -12306,7 +12508,7 @@ int main(int argc, char** argv) {
     if ((!is_native)) {
     cc_cmd = c_compiler_for(target, host);
     if ((((cc_cmd).len) == 0)) {
-    printf("%s\n", "error: no C cross-compiler convention for this host and target (macOS targets need a macOS host):");
+    fwrite("error: no C cross-compiler convention for this host and target (macOS targets need a macOS host):", 1, sizeof("error: no C cross-compiler convention for this host and target (macOS targets need a macOS host):") - 1, stdout); fputc('\n', stdout);
     __oc_print(target_name);
     return 1;
     }
@@ -12314,14 +12516,14 @@ int main(int argc, char** argv) {
     if (is_run) {
     if (target_explicit) {
     if ((out_target != host)) {
-    printf("%s\n", "error: cannot run a binary for another platform on this host; use 'occ build' for target:");
+    fwrite("error: cannot run a binary for another platform on this host; use 'occ build' for target:", 1, sizeof("error: cannot run a binary for another platform on this host; use 'occ build' for target:") - 1, stdout); fputc('\n', stdout);
     __oc_print(target_name);
     return 1;
     }
     }
     }
     if ((!is_safe_path(in_file_str, host_is_windows))) {
-    printf("%s\n", "error: unsafe characters in file path");
+    fwrite("error: unsafe characters in file path", 1, sizeof("error: unsafe characters in file path") - 1, stdout); fputc('\n', stdout);
     return 1;
     }
     bool is_temp_out = false;
@@ -12340,7 +12542,7 @@ int main(int argc, char** argv) {
     }
     }
     if ((!is_safe_path(out_file_str, host_is_windows))) {
-    printf("%s\n", "error: unsafe characters in file path");
+    fwrite("error: unsafe characters in file path", 1, sizeof("error: unsafe characters in file path") - 1, stdout); fputc('\n', stdout);
     return 1;
     }
     }
@@ -12368,7 +12570,7 @@ int main(int argc, char** argv) {
     if (source_uses_floats(buf_to_string((&(combined_buf))))) {
     bool fmt_ok = load_module_recursive((oc_string){ .ptr = (const uint8_t*)("std/sys/float.oc"), .len = sizeof("std/sys/float.oc") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
     if ((!fmt_ok)) {
-    printf("%s\n", "error: the float formatter std/sys/float.oc was not found; set OC_HOME to the directory that contains std/");
+    fwrite("error: the float formatter std/sys/float.oc was not found; set OC_HOME to the directory that contains std/", 1, sizeof("error: the float formatter std/sys/float.oc was not found; set OC_HOME to the directory that contains std/") - 1, stdout); fputc('\n', stdout);
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));
     return 1;
@@ -12378,7 +12580,7 @@ int main(int argc, char** argv) {
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
     bool rt_ok = load_module_recursive((oc_string){ .ptr = (const uint8_t*)("std/sys/windows.oc"), .len = sizeof("std/sys/windows.oc") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, std_root, (&(combined_buf)), (&(loader)), (&(arena)));
     if ((!rt_ok)) {
-    printf("%s\n", "error: the native Windows runtime std/sys/windows.oc was not found; set OC_HOME to the directory that contains std/");
+    fwrite("error: the native Windows runtime std/sys/windows.oc was not found; set OC_HOME to the directory that contains std/", 1, sizeof("error: the native Windows runtime std/sys/windows.oc was not found; set OC_HOME to the directory that contains std/") - 1, stdout); fputc('\n', stdout);
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));
     return 1;
@@ -12387,9 +12589,13 @@ int main(int argc, char** argv) {
     }
     oc_string combined_src = buf_to_string((&(combined_buf)));
     Parser parser = parser_init(combined_src, (&(arena)));
+    ((parser).srcmap) = (&(((loader).map)));
+    if ((((((parser).current)).tag) == TOK_ERROR)) {
+    parser_report_lex_error((&(parser)), ((parser).current));
+    }
     AstNode* prog = parse_program((&(parser)));
     if (((parser).has_error)) {
-    printf("%s\n", "compilation aborted due to parse errors");
+    fwrite("compilation aborted due to parse errors", 1, sizeof("compilation aborted due to parse errors") - 1, stdout); fputc('\n', stdout);
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));
     return 1;
@@ -12408,7 +12614,7 @@ int main(int argc, char** argv) {
     if (need_tmp) {
     tmp_dir = make_private_tmp_dir((&(arena)), host_is_windows);
     if ((((tmp_dir).len) == 0)) {
-    printf("%s\n", "error: failed to create a private temporary directory (tried $TMPDIR, $TEMP, /tmp and .)");
+    fwrite("error: failed to create a private temporary directory (tried $TMPDIR, $TEMP, /tmp and .)", 1, sizeof("error: failed to create a private temporary directory (tried $TMPDIR, $TEMP, /tmp and .)") - 1, stdout); fputc('\n', stdout);
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));
     return 1;
@@ -12432,7 +12638,7 @@ int main(int argc, char** argv) {
     }
     buf_deinit((&(combined_buf)));
     if ((!ok_native)) {
-    printf("%s\n", "error: native image emission failed");
+    fwrite("error: native image emission failed", 1, sizeof("error: native image emission failed") - 1, stdout); fputc('\n', stdout);
     remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
     return 1;
@@ -12453,7 +12659,7 @@ int main(int argc, char** argv) {
     }
     bool ok = write_file(stage_c_path, c_code);
     if ((!ok)) {
-    printf("%s\n", "error: failed to write temporary C stage file");
+    fwrite("error: failed to write temporary C stage file", 1, sizeof("error: failed to write temporary C stage file") - 1, stdout); fputc('\n', stdout);
     buf_deinit((&(out)));
     remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
@@ -12476,7 +12682,7 @@ int main(int argc, char** argv) {
     buf_deinit((&(out)));
     unlink_file(stage_c_path);
     if ((ret != 0)) {
-    printf("%s\n", "error: C compiler failed:");
+    fwrite("error: C compiler failed:", 1, sizeof("error: C compiler failed:") - 1, stdout); fputc('\n', stdout);
     __oc_print(cc_cmd);
     remove_private_tmp_dir((&(arena)), tmp_dir);
     arena_deinit((&(arena)));
@@ -12579,7 +12785,7 @@ size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v) {
 
 void fmt_print_f64(double x) {
     if ((!(x <= x))) {
-    sys_write(1, (((oc_string){ .ptr = (const uint8_t*)("NaN\n"), .len = sizeof("NaN\n") - 1 }).ptr), 4);
+    sys_write(1, (((oc_string){ .ptr = (const uint8_t*)("NaN\012"), .len = sizeof("NaN\012") - 1 }).ptr), 4);
     return;
     }
     uint8_t buf[48] = {0};

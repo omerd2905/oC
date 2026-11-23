@@ -1,0 +1,4 @@
+// \x takes exactly two hex digits.
+fn main() {
+    print("\x4");
+}

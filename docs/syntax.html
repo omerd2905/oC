@@ -150,7 +150,14 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
           <li><code>\\</code> — ASCII 92 (Backslash)</li>
           <li><code>\"</code> — ASCII 34 (Double Quote)</li>
           <li><code>\0</code> — ASCII 0 (Null Byte)</li>
+          <li><code>\x<em>NN</em></code> — the byte with hex value <em>NN</em>, exactly two hex digits: <code>"\x41"</code> is <code>"A"</code>, and <code>"\xC3\xA9"</code> is the two UTF-8 bytes of é. The only way to write a byte above 0x7F.</li>
         </ul>
+        <p>
+          Any other backslash sequence (<code>\q</code>, octal <code>\101</code>, <code>\?</code>, <code>\e</code>, <code>\u00e9</code>) is a compile error that names the escape and its position, and so is a literal left open at the end of the file (<code>"abc\"</code> ends with an escaped quote, not a closing one). Both backends produce exactly the same bytes for every literal.
+        </p>
+        <pre data-occ-rejects="unknown escape sequence '\q'"><code>fn main() {
+    print("a\qb");
+}</code></pre>
 
         <h3>Reserved Keywords Table</h3>
         <p>
