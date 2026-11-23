@@ -1,0 +1,32 @@
+// Issue #62: copying a string's length, or a string borrowed from an arena through a helper
+// call (read_line), out of a loop is not an escape: the arena outlives the loop.
+// Fed by tests/run_probes.sh with "x\nlonger\nmid\n".
+import "std/mem.oc";
+import "std/io.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut longest: usize = 0;
+    let mut last: usize = 0;
+    let mut total: usize = 0;
+    let mut keep: string = "";
+    let mut best: string = "";
+    while true {
+        let r: ReadLine = read_line(&mut a);
+        if !r.ok { break; }
+        last = r.line.len;
+        let l: usize = r.line.len;
+        total = total + l;
+        if l > longest {
+            longest = l;
+            best = r.line;
+        }
+        keep = r.line;
+    }
+    print(longest);  // 6
+    print(last);     // 3
+    print(total);    // 10
+    print(best);     // longer
+    print(keep);     // mid
+    arena_deinit(&mut a);
+}

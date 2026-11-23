@@ -35,6 +35,8 @@ COMPILE_REJECT=(
   "probe_lossy_f64_to_f32.oc|probe_lossy_f64_to_f32.oc:4:18: error: implicit conversion from f64 to f32 in a variable initializer can lose precision; write .as(f32)"
   "probe_lossy_int_literal.oc|probe_lossy_int_literal.oc:3:18: error: integer literal 9007199254740993 in a variable initializer is not exactly representable as f64"
   "probe_strbuf_after_reset.oc|use-after-free: variable 'sb' used after arena 'a' was reset"
+  "probe_arena_inner_escape.oc|cross-arena escape: pointer borrowed from arena 'inner' escapes into longer-lived target 'keep'"
+  "probe_readline_after_reset.oc|use-after-free: variable 'keep' used after arena 'a' was reset"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
@@ -245,6 +247,15 @@ for backend in c native; do
   else
     echo "  [FAIL] read_input.oc (--backend $backend) printed:"
     "$WORK/read_input" < "$WORK/input" | head -20
+    exit 1
+  fi
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/longest_line.oc" -o "$WORK/longest_line" --backend "$backend" >/dev/null
+  if [ "$(printf 'x\nlonger\nmid\n' | "$WORK/longest_line")" = "$(cat "$ROOT/tests/stdin/longest_line.expected")" ]; then
+    echo "  [PASS] longest_line.oc (--backend $backend): lengths and lines kept across loop iterations"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] longest_line.oc (--backend $backend)"
     exit 1
   fi
   TOTAL=$((TOTAL + 1))
