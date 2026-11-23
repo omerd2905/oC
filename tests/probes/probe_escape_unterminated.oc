@@ -1,0 +1,5 @@
+// A literal that ends in a backslash escapes its closing quote and runs to the end of the
+// file: a clean error, not a C compiler error or a parse error cascade.
+fn main() {
+    print("abc\");
+}

@@ -14,6 +14,35 @@ struct Parser {
     allow_struct_init: bool,
     has_error: bool,
     loop_depth: i32,
+    srcmap: *SourceMap, // set by the driver before parsing; null prints combined-source lines
+}
+
+// A token the lexer could not form: an unterminated string or a stray character.
+fn parser_report_lex_error(p: *mut Parser, tok: Token) {
+    print_src_loc(p.srcmap, tok);
+    if tok.slice.len > 0 {
+        if tok.slice[0] == 34 {
+            print_str_raw("error: unterminated string literal (a backslash escapes the next character, so \\\" does not end a string)\n");
+            return;
+        }
+    }
+    print_str_raw("error: unexpected character '");
+    print_str_raw(tok.slice);
+    print_str_raw("'\n");
+}
+
+// "file:line:col: <msg> 'token'". Skipped for a token the lexer could not form: that
+// was already reported, and what follows it is usually noise.
+fn parser_error(p: *mut Parser, tok: Token, msg: string) {
+    if tok.tag == TOK_ERROR { return; }
+    if tok.tag == TOK_EOF {
+        if p.has_error { return; } // running off the end after an earlier error
+    }
+    print_src_loc(p.srcmap, tok);
+    print_str_raw(msg);
+    print_str_raw(" '");
+    if tok.tag == TOK_EOF { print_str_raw("end of input"); } else { print_str_raw(tok.slice); }
+    print_str_raw("'\n");
 }
 
 fn parser_init(source: string, arena: *mut Arena) -> Parser {
@@ -30,6 +59,7 @@ fn parser_init(source: string, arena: *mut Arena) -> Parser {
         allow_struct_init: true,
         has_error: err,
         loop_depth: 0,
+        srcmap: (0).as(*SourceMap),
     };
 }
 
@@ -37,6 +67,7 @@ fn parser_advance(p: *mut Parser) {
     p.current = lexer_next(&mut p.lex);
     if p.current.tag == TOK_ERROR {
         p.has_error = true;
+        parser_report_lex_error(p, p.current);
     }
 }
 
@@ -45,9 +76,7 @@ fn parser_expect(p: *mut Parser, expected_tag: u32) -> Token {
     if tok.tag == expected_tag {
         parser_advance(p);
     } else {
-        print("parse error: unexpected token");
-        print(tok.tag);
-        print(tok.slice);
+        parser_error(p, tok, "parse error: unexpected");
         p.has_error = true;
     }
     return tok;
@@ -215,8 +244,7 @@ fn parse_primary(p: *mut Parser) -> *mut AstNode {
         parser_expect(p, TOK_RPAREN);
         return inner;
     }
-    print("parse error: unexpected token in expression");
-    print(tok.slice);
+    parser_error(p, tok, "parse error: unexpected in an expression:");
     p.has_error = true;
     parser_advance(p);
     return (0).as(*mut AstNode);
@@ -1186,6 +1214,77 @@ fn is_builtin_fn(name: string) -> bool {
     if str_eq(name, "wrapping_sub") { return true; }
     if str_eq(name, "wrapping_mul") { return true; }
     return false;
+}
+
+// String literals may use only \n \t \r \0 \\ \" and \xNN (two hex digits). C would accept
+// more (octal, \?, \e, \u...) and the native backend kept the backslash, so anything else
+// is an error, reported at the escape. Reports every bad escape.
+fn is_hex_char(c: u8) -> bool {
+    if is_digit(c) { return true; }
+    if c >= 97 { if c <= 102 { return true; } }
+    if c >= 65 { return c <= 70; }
+    return false;
+}
+
+fn check_string_escapes(m: *SourceMap, node: *mut AstNode) -> bool {
+    let mut ok: bool = true;
+    let mut n: *mut AstNode = node;
+    while n != (0).as(*mut AstNode) {
+        if n.tag == NODE_STRING {
+            let text: string = n.tok.slice;
+            let mut at: Token = n.tok;
+            at.col = at.col + 1; // position of text[1]
+            let mut k: usize = 1;
+            while k + 1 < text.len { // stop before the closing quote
+                let c: u8 = text[k];
+                if c == 10 {
+                    at.line = at.line + 1;
+                    at.col = 1;
+                    k = k + 1;
+                } else if c == 92 {
+                    let e: u8 = text[k + 1];
+                    let mut good: bool = false;
+                    let mut width: usize = 2;
+                    if e == 110 { good = true; }
+                    if e == 116 { good = true; }
+                    if e == 114 { good = true; }
+                    if e == 48 { good = true; }
+                    if e == 92 { good = true; }
+                    if e == 34 { good = true; }
+                    if e == 120 {
+                        width = 4;
+                        if k + 3 < text.len - 1 {
+                            if is_hex_char(text[k + 2]) {
+                                if is_hex_char(text[k + 3]) { good = true; }
+                            }
+                        }
+                        if !good {
+                            print_src_loc(m, at);
+                            print_str_raw("error: \\x needs exactly two hex digits, as in \\x41\n");
+                            ok = false;
+                            good = true; // reported
+                        }
+                    }
+                    if !good {
+                        print_src_loc(m, at);
+                        print_str_raw("error: unknown escape sequence '");
+                        print_str_raw(text[k..k + 2]);
+                        print_str_raw("' (oC has \\n \\t \\r \\0 \\\\ \\\" and \\xNN)\n");
+                        ok = false;
+                    }
+                    k = k + width;
+                    at.col = at.col + width.as(u32);
+                } else {
+                    k = k + 1;
+                    at.col = at.col + 1;
+                }
+            }
+        }
+        if !check_string_escapes(m, n.left) { ok = false; }
+        if !check_string_escapes(m, n.right) { ok = false; }
+        n = n.next;
+    }
+    return ok;
 }
 
 // Every call must name a function declared in the program (`fn` or `extern fn`) or a
@@ -2309,6 +2408,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
 
 fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
     if !check_calls_resolved(root, m, root.left) { return false; }
+    if !check_string_escapes(m, root.left) { return false; }
     let mut top: *mut AstNode = root.left;
     while top != (0).as(*mut AstNode) {
         if top.tag == NODE_LET { bind_to_target(top.type_name, top.left); } // let K: f32 = 0.1;
@@ -2400,8 +2500,7 @@ fn parse_program(p: *mut Parser) -> *mut AstNode {
         } else if p.current.tag == TOK_SEMICOLON {
             parser_advance(p);
         } else {
-            print("parse error: unexpected top-level token");
-            print(p.current.slice);
+            parser_error(p, p.current, "parse error: unexpected at top level:");
             p.has_error = true;
             parser_advance(p);
         }

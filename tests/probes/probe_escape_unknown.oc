@@ -1,0 +1,5 @@
+// An escape outside \n \t \r \0 \\ \" \xNN is a compile error at its position. (C would read
+// it its own way and the native backend kept the backslash, so the backends disagreed.)
+fn main() {
+    print("a\qb");
+}

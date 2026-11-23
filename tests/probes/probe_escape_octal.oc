@@ -1,0 +1,4 @@
+// C-style octal escapes are not oC: "\101" is rejected instead of meaning "A" on one backend.
+fn main() {
+    print("o\101");
+}

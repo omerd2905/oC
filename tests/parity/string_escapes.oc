@@ -1,0 +1,25 @@
+// String literal escapes (issue #63): \n \t \r \0 \\ \" and \xNN mean the same bytes on both
+// backends. Bytes are printed as numbers so the expected file holds no control characters.
+fn bytes(s: string) {
+    print(s.len);
+    let mut i: usize = 0;
+    while i < s.len {
+        print(s[i]);
+        i = i + 1;
+    }
+}
+
+fn main() {
+    bytes("\n\t\r\0\\\"");       // 6 10 9 13 0 92 34
+    bytes("\x41B");              // 2 65 66 (\x takes exactly two digits)
+    bytes("\x00\x7f\x80\xFF");   // 4 0 127 128 255
+    bytes("\xC3\xA9");           // 2 195 169 (UTF-8 for e-acute)
+    bytes("100%?? \x3F");        // 8 49 48 48 37 63 63 32 63 (no C trigraphs or format)
+    bytes("two
+lines");                         // 9 116 119 111 10 108 105 110 101 115
+    print("A\x41B");             // AAB
+    print("tab\x09end".len);     // 7
+    let mid: string = "a\0b";
+    print(mid.len);              // 3
+    print(mid[2]);               // 98
+}
