@@ -1,0 +1,11 @@
+// A user function with the name of a std function is an error: on the native backend it used
+// to replace std's find silently, also for std's own callers.
+import "std/str.oc";
+
+fn find(a: i32, b: i32) -> i32 {
+    return a + b;
+}
+
+fn main() {
+    print(find(1, 2));
+}

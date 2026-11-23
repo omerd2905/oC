@@ -1,0 +1,8 @@
+// A constant that shares its name with a function: functions, structs and constants are
+// one namespace.
+fn limit() -> i32 { return 1; }
+let limit: i32 = 2;
+
+fn main() {
+    print(limit());
+}

@@ -741,6 +741,20 @@ fn print_u32_raw(n: u32) {
     print_str_raw(all[pos..10]);
 }
 
+// "file:line:col" for a token.
+fn print_src_pos(m: *SourceMap, tok: Token) {
+    let f: i32 = srcmap_file(m, tok.line);
+    if f >= 0 {
+        print_str_raw(m.path[f.as(usize)]);
+        print_str_raw(":");
+        print_u32_raw(tok.line - m.first_line[f.as(usize)] + 1);
+    } else {
+        print_u32_raw(tok.line);
+    }
+    print_str_raw(":");
+    print_u32_raw(tok.col);
+}
+
 // "file:line:col: " for a token, so a diagnostic points into the user's file.
 fn print_src_loc(m: *SourceMap, tok: Token) {
     let f: i32 = srcmap_file(m, tok.line);
@@ -1283,6 +1297,52 @@ fn check_string_escapes(m: *SourceMap, node: *mut AstNode) -> bool {
         if !check_string_escapes(m, n.left) { ok = false; }
         if !check_string_escapes(m, n.right) { ok = false; }
         n = n.next;
+    }
+    return ok;
+}
+
+// Functions, structs and top-level constants share one namespace (in the generated C they
+// are all plain identifiers), and each name may be defined once in the whole program,
+// imports included. Otherwise the C backend failed inside the C compiler and the native
+// backend silently used the later definition, so user code could replace a std function
+// under the library's feet. `extern fn` declarations may repeat, and one may precede the
+// definition (a forward declaration).
+fn check_unique_names(root: *mut AstNode, m: *SourceMap) -> bool {
+    let mut ok: bool = true;
+    let mut d: *mut AstNode = root.left;
+    while d != (0).as(*mut AstNode) {
+        let mut named: bool = d.tag == NODE_FN;
+        if d.tag == NODE_STRUCT_DECL { named = true; }
+        if d.tag == NODE_LET { named = true; }
+        let mut is_decl_only: bool = false;
+        if d.tag == NODE_FN { is_decl_only = d.right == (0).as(*mut AstNode); }
+        if named {
+            if !is_decl_only {
+                let mut e: *mut AstNode = root.left;
+                while e != d {
+                    let mut e_named: bool = e.tag == NODE_FN;
+                    if e.tag == NODE_STRUCT_DECL { e_named = true; }
+                    if e.tag == NODE_LET { e_named = true; }
+                    if e.tag == NODE_FN {
+                        if e.right == (0).as(*mut AstNode) { e_named = false; } // extern / forward
+                    }
+                    if e_named {
+                        if str_eq(e.tok.slice, d.tok.slice) {
+                            print_src_loc(m, d.tok);
+                            print_str_raw("error: '");
+                            print_str_raw(d.tok.slice);
+                            print_str_raw("' is already defined at ");
+                            print_src_pos(m, e.tok);
+                            print_str_raw("\n");
+                            ok = false;
+                            break;
+                        }
+                    }
+                    e = e.next;
+                }
+            }
+        }
+        d = d.next;
     }
     return ok;
 }
@@ -2407,6 +2467,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
 }
 
 fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
+    if !check_unique_names(root, m) { return false; }
     if !check_calls_resolved(root, m, root.left) { return false; }
     if !check_string_escapes(m, root.left) { return false; }
     let mut top: *mut AstNode = root.left;

@@ -587,6 +587,7 @@ AstNode* parse_struct_decl(Parser* p, bool is_packed);
 AstNode* parse_fn_decl(Parser* p);
 void print_str_raw(oc_string s);
 void print_u32_raw(uint32_t n);
+void print_src_pos(SourceMap* m, Token tok);
 void print_src_loc(SourceMap* m, Token tok);
 void print_err_ref_invalidated(oc_string name, oc_string bv);
 void print_err_uaf_reset(oc_string name, oc_string arena);
@@ -620,6 +621,7 @@ AstNode* validator_find_fn(Validator* v, oc_string name);
 bool is_builtin_fn(oc_string name);
 bool is_hex_char(uint8_t c);
 bool check_string_escapes(SourceMap* m, AstNode* node);
+bool check_unique_names(AstNode* root, SourceMap* m);
 bool check_calls_resolved(AstNode* program, SourceMap* m, AstNode* node);
 oc_string validator_expr_type(Validator* v, AstNode* expr);
 bool is_int_literal(AstNode* expr);
@@ -2911,6 +2913,20 @@ void print_u32_raw(uint32_t n) {
     print_str_raw(__oc_slice_str(all, pos, 10));
 }
 
+void print_src_pos(SourceMap* m, Token tok) {
+    int32_t f = srcmap_file(m, ((tok).line));
+    if ((f >= 0)) {
+    print_str_raw(__OC_AT((((m)->path)), (({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(":"), .len = sizeof(":") - 1 });
+    print_u32_raw(__OC_ADD(__OC_SUB(((tok).line), __OC_AT((((m)->first_line)), (({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))), 1));
+    }
+    else {
+    print_u32_raw(((tok).line));
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(":"), .len = sizeof(":") - 1 });
+    print_u32_raw(((tok).col));
+}
+
 void print_src_loc(SourceMap* m, Token tok) {
     int32_t f = srcmap_file(m, ((tok).line));
     if ((f >= 0)) {
@@ -3559,6 +3575,58 @@ bool check_string_escapes(SourceMap* m, AstNode* node) {
     ok = false;
     }
     n = ((n)->next);
+    }
+    return ok;
+}
+
+bool check_unique_names(AstNode* root, SourceMap* m) {
+    bool ok = true;
+    AstNode* d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    bool named = (((d)->tag) == NODE_FN);
+    if ((((d)->tag) == NODE_STRUCT_DECL)) {
+    named = true;
+    }
+    if ((((d)->tag) == NODE_LET)) {
+    named = true;
+    }
+    bool is_decl_only = false;
+    if ((((d)->tag) == NODE_FN)) {
+    is_decl_only = (((d)->right) == ((AstNode*)(0)));
+    }
+    if (named) {
+    if ((!is_decl_only)) {
+    AstNode* e = ((root)->left);
+    while ((e != d)) {
+    bool e_named = (((e)->tag) == NODE_FN);
+    if ((((e)->tag) == NODE_STRUCT_DECL)) {
+    e_named = true;
+    }
+    if ((((e)->tag) == NODE_LET)) {
+    e_named = true;
+    }
+    if ((((e)->tag) == NODE_FN)) {
+    if ((((e)->right) == ((AstNode*)(0)))) {
+    e_named = false;
+    }
+    }
+    if (e_named) {
+    if (str_eq(((((e)->tok)).slice), ((((d)->tok)).slice))) {
+    print_src_loc(m, ((d)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: '"), .len = sizeof("error: '") - 1 });
+    print_str_raw(((((d)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' is already defined at "), .len = sizeof("' is already defined at ") - 1 });
+    print_src_pos(m, ((e)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ok = false;
+    break;
+    }
+    }
+    e = ((e)->next);
+    }
+    }
+    }
+    d = ((d)->next);
     }
     return ok;
 }
@@ -4950,6 +5018,9 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
 }
 
 bool validate_program(AstNode* root, SourceMap* m) {
+    if ((!check_unique_names(root, m))) {
+    return false;
+    }
     if ((!check_calls_resolved(root, m, ((root)->left)))) {
     return false;
     }
