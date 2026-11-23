@@ -1,0 +1,15 @@
+// `extern fn` declarations may repeat and may precede the definition (a forward
+// declaration); only a second definition is an error (see the probe_dup_* probes).
+import "std/str.oc";
+
+extern fn twice(x: i32) -> i32;
+extern fn twice(x: i32) -> i32;
+
+fn main() {
+    print(twice(21));           // 42
+    print(trim("  std  ").len);  // 3 (std's own trim and is_space still in charge)
+}
+
+fn twice(x: i32) -> i32 {
+    return x * 2;
+}

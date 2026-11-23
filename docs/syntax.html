@@ -910,6 +910,9 @@ extern fn sys_exit(code: i32);</code></pre>
         <p>
           Every call must name a function declared with <code>fn</code> or <code>extern fn</code>, or one of the built-ins <code>sqrt_f64</code>, <code>wrapping_add</code>, <code>wrapping_sub</code> and <code>wrapping_mul</code>. Anything else is a compile error on both backends, reported as <code>file.oc:line:col: error: undefined function 'name'</code>. A C library function therefore needs an <code>extern fn</code> declaration, which marks the code the validator cannot see into. It links only with <code>--backend c</code>; the native backend has no C library and reports <code>unresolved symbol 'name'</code>.
         </p>
+        <p>
+          Functions, structs and top-level constants share one namespace, and each name may be defined only once in the whole program, imported files included. A second definition is an error that names both places, for example <code>prog.oc:5:4: error: 'find' is already defined at std/str.oc:42:4</code>; a program cannot replace a library function, even by accident. <code>extern fn</code> declarations may repeat, and one may come before the definition as a forward declaration.
+        </p>
         <pre data-occ-rejects="error: undefined function 'abs'"><code>fn main() {
     print(abs(-5)); // needs: extern fn abs(x: i32) -&gt; i32;
 }</code></pre>
