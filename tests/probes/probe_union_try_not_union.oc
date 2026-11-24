@@ -1,0 +1,12 @@
+// try needs a caller that returns an error union.
+enum E { Bad }
+
+fn f(n: i64) -> i64!E {
+    if n < 0 { return Err(E.Bad); }
+    return Ok(n);
+}
+
+fn main() {
+    let v = try f(1);
+    print(v);
+}

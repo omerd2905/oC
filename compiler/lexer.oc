@@ -4,6 +4,11 @@ import "compiler/token.oc";
 let TOK_BREAK: u32 = 25;
 let TOK_CONTINUE: u32 = 26;
 let TOK_TILDE: u32 = 85;
+let TOK_ENUM: u32 = 86;
+let TOK_MATCH: u32 = 87;
+let TOK_TRY: u32 = 88;
+let TOK_CATCH: u32 = 89;
+let TOK_FATARROW: u32 = 90; // =>
 let TOK_ERROR: u32 = 99;
 
 struct Lexer {
@@ -81,6 +86,10 @@ fn check_keyword(s: string) -> u32 {
     if str_eq(s, "as") { return TOK_AS; }
     if str_eq(s, "break") { return TOK_BREAK; }
     if str_eq(s, "continue") { return TOK_CONTINUE; }
+    if str_eq(s, "enum") { return TOK_ENUM; }
+    if str_eq(s, "match") { return TOK_MATCH; }
+    if str_eq(s, "try") { return TOK_TRY; }
+    if str_eq(s, "catch") { return TOK_CATCH; }
     return TOK_IDENT;
 }
 
@@ -354,6 +363,16 @@ fn lexer_next(lex: *mut Lexer) -> Token {
                 lex.col = lex.col + 2;
                 return Token {
                     tag: TOK_EQEQ,
+                    slice: lex.source[start_idx..lex.index],
+                    line: tok_line,
+                    col: tok_col,
+                };
+            }
+            if next_c == 62 {
+                lex.index = lex.index + 2;
+                lex.col = lex.col + 2;
+                return Token {
+                    tag: TOK_FATARROW,
                     slice: lex.source[start_idx..lex.index],
                     line: tok_line,
                     col: tok_col,

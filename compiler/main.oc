@@ -785,6 +785,11 @@ fn main(argc: i32, argv: **u8) -> i32 {
         last: (0).as(*mut AstNode),
         ok: true,
     };
+    if !desugar_errors(prog, &mut arena, &loader.map) {
+        buf_deinit(&mut combined_buf);
+        arena_deinit(&mut arena);
+        return 1;
+    }
     if !expand_generics(prog, &mut arena, &loader.map, &mut gen) {
         buf_deinit(&mut combined_buf);
         arena_deinit(&mut arena);

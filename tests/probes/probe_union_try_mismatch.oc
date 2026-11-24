@@ -1,0 +1,17 @@
+// try passes the error on, so the error types must match.
+enum E { Bad }
+enum F { Worse }
+
+fn f(n: i64) -> i64!F {
+    if n < 0 { return Err(F.Worse); }
+    return Ok(n);
+}
+
+fn g() -> i64!E {
+    let v = try f(1);
+    return Ok(v);
+}
+
+fn main() {
+    print(g() catch 0);
+}

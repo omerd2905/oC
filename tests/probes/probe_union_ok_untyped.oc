@@ -1,0 +1,4 @@
+// Ok(...) needs to know its error-union type.
+fn main() {
+    let x = Ok(1);
+}

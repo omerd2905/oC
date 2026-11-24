@@ -1,0 +1,9 @@
+// One enum is not another.
+enum E { A }
+enum F { X }
+
+fn take(e: E) -> u32 { return e; }
+
+fn main() {
+    print(take(F.X));
+}

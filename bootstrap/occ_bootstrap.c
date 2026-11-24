@@ -241,6 +241,11 @@ static const uint32_t TOK_SHR = 59;
 static const uint32_t TOK_BREAK = 25;
 static const uint32_t TOK_CONTINUE = 26;
 static const uint32_t TOK_TILDE = 85;
+static const uint32_t TOK_ENUM = 86;
+static const uint32_t TOK_MATCH = 87;
+static const uint32_t TOK_TRY = 88;
+static const uint32_t TOK_CATCH = 89;
+static const uint32_t TOK_FATARROW = 90;
 static const uint32_t TOK_ERROR = 99;
 static const uint32_t NODE_PROGRAM = 1;
 static const uint32_t NODE_FN = 2;
@@ -270,6 +275,11 @@ static const uint32_t NODE_STRUCT_DECL = 25;
 static const uint32_t NODE_UNARY = 26;
 static const uint32_t NODE_FLOAT = 29;
 static const uint32_t NODE_GENERIC = 30;
+static const uint32_t NODE_ENUM = 31;
+static const uint32_t NODE_MATCH = 32;
+static const uint32_t NODE_ARM = 33;
+static const uint32_t NODE_TRY = 34;
+static const uint32_t NODE_CATCH = 35;
 static const uint32_t NODE_BREAK = 27;
 static const uint32_t NODE_CONTINUE = 28;
 static const size_t NG_IMP_EXIT_PROCESS = 0;
@@ -295,6 +305,7 @@ typedef struct Validator Validator;
 typedef struct Generics Generics;
 typedef struct GArgs GArgs;
 typedef struct GBind GBind;
+typedef struct Errs Errs;
 typedef struct CodeBuffer CodeBuffer;
 typedef struct LitByte LitByte;
 typedef struct NativeGen NativeGen;
@@ -437,6 +448,21 @@ struct GBind {
     oc_string b_name[8];
     oc_string b_val[8];
     oc_string conflict;
+};
+
+struct Errs {
+    AstNode* enums[64];
+    size_t enum_count;
+    Arena* arena;
+    SourceMap* m;
+    AstNode* root;
+    bool ok;
+    uint32_t tmp_n;
+    oc_string fn_ret;
+    oc_string syms[512];
+    oc_string sym_types[512];
+    size_t sym_count;
+    AstNode* pre;
 };
 
 struct CodeBuffer {
@@ -612,6 +638,8 @@ AstNode* parse_postfix(Parser* p);
 AstNode* parse_unary(Parser* p);
 AstNode* parse_expr(Parser* p, uint32_t min_prec);
 AstNode* parse_stmt(Parser* p);
+AstNode* parse_enum_decl(Parser* p);
+AstNode* parse_match_stmt(Parser* p);
 AstNode* parse_block(Parser* p);
 AstNode* parse_print_stmt(Parser* p);
 AstNode* parse_let_stmt(Parser* p);
@@ -709,6 +737,46 @@ GArgs gx_infer(Generics* g, Validator* v, AstNode* t, AstNode* call);
 void gx_add_var(Validator* v, oc_string name, oc_string t);
 void gx_walk(Generics* g, Validator* v, AstNode* n);
 bool expand_generics(AstNode* root, Arena* arena, SourceMap* m, Generics* g);
+void dz_err(Errs* e, Token tok, oc_string msg, oc_string name, oc_string tail);
+AstNode* dz_enum(Errs* e, oc_string name);
+int32_t dz_variant(AstNode* en, oc_string name);
+int64_t dz_bang(oc_string t);
+oc_string dz_ok_type(oc_string t);
+oc_string dz_err_type(oc_string t);
+void dz_sym_add(Errs* e, oc_string name, oc_string t);
+oc_string dz_sym(Errs* e, oc_string name);
+oc_string dz_type_of(Errs* e, AstNode* x);
+Token dz_tok(Token at, uint32_t tag, oc_string text);
+AstNode* dz_node(Errs* e, uint32_t tag, Token at, oc_string text);
+AstNode* dz_ident(Errs* e, oc_string name, Token at);
+AstNode* dz_field(Errs* e, AstNode* obj, oc_string field, Token at);
+AstNode* dz_bin(Errs* e, uint32_t tag, oc_string op, AstNode* l, AstNode* r, Token at);
+AstNode* dz_int(Errs* e, oc_string text, Token at);
+AstNode* dz_let(Errs* e, oc_string name, oc_string t, AstNode* init, bool mutable, Token at);
+AstNode* dz_assign(Errs* e, AstNode* lhs, AstNode* rhs, Token at);
+AstNode* dz_block(Errs* e, AstNode* stmts, Token at);
+AstNode* dz_if(Errs* e, AstNode* cond, AstNode* then_stmts, AstNode* else_node, Token at);
+oc_string dz_tmp(Errs* e);
+AstNode* dz_union_lit(Errs* e, oc_string ut, AstNode* code, AstNode* value, Token at);
+void dz_expr(Errs* e, AstNode* x);
+AstNode* dz_stmts(Errs* e, AstNode* first);
+AstNode* dz_stmt(Errs* e, AstNode* s);
+void dz_try(Errs* e, AstNode* t);
+void dz_catch(Errs* e, AstNode* c);
+void dz_expect(Errs* e, AstNode* x, oc_string expected);
+void dz_expr(Errs* e, AstNode* x);
+AstNode* dz_arm_body(Errs* e, AstNode* body);
+AstNode* dz_append(AstNode* first, AstNode* more);
+AstNode* dz_match(Errs* e, AstNode* s);
+void dz_try(Errs* e, AstNode* t);
+void dz_catch(Errs* e, AstNode* c);
+AstNode* dz_stmt_in(Errs* e, AstNode* s);
+AstNode* dz_stmt(Errs* e, AstNode* s);
+AstNode* dz_stmts(Errs* e, AstNode* first);
+oc_string dz_type(Errs* e, oc_string t);
+void dz_types(Errs* e, AstNode* n);
+void dz_fn(Errs* e, AstNode* f);
+bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m);
 CodeBuffer buf_init(size_t capacity);
 void buf_append_u8(CodeBuffer* buf, uint8_t byte);
 void buf_append(CodeBuffer* buf, oc_string text);
@@ -1730,6 +1798,18 @@ uint32_t check_keyword(oc_string s) {
     if (str_eq(s, (oc_string){ .ptr = (const uint8_t*)("continue"), .len = sizeof("continue") - 1 })) {
     return TOK_CONTINUE;
     }
+    if (str_eq(s, (oc_string){ .ptr = (const uint8_t*)("enum"), .len = sizeof("enum") - 1 })) {
+    return TOK_ENUM;
+    }
+    if (str_eq(s, (oc_string){ .ptr = (const uint8_t*)("match"), .len = sizeof("match") - 1 })) {
+    return TOK_MATCH;
+    }
+    if (str_eq(s, (oc_string){ .ptr = (const uint8_t*)("try"), .len = sizeof("try") - 1 })) {
+    return TOK_TRY;
+    }
+    if (str_eq(s, (oc_string){ .ptr = (const uint8_t*)("catch"), .len = sizeof("catch") - 1 })) {
+    return TOK_CATCH;
+    }
     return TOK_IDENT;
 }
 
@@ -2004,6 +2084,11 @@ Token lexer_next(Lexer* lex) {
     ((lex)->index) = __OC_ADD(((lex)->index), 2);
     ((lex)->col) = __OC_ADD(((lex)->col), 2);
     return (Token){ .tag = TOK_EQEQ, .slice = __oc_slice_str(((lex)->source), start_idx, ((lex)->index)), .line = tok_line, .col = tok_col };
+    }
+    if ((next_c == 62)) {
+    ((lex)->index) = __OC_ADD(((lex)->index), 2);
+    ((lex)->col) = __OC_ADD(((lex)->col), 2);
+    return (Token){ .tag = TOK_FATARROW, .slice = __oc_slice_str(((lex)->source), start_idx, ((lex)->index)), .line = tok_line, .col = tok_col };
     }
     }
     if ((c == 33)) {
@@ -2382,6 +2467,11 @@ oc_string parse_type(Parser* p) {
     }
     }
     }
+    }
+    if ((((((p)->current)).tag) == TOK_BANG)) {
+    parser_advance(p);
+    oc_string err_t = parse_type(p);
+    end_ptr = (((err_t).ptr) + ((err_t).len));
     }
     size_t len = __OC_SUB(((size_t)(end_ptr)), ((size_t)(start_ptr)));
     return (oc_string){ .ptr = start_ptr, .len = len };
@@ -2774,6 +2864,12 @@ AstNode* parse_postfix(Parser* p) {
 
 AstNode* parse_unary(Parser* p) {
     Token tok = ((p)->current);
+    if ((((tok).tag) == TOK_TRY)) {
+    parser_advance(p);
+    AstNode* t = ast_alloc_node(((p)->arena), NODE_TRY, tok);
+    ((t)->left) = parse_unary(p);
+    return t;
+    }
     if ((((tok).tag) == TOK_MINUS)) {
     parser_advance(p);
     AstNode* target = parse_unary(p);
@@ -2843,7 +2939,91 @@ AstNode* parse_expr(Parser* p, uint32_t min_prec) {
     }
     }
     }
+    if ((min_prec == 0)) {
+    if ((((((p)->current)).tag) == TOK_CATCH)) {
+    AstNode* c = ast_alloc_node(((p)->arena), NODE_CATCH, ((p)->current));
+    parser_advance(p);
+    ((c)->left) = left;
+    ((c)->right) = parse_expr(p, 0);
+    return c;
+    }
+    }
     return left;
+}
+
+AstNode* parse_enum_decl(Parser* p) {
+    parser_expect(p, TOK_ENUM);
+    Token name = parser_expect(p, TOK_IDENT);
+    AstNode* node = ast_alloc_node(((p)->arena), NODE_ENUM, name);
+    parser_expect(p, TOK_LBRACE);
+    AstNode* last = ((AstNode*)(0));
+    while ((((((p)->current)).tag) != TOK_RBRACE)) {
+    if ((((((p)->current)).tag) == TOK_EOF)) {
+    break;
+    }
+    AstNode* v = ast_alloc_node(((p)->arena), NODE_PARAM, parser_expect(p, TOK_IDENT));
+    if ((last == ((AstNode*)(0)))) {
+    ((node)->left) = v;
+    }
+    else {
+    ((last)->next) = v;
+    }
+    last = v;
+    if ((((((p)->current)).tag) == TOK_COMMA)) {
+    parser_advance(p);
+    }
+    else {
+    break;
+    }
+    }
+    parser_expect(p, TOK_RBRACE);
+    return node;
+}
+
+AstNode* parse_match_stmt(Parser* p) {
+    AstNode* node = ast_alloc_node(((p)->arena), NODE_MATCH, parser_expect(p, TOK_MATCH));
+    bool prev_allow = ((p)->allow_struct_init);
+    ((p)->allow_struct_init) = false;
+    ((node)->left) = parse_expr(p, 0);
+    ((p)->allow_struct_init) = prev_allow;
+    parser_expect(p, TOK_LBRACE);
+    AstNode* last = ((AstNode*)(0));
+    while ((((((p)->current)).tag) != TOK_RBRACE)) {
+    if ((((((p)->current)).tag) == TOK_EOF)) {
+    break;
+    }
+    Token first = parser_expect(p, TOK_IDENT);
+    AstNode* arm = ast_alloc_node(((p)->arena), NODE_ARM, first);
+    if ((((((p)->current)).tag) == TOK_DOT)) {
+    parser_advance(p);
+    ((arm)->right) = ast_alloc_node(((p)->arena), NODE_IDENT, first);
+    ((arm)->tok) = parser_expect(p, TOK_IDENT);
+    }
+    if ((((((p)->current)).tag) == TOK_LPAREN)) {
+    parser_advance(p);
+    ((arm)->type_name) = ((parser_expect(p, TOK_IDENT)).slice);
+    parser_expect(p, TOK_RPAREN);
+    }
+    parser_expect(p, TOK_FATARROW);
+    if ((((((p)->current)).tag) == TOK_LBRACE)) {
+    ((arm)->left) = parse_block(p);
+    }
+    else {
+    ((arm)->left) = parse_stmt(p);
+    }
+    if ((last == ((AstNode*)(0)))) {
+    ((node)->right) = arm;
+    }
+    else {
+    ((last)->next) = arm;
+    }
+    last = arm;
+    if ((((((p)->current)).tag) == TOK_COMMA)) {
+    parser_advance(p);
+    }
+    }
+    parser_expect(p, TOK_RBRACE);
+    return node;
 }
 
 AstNode* parse_block(Parser* p) {
@@ -3013,6 +3193,9 @@ AstNode* parse_stmt(Parser* p) {
     }
     if ((((((p)->current)).tag) == TOK_LBRACE)) {
     return parse_block(p);
+    }
+    if ((((((p)->current)).tag) == TOK_MATCH)) {
+    return parse_match_stmt(p);
     }
     if ((((((p)->current)).tag) == TOK_SEMICOLON)) {
     parser_advance(p);
@@ -5425,6 +5608,10 @@ AstNode* parse_program(Parser* p) {
     decl = parse_fn_decl(p);
     }
     else {
+    if ((((((p)->current)).tag) == TOK_ENUM)) {
+    decl = parse_enum_decl(p);
+    }
+    else {
     if ((((((p)->current)).tag) == TOK_STRUCT)) {
     parser_advance(p);
     decl = parse_struct_decl(p, false);
@@ -5457,6 +5644,7 @@ AstNode* parse_program(Parser* p) {
     parser_error(p, ((p)->current), (oc_string){ .ptr = (const uint8_t*)("parse error: unexpected at top level:"), .len = sizeof("parse error: unexpected at top level:") - 1 });
     ((p)->has_error) = true;
     parser_advance(p);
+    }
     }
     }
     }
@@ -6282,6 +6470,923 @@ bool expand_generics(AstNode* root, Arena* arena, SourceMap* m, Generics* g) {
     d = ((d)->next);
     }
     return ((g)->ok);
+}
+
+void dz_err(Errs* e, Token tok, oc_string msg, oc_string name, oc_string tail) {
+    print_src_loc(((e)->m), tok);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: "), .len = sizeof("error: ") - 1 });
+    print_str_raw(msg);
+    print_str_raw(name);
+    print_str_raw(tail);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ((e)->ok) = false;
+}
+
+AstNode* dz_enum(Errs* e, oc_string name) {
+    size_t i = 0;
+    while ((i < ((e)->enum_count))) {
+    AstNode* en = __OC_AT((((e)->enums)), (i));
+    if (str_eq(((((en)->tok)).slice), name)) {
+    return en;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return ((AstNode*)(0));
+}
+
+int32_t dz_variant(AstNode* en, oc_string name) {
+    AstNode* v = ((en)->left);
+    int32_t k = 0;
+    while ((v != ((AstNode*)(0)))) {
+    if (str_eq(((((v)->tok)).slice), name)) {
+    return k;
+    }
+    v = ((v)->next);
+    k = __OC_ADD(k, 1);
+    }
+    return (-1);
+}
+
+int64_t dz_bang(oc_string t) {
+    int32_t depth = 0;
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    if ((__oc_index_str(t, i) == 60)) {
+    depth = __OC_ADD(depth, 1);
+    }
+    if ((__oc_index_str(t, i) == 62)) {
+    depth = __OC_SUB(depth, 1);
+    }
+    if ((__oc_index_str(t, i) == 33)) {
+    if ((depth == 0)) {
+    return ({ __auto_type _v = (i); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; });
+    }
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (-1);
+}
+
+oc_string dz_ok_type(oc_string t) {
+    return trim(__oc_slice_str(t, 0, ({ __auto_type _v = (dz_bang(t)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
+}
+
+oc_string dz_err_type(oc_string t) {
+    return trim(__oc_slice_str(t, __OC_ADD(({ __auto_type _v = (dz_bang(t)); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), 1), ((t).len)));
+}
+
+void dz_sym_add(Errs* e, oc_string name, oc_string t) {
+    if ((((e)->sym_count) >= 512)) {
+    return;
+    }
+    __OC_AT((((e)->syms)), (((e)->sym_count))) = name;
+    __OC_AT((((e)->sym_types)), (((e)->sym_count))) = t;
+    ((e)->sym_count) = __OC_ADD(((e)->sym_count), 1);
+}
+
+oc_string dz_sym(Errs* e, oc_string name) {
+    size_t i = ((e)->sym_count);
+    while ((i > 0)) {
+    i = __OC_SUB(i, 1);
+    if (str_eq(__OC_AT((((e)->syms)), (i)), name)) {
+    return __OC_AT((((e)->sym_types)), (i));
+    }
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string dz_type_of(Errs* e, AstNode* x) {
+    if ((x == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((x)->tag) == NODE_IDENT)) {
+    return dz_sym(e, ((((x)->tok)).slice));
+    }
+    if ((((x)->tag) == NODE_CALL)) {
+    AstNode* f = program_find_fn(((e)->root), ((((x)->tok)).slice));
+    if ((f != ((AstNode*)(0)))) {
+    return ((f)->type_name);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((x)->tag) == NODE_FIELD_ACCESS)) {
+    if ((((x)->left) != ((AstNode*)(0)))) {
+    if ((((((x)->left))->tag) == NODE_IDENT)) {
+    if ((dz_enum(e, ((((((x)->left))->tok)).slice)) != ((AstNode*)(0)))) {
+    return ((((((x)->left))->tok)).slice);
+    }
+    }
+    oc_string st = dz_type_of(e, ((x)->left));
+    if (starts_with(st, (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 })) {
+    st = __oc_slice_str(st, 5, ((st).len));
+    }
+    if (starts_with(st, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    st = __oc_slice_str(st, 1, ((st).len));
+    }
+    AstNode* d = ((((e)->root))->left);
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_STRUCT_DECL)) {
+    if (str_eq(((((d)->tok)).slice), st)) {
+    AstNode* f = ((d)->left);
+    while ((f != ((AstNode*)(0)))) {
+    if (str_eq(((((f)->tok)).slice), ((((x)->tok)).slice))) {
+    return ((f)->type_name);
+    }
+    f = ((f)->next);
+    }
+    }
+    }
+    d = ((d)->next);
+    }
+    }
+    }
+    if ((((x)->tag) == NODE_CAST)) {
+    return ((x)->type_name);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+Token dz_tok(Token at, uint32_t tag, oc_string text) {
+    Token t = at;
+    ((t).tag) = tag;
+    ((t).slice) = text;
+    return t;
+}
+
+AstNode* dz_node(Errs* e, uint32_t tag, Token at, oc_string text) {
+    return ast_alloc_node(((e)->arena), tag, dz_tok(at, ((at).tag), text));
+}
+
+AstNode* dz_ident(Errs* e, oc_string name, Token at) {
+    return ast_alloc_node(((e)->arena), NODE_IDENT, dz_tok(at, TOK_IDENT, name));
+}
+
+AstNode* dz_field(Errs* e, AstNode* obj, oc_string field, Token at) {
+    AstNode* f = ast_alloc_node(((e)->arena), NODE_FIELD_ACCESS, dz_tok(at, TOK_IDENT, field));
+    ((f)->left) = obj;
+    return f;
+}
+
+AstNode* dz_bin(Errs* e, uint32_t tag, oc_string op, AstNode* l, AstNode* r, Token at) {
+    AstNode* b = ast_alloc_node(((e)->arena), NODE_BINARY, dz_tok(at, tag, op));
+    ((b)->left) = l;
+    ((b)->right) = r;
+    return b;
+}
+
+AstNode* dz_int(Errs* e, oc_string text, Token at) {
+    return ast_alloc_node(((e)->arena), NODE_INT, dz_tok(at, TOK_INT, text));
+}
+
+AstNode* dz_let(Errs* e, oc_string name, oc_string t, AstNode* init, bool mutable, Token at) {
+    uint32_t tag = TOK_IDENT;
+    if (mutable) {
+    tag = TOK_MUT;
+    }
+    AstNode* l = ast_alloc_node(((e)->arena), NODE_LET, dz_tok(at, tag, name));
+    ((l)->type_name) = t;
+    ((l)->left) = init;
+    dz_sym_add(e, name, t);
+    return l;
+}
+
+AstNode* dz_assign(Errs* e, AstNode* lhs, AstNode* rhs, Token at) {
+    AstNode* a = ast_alloc_node(((e)->arena), NODE_ASSIGN, dz_tok(at, TOK_EQUAL, (oc_string){ .ptr = (const uint8_t*)("="), .len = sizeof("=") - 1 }));
+    ((a)->left) = lhs;
+    ((a)->right) = rhs;
+    return a;
+}
+
+AstNode* dz_block(Errs* e, AstNode* stmts, Token at) {
+    AstNode* b = ast_alloc_node(((e)->arena), NODE_BLOCK, dz_tok(at, TOK_LBRACE, (oc_string){ .ptr = (const uint8_t*)("{"), .len = sizeof("{") - 1 }));
+    ((b)->left) = stmts;
+    return b;
+}
+
+AstNode* dz_if(Errs* e, AstNode* cond, AstNode* then_stmts, AstNode* else_node, Token at) {
+    AstNode* i = ast_alloc_node(((e)->arena), NODE_IF, dz_tok(at, TOK_IF, (oc_string){ .ptr = (const uint8_t*)("if"), .len = sizeof("if") - 1 }));
+    ((i)->left) = cond;
+    ((i)->right) = dz_block(e, then_stmts, at);
+    ((((i)->right))->next) = else_node;
+    return i;
+}
+
+oc_string dz_tmp(Errs* e) {
+    ((e)->tmp_n) = __OC_ADD(((e)->tmp_n), 1);
+    StrBuf sb = strbuf_init(((e)->arena), 16);
+    strbuf_push_str((&(sb)), (oc_string){ .ptr = (const uint8_t*)("__err"), .len = sizeof("__err") - 1 });
+    uint8_t digits[10] = {0};
+    size_t k = 10;
+    uint32_t v = ((e)->tmp_n);
+    while ((k > 0)) {
+    k = __OC_SUB(k, 1);
+    __OC_AT((digits), (k)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(v, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    v = __OC_DIV(v, 10);
+    if ((v == 0)) {
+    break;
+    }
+    }
+    while ((k < 10)) {
+    strbuf_push((&(sb)), __OC_AT((digits), (k)));
+    k = __OC_ADD(k, 1);
+    }
+    return gx_done(sb);
+}
+
+AstNode* dz_union_lit(Errs* e, oc_string ut, AstNode* code, AstNode* value, Token at) {
+    AstNode* s = ast_alloc_node(((e)->arena), NODE_STRUCT_INIT, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion"), .len = sizeof("__ErrorUnion") - 1 }));
+    ((s)->type_name) = str_concat(((e)->arena), str_concat(((e)->arena), dz_ok_type(ut), (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 }), dz_err_type(ut));
+    AstNode* fc = ast_alloc_node(((e)->arena), NODE_PARAM, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }));
+    ((fc)->left) = code;
+    ((s)->left) = fc;
+    if ((value != ((AstNode*)(0)))) {
+    AstNode* fv = ast_alloc_node(((e)->arena), NODE_PARAM, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 }));
+    ((fv)->left) = value;
+    ((fc)->next) = fv;
+    }
+    return s;
+}
+
+void dz_expect(Errs* e, AstNode* x, oc_string expected) {
+    if ((x == ((AstNode*)(0)))) {
+    return;
+    }
+    AstNode* want = dz_enum(e, expected);
+    if ((want != ((AstNode*)(0)))) {
+    if ((((x)->tag) == NODE_INT)) {
+    dz_err(e, ((x)->tok), (oc_string){ .ptr = (const uint8_t*)("values of "), .len = sizeof("values of ") - 1 }, expected, str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(" are written as "), .len = sizeof(" are written as ") - 1 }, str_concat(((e)->arena), expected, (oc_string){ .ptr = (const uint8_t*)(".Variant, not as numbers"), .len = sizeof(".Variant, not as numbers") - 1 })));
+    return;
+    }
+    oc_string got = dz_type_of(e, x);
+    if ((dz_enum(e, got) != ((AstNode*)(0)))) {
+    if ((!str_eq(got, expected))) {
+    dz_err(e, ((x)->tok), (oc_string){ .ptr = (const uint8_t*)("expected "), .len = sizeof("expected ") - 1 }, expected, str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(", found "), .len = sizeof(", found ") - 1 }, got));
+    return;
+    }
+    }
+    }
+    if ((((x)->tag) == NODE_CALL)) {
+    bool is_ok = str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Ok"), .len = sizeof("Ok") - 1 });
+    bool is_err = str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Err"), .len = sizeof("Err") - 1 });
+    bool ctor = is_ok;
+    if (is_err) {
+    ctor = true;
+    }
+    if (ctor) {
+    if ((dz_bang(expected) < 0)) {
+    dz_err(e, ((x)->tok), ((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("(...) needs an error-union type (T!E) here: return it, or store it in a variable declared with one"), .len = sizeof("(...) needs an error-union type (T!E) here: return it, or store it in a variable declared with one") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    AstNode* arg = ((x)->left);
+    if ((arg == ((AstNode*)(0)))) {
+    dz_err(e, ((x)->tok), ((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("(...) takes one value"), .len = sizeof("(...) takes one value") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    AstNode* lit = ((AstNode*)(0));
+    if (is_ok) {
+    dz_expect(e, arg, dz_ok_type(expected));
+    lit = dz_union_lit(e, expected, dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, ((x)->tok)), arg, ((x)->tok));
+    }
+    else {
+    dz_expect(e, arg, dz_err_type(expected));
+    AstNode* as_code = dz_node(e, NODE_CAST, ((arg)->tok), ((((arg)->tok)).slice));
+    ((as_code)->type_name) = (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
+    ((as_code)->left) = arg;
+    lit = dz_union_lit(e, expected, dz_bin(e, TOK_PLUS, (oc_string){ .ptr = (const uint8_t*)("+"), .len = sizeof("+") - 1 }, as_code, dz_int(e, (oc_string){ .ptr = (const uint8_t*)("1"), .len = sizeof("1") - 1 }, ((x)->tok)), ((x)->tok)), ((AstNode*)(0)), ((x)->tok));
+    }
+    ((x)->tag) = ((lit)->tag);
+    ((x)->tok) = ((lit)->tok);
+    ((x)->type_name) = ((lit)->type_name);
+    ((x)->left) = ((lit)->left);
+    ((x)->right) = ((AstNode*)(0));
+    return;
+    }
+    }
+    dz_expr(e, x);
+}
+
+void dz_expr(Errs* e, AstNode* x) {
+    if ((x == ((AstNode*)(0)))) {
+    return;
+    }
+    if ((((x)->tag) == NODE_TRY)) {
+    dz_try(e, x);
+    return;
+    }
+    if ((((x)->tag) == NODE_CATCH)) {
+    dz_catch(e, x);
+    return;
+    }
+    if ((((x)->tag) == NODE_FIELD_ACCESS)) {
+    if ((((x)->left) != ((AstNode*)(0)))) {
+    if ((((((x)->left))->tag) == NODE_IDENT)) {
+    AstNode* en = dz_enum(e, ((((((x)->left))->tok)).slice));
+    if ((en != ((AstNode*)(0)))) {
+    int32_t k = dz_variant(en, ((((x)->tok)).slice));
+    if ((k < 0)) {
+    dz_err(e, ((x)->tok), (oc_string){ .ptr = (const uint8_t*)("no such variant in "), .len = sizeof("no such variant in ") - 1 }, ((((en)->tok)).slice), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(": "), .len = sizeof(": ") - 1 }, ((((x)->tok)).slice)));
+    return;
+    }
+    AstNode* num = dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, ((x)->tok));
+    uint8_t digits[10] = {0};
+    size_t pos = 10;
+    uint32_t val = ({ __auto_type _v = (k); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; });
+    while ((pos > 0)) {
+    pos = __OC_SUB(pos, 1);
+    __OC_AT((digits), (pos)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(val, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    val = __OC_DIV(val, 10);
+    if ((val == 0)) {
+    break;
+    }
+    }
+    StrBuf sb = strbuf_init(((e)->arena), 12);
+    while ((pos < 10)) {
+    strbuf_push((&(sb)), __OC_AT((digits), (pos)));
+    pos = __OC_ADD(pos, 1);
+    }
+    ((x)->tag) = NODE_INT;
+    ((x)->tok) = ((num)->tok);
+    ((((x)->tok)).slice) = gx_done(sb);
+    ((x)->left) = ((AstNode*)(0));
+    return;
+    }
+    if ((dz_bang(dz_sym(e, ((((((x)->left))->tok)).slice))) >= 0)) {
+    bool internal = str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 });
+    if (str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 })) {
+    internal = true;
+    }
+    if (internal) {
+    if ((!starts_with(((((((x)->left))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__err"), .len = sizeof("__err") - 1 }))) {
+    dz_err(e, ((x)->tok), (oc_string){ .ptr = (const uint8_t*)("the payload of an error union is read with match, try or catch, not ."), .len = sizeof("the payload of an error union is read with match, try or catch, not .") - 1 }, ((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    }
+    }
+    }
+    }
+    }
+    if ((((x)->tag) == NODE_CALL)) {
+    bool is_ctor = str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Ok"), .len = sizeof("Ok") - 1 });
+    if (str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Err"), .len = sizeof("Err") - 1 })) {
+    is_ctor = true;
+    }
+    if (is_ctor) {
+    dz_expect(e, x, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    AstNode* f = program_find_fn(((e)->root), ((((x)->tok)).slice));
+    AstNode* prm = ((AstNode*)(0));
+    if ((f != ((AstNode*)(0)))) {
+    prm = ((f)->left);
+    }
+    AstNode* a = ((x)->left);
+    while ((a != ((AstNode*)(0)))) {
+    if ((prm != ((AstNode*)(0)))) {
+    dz_expect(e, a, ((prm)->type_name));
+    prm = ((prm)->next);
+    }
+    else {
+    dz_expr(e, a);
+    }
+    a = ((a)->next);
+    }
+    return;
+    }
+    bool is_list = (((x)->tag) == NODE_STRUCT_INIT);
+    if ((((x)->tag) == NODE_ARRAY_INIT)) {
+    is_list = true;
+    }
+    if (is_list) {
+    AstNode* el = ((x)->left);
+    while ((el != ((AstNode*)(0)))) {
+    if ((((x)->tag) == NODE_STRUCT_INIT)) {
+    dz_expr(e, ((el)->left));
+    }
+    else {
+    dz_expr(e, el);
+    }
+    el = ((el)->next);
+    }
+    return;
+    }
+    dz_expr(e, ((x)->left));
+    dz_expr(e, ((x)->right));
+}
+
+AstNode* dz_arm_body(Errs* e, AstNode* body) {
+    if ((body == ((AstNode*)(0)))) {
+    return body;
+    }
+    if ((((body)->tag) == NODE_BLOCK)) {
+    return dz_stmts(e, ((body)->left));
+    }
+    ((body)->next) = ((AstNode*)(0));
+    return dz_stmts(e, body);
+}
+
+AstNode* dz_append(AstNode* first, AstNode* more) {
+    if ((first == ((AstNode*)(0)))) {
+    return more;
+    }
+    AstNode* t = first;
+    while ((((t)->next) != ((AstNode*)(0)))) {
+    t = ((t)->next);
+    }
+    ((t)->next) = more;
+    return first;
+}
+
+AstNode* dz_match(Errs* e, AstNode* s) {
+    dz_expr(e, ((s)->left));
+    oc_string st = dz_type_of(e, ((s)->left));
+    oc_string tmp = dz_tmp(e);
+    Token at = ((s)->tok);
+    if ((dz_bang(st) >= 0)) {
+    AstNode* ok_arm = ((AstNode*)(0));
+    AstNode* err_arm = ((AstNode*)(0));
+    AstNode* any_arm = ((AstNode*)(0));
+    AstNode* a = ((s)->right);
+    while ((a != ((AstNode*)(0)))) {
+    if (str_eq(((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Ok"), .len = sizeof("Ok") - 1 })) {
+    if ((ok_arm != ((AstNode*)(0)))) {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("Ok is matched twice"), .len = sizeof("Ok is matched twice") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    ok_arm = a;
+    }
+    else {
+    if (str_eq(((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Err"), .len = sizeof("Err") - 1 })) {
+    if ((err_arm != ((AstNode*)(0)))) {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("Err is matched twice"), .len = sizeof("Err is matched twice") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    err_arm = a;
+    }
+    else {
+    if (str_eq(((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("_"), .len = sizeof("_") - 1 })) {
+    any_arm = a;
+    }
+    else {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("a match on an error union has Ok(..) and Err(..) arms, not "), .len = sizeof("a match on an error union has Ok(..) and Err(..) arms, not ") - 1 }, ((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    }
+    }
+    a = ((a)->next);
+    }
+    if ((ok_arm == ((AstNode*)(0)))) {
+    ok_arm = any_arm;
+    }
+    if ((err_arm == ((AstNode*)(0)))) {
+    err_arm = any_arm;
+    }
+    if ((ok_arm == ((AstNode*)(0)))) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("this match does not handle Ok(..)"), .len = sizeof("this match does not handle Ok(..)") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return s;
+    }
+    if ((err_arm == ((AstNode*)(0)))) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("this match does not handle Err(..): every error must be handled (or add `_ =>`)"), .len = sizeof("this match does not handle Err(..): every error must be handled (or add `_ =>`)") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return s;
+    }
+    AstNode* head = dz_let(e, tmp, st, ((s)->left), false, at);
+    AstNode* ok_stmts = ((AstNode*)(0));
+    if (str_eq(((((ok_arm)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Ok"), .len = sizeof("Ok") - 1 })) {
+    if ((((((ok_arm)->type_name)).len) > 0)) {
+    if ((!str_eq(((ok_arm)->type_name), (oc_string){ .ptr = (const uint8_t*)("_"), .len = sizeof("_") - 1 }))) {
+    ok_stmts = dz_let(e, ((ok_arm)->type_name), dz_ok_type(st), dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 }, at), false, ((ok_arm)->tok));
+    }
+    }
+    }
+    ok_stmts = dz_append(ok_stmts, dz_arm_body(e, ((ok_arm)->left)));
+    AstNode* err_stmts = ((AstNode*)(0));
+    if (str_eq(((((err_arm)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("Err"), .len = sizeof("Err") - 1 })) {
+    if ((((((err_arm)->type_name)).len) > 0)) {
+    if ((!str_eq(((err_arm)->type_name), (oc_string){ .ptr = (const uint8_t*)("_"), .len = sizeof("_") - 1 }))) {
+    AstNode* minus = dz_bin(e, TOK_MINUS, (oc_string){ .ptr = (const uint8_t*)("-"), .len = sizeof("-") - 1 }, dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }, at), dz_int(e, (oc_string){ .ptr = (const uint8_t*)("1"), .len = sizeof("1") - 1 }, at), at);
+    AstNode* as_e = dz_node(e, NODE_CAST, at, (oc_string){ .ptr = (const uint8_t*)("as"), .len = sizeof("as") - 1 });
+    ((as_e)->type_name) = dz_err_type(st);
+    ((as_e)->left) = minus;
+    err_stmts = dz_let(e, ((err_arm)->type_name), dz_err_type(st), as_e, false, ((err_arm)->tok));
+    }
+    }
+    }
+    err_stmts = dz_append(err_stmts, dz_arm_body(e, ((err_arm)->left)));
+    AstNode* cond = dz_bin(e, TOK_EQEQ, (oc_string){ .ptr = (const uint8_t*)("=="), .len = sizeof("==") - 1 }, dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }, at), dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, at), at);
+    ((head)->next) = dz_if(e, cond, ok_stmts, dz_block(e, err_stmts, at), at);
+    return head;
+    }
+    AstNode* en = dz_enum(e, st);
+    if ((en == ((AstNode*)(0)))) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("match needs an enum value or an error union (T!E); this value's type is not known to be one"), .len = sizeof("match needs an enum value or an error union (T!E); this value's type is not known to be one") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return s;
+    }
+    bool seen[64] = {0};
+    AstNode* any_arm = ((AstNode*)(0));
+    AstNode* chain_head = ((AstNode*)(0));
+    AstNode* chain_tail = ((AstNode*)(0));
+    AstNode* a = ((s)->right);
+    while ((a != ((AstNode*)(0)))) {
+    if (str_eq(((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("_"), .len = sizeof("_") - 1 })) {
+    any_arm = a;
+    }
+    else {
+    if ((((a)->right) != ((AstNode*)(0)))) {
+    if ((!str_eq(((((((a)->right))->tok)).slice), ((((en)->tok)).slice)))) {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("this match is on "), .len = sizeof("this match is on ") - 1 }, ((((en)->tok)).slice), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(", not "), .len = sizeof(", not ") - 1 }, ((((((a)->right))->tok)).slice)));
+    a = ((a)->next);
+    continue;
+    }
+    }
+    int32_t k = dz_variant(en, ((((a)->tok)).slice));
+    if ((k < 0)) {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("no such variant in "), .len = sizeof("no such variant in ") - 1 }, ((((en)->tok)).slice), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(": "), .len = sizeof(": ") - 1 }, ((((a)->tok)).slice)));
+    }
+    else {
+    if ((k < 64)) {
+    if (__OC_AT((seen), (({ __auto_type _v = (k); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))) {
+    dz_err(e, ((a)->tok), (oc_string){ .ptr = (const uint8_t*)("variant matched twice: "), .len = sizeof("variant matched twice: ") - 1 }, ((((a)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    __OC_AT((seen), (({ __auto_type _v = (k); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))) = true;
+    size_t pos = 10;
+    uint8_t digits[10] = {0};
+    uint32_t val = ({ __auto_type _v = (k); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; });
+    while ((pos > 0)) {
+    pos = __OC_SUB(pos, 1);
+    __OC_AT((digits), (pos)) = ({ __auto_type _v = (__OC_ADD(48, __OC_MOD(val, 10))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    val = __OC_DIV(val, 10);
+    if ((val == 0)) {
+    break;
+    }
+    }
+    StrBuf sb = strbuf_init(((e)->arena), 12);
+    while ((pos < 10)) {
+    strbuf_push((&(sb)), __OC_AT((digits), (pos)));
+    pos = __OC_ADD(pos, 1);
+    }
+    AstNode* cond = dz_bin(e, TOK_EQEQ, (oc_string){ .ptr = (const uint8_t*)("=="), .len = sizeof("==") - 1 }, dz_ident(e, tmp, at), dz_int(e, gx_done(sb), ((a)->tok)), ((a)->tok));
+    AstNode* arm_if = dz_if(e, cond, dz_arm_body(e, ((a)->left)), ((AstNode*)(0)), ((a)->tok));
+    if ((chain_head == ((AstNode*)(0)))) {
+    chain_head = arm_if;
+    }
+    else {
+    ((((chain_tail)->right))->next) = arm_if;
+    }
+    chain_tail = arm_if;
+    }
+    }
+    }
+    a = ((a)->next);
+    }
+    if ((any_arm == ((AstNode*)(0)))) {
+    AstNode* v = ((en)->left);
+    size_t k = 0;
+    while ((v != ((AstNode*)(0)))) {
+    if ((k < 64)) {
+    if ((!__OC_AT((seen), (k)))) {
+    dz_err(e, at, str_concat(((e)->arena), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("this match on "), .len = sizeof("this match on ") - 1 }, ((((en)->tok)).slice)), (oc_string){ .ptr = (const uint8_t*)(" does not handle "), .len = sizeof(" does not handle ") - 1 }), ((((v)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(" (add its arm, or `_ =>`)"), .len = sizeof(" (add its arm, or `_ =>`)") - 1 });
+    }
+    }
+    v = ((v)->next);
+    k = __OC_ADD(k, 1);
+    }
+    }
+    else {
+    AstNode* rest = dz_block(e, dz_arm_body(e, ((any_arm)->left)), at);
+    if ((chain_head == ((AstNode*)(0)))) {
+    chain_head = rest;
+    }
+    else {
+    ((((chain_tail)->right))->next) = rest;
+    }
+    }
+    AstNode* head = dz_let(e, tmp, st, ((s)->left), false, at);
+    ((head)->next) = chain_head;
+    return head;
+}
+
+void dz_try(Errs* e, AstNode* t) {
+    Token at = ((t)->tok);
+    AstNode* call = ((t)->left);
+    dz_expr(e, call);
+    oc_string ut = dz_type_of(e, call);
+    if ((dz_bang(ut) < 0)) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("try needs an error union (T!E)"), .len = sizeof("try needs an error union (T!E)") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    if ((dz_bang(((e)->fn_ret)) < 0)) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("try passes the error on to the caller, so this function must return an error union (T!E)"), .len = sizeof("try passes the error on to the caller, so this function must return an error union (T!E)") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    if ((!str_eq(dz_err_type(ut), dz_err_type(((e)->fn_ret))))) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("try passes on errors of type "), .len = sizeof("try passes on errors of type ") - 1 }, dz_err_type(ut), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(", but this function's errors are "), .len = sizeof(", but this function's errors are ") - 1 }, dz_err_type(((e)->fn_ret))));
+    return;
+    }
+    oc_string tmp = dz_tmp(e);
+    AstNode* head = dz_let(e, tmp, ut, call, false, at);
+    AstNode* fail = dz_bin(e, TOK_NEQ, (oc_string){ .ptr = (const uint8_t*)("!="), .len = sizeof("!=") - 1 }, dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }, at), dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, at), at);
+    AstNode* ret = ast_alloc_node(((e)->arena), NODE_RETURN, dz_tok(at, TOK_RETURN, (oc_string){ .ptr = (const uint8_t*)("return"), .len = sizeof("return") - 1 }));
+    ((ret)->left) = dz_union_lit(e, ((e)->fn_ret), dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }, at), ((AstNode*)(0)), at);
+    ((head)->next) = dz_if(e, fail, ret, ((AstNode*)(0)), at);
+    ((e)->pre) = dz_append(((e)->pre), head);
+    AstNode* value = dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 }, at);
+    ((t)->tag) = NODE_FIELD_ACCESS;
+    ((t)->tok) = ((value)->tok);
+    ((t)->left) = ((value)->left);
+    ((t)->right) = ((AstNode*)(0));
+}
+
+void dz_catch(Errs* e, AstNode* c) {
+    Token at = ((c)->tok);
+    dz_expr(e, ((c)->left));
+    oc_string ut = dz_type_of(e, ((c)->left));
+    if ((dz_bang(ut) < 0)) {
+    dz_err(e, at, (oc_string){ .ptr = (const uint8_t*)("catch needs an error union (T!E) on its left"), .len = sizeof("catch needs an error union (T!E) on its left") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    return;
+    }
+    oc_string ok_t = dz_ok_type(ut);
+    oc_string tmp = dz_tmp(e);
+    oc_string val = dz_tmp(e);
+    AstNode* head = dz_let(e, tmp, ut, ((c)->left), false, at);
+    AstNode* v = dz_let(e, val, ok_t, dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 }, at), true, at);
+    ((head)->next) = v;
+    AstNode* outer = ((e)->pre);
+    ((e)->pre) = ((AstNode*)(0));
+    dz_expect(e, ((c)->right), ok_t);
+    AstNode* on_err = dz_append(((e)->pre), dz_assign(e, dz_ident(e, val, at), ((c)->right), at));
+    ((e)->pre) = outer;
+    AstNode* fail = dz_bin(e, TOK_NEQ, (oc_string){ .ptr = (const uint8_t*)("!="), .len = sizeof("!=") - 1 }, dz_field(e, dz_ident(e, tmp, at), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }, at), dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, at), at);
+    ((v)->next) = dz_if(e, fail, on_err, ((AstNode*)(0)), at);
+    ((e)->pre) = dz_append(((e)->pre), head);
+    ((c)->tag) = NODE_IDENT;
+    ((c)->tok) = dz_tok(at, TOK_IDENT, val);
+    ((c)->left) = ((AstNode*)(0));
+    ((c)->right) = ((AstNode*)(0));
+}
+
+AstNode* dz_stmt_in(Errs* e, AstNode* s) {
+    if ((((s)->tag) == NODE_BLOCK)) {
+    ((s)->left) = dz_stmts(e, ((s)->left));
+    return s;
+    }
+    if ((((s)->tag) == NODE_IF)) {
+    dz_expr(e, ((s)->left));
+    ((((s)->right))->left) = dz_stmts(e, ((((s)->right))->left));
+    AstNode* els = ((((s)->right))->next);
+    if ((els != ((AstNode*)(0)))) {
+    if ((((els)->tag) == NODE_BLOCK)) {
+    ((els)->left) = dz_stmts(e, ((els)->left));
+    }
+    if ((((els)->tag) == NODE_IF)) {
+    AstNode* lowered = dz_stmt(e, els);
+    if ((lowered != els)) {
+    ((((s)->right))->next) = dz_block(e, lowered, ((els)->tok));
+    }
+    }
+    }
+    return s;
+    }
+    if ((((s)->tag) == NODE_WHILE)) {
+    dz_expr(e, ((s)->left));
+    if ((((e)->pre) != ((AstNode*)(0)))) {
+    dz_err(e, ((((s)->left))->tok), (oc_string){ .ptr = (const uint8_t*)("try and catch cannot be used in a while condition (it is evaluated again on every iteration): compute the value in the loop body"), .len = sizeof("try and catch cannot be used in a while condition (it is evaluated again on every iteration): compute the value in the loop body") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    if ((((s)->right) != ((AstNode*)(0)))) {
+    ((((s)->right))->left) = dz_stmts(e, ((((s)->right))->left));
+    }
+    return s;
+    }
+    if ((((s)->tag) == NODE_MATCH)) {
+    return dz_match(e, s);
+    }
+    if ((((s)->tag) == NODE_TRY)) {
+    dz_try(e, s);
+    return ((AstNode*)(0));
+    }
+    if ((((s)->tag) == NODE_LET)) {
+    if ((((((s)->type_name)).len) == 0)) {
+    if ((((s)->left) != ((AstNode*)(0)))) {
+    AstNode* inner = ((AstNode*)(0));
+    if ((((((s)->left))->tag) == NODE_TRY)) {
+    inner = ((((s)->left))->left);
+    }
+    if ((((((s)->left))->tag) == NODE_CATCH)) {
+    inner = ((((s)->left))->left);
+    }
+    if ((inner != ((AstNode*)(0)))) {
+    oc_string ut = dz_type_of(e, inner);
+    if ((dz_bang(ut) >= 0)) {
+    ((s)->type_name) = dz_ok_type(ut);
+    }
+    }
+    }
+    }
+    dz_expect(e, ((s)->left), ((s)->type_name));
+    oc_string t = ((s)->type_name);
+    if ((((t).len) == 0)) {
+    t = dz_type_of(e, ((s)->left));
+    }
+    dz_sym_add(e, ((((s)->tok)).slice), t);
+    return s;
+    }
+    if ((((s)->tag) == NODE_ASSIGN)) {
+    dz_expr(e, ((s)->left));
+    dz_expect(e, ((s)->right), dz_type_of(e, ((s)->left)));
+    return s;
+    }
+    if ((((s)->tag) == NODE_RETURN)) {
+    if ((((s)->left) != ((AstNode*)(0)))) {
+    if ((((((s)->left))->tag) == NODE_TRY)) {
+    if ((dz_bang(((e)->fn_ret)) >= 0)) {
+    AstNode* value = ((s)->left);
+    dz_expr(e, value);
+    ((s)->left) = dz_union_lit(e, ((e)->fn_ret), dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, ((s)->tok)), value, ((s)->tok));
+    return s;
+    }
+    }
+    }
+    dz_expect(e, ((s)->left), ((e)->fn_ret));
+    return s;
+    }
+    if ((((s)->tag) == NODE_CALL)) {
+    oc_string rt = dz_type_of(e, s);
+    if ((dz_bang(rt) >= 0)) {
+    dz_err(e, ((s)->tok), (oc_string){ .ptr = (const uint8_t*)("the error union returned by "), .len = sizeof("the error union returned by ") - 1 }, ((((s)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(" is ignored: handle it with match, try or catch"), .len = sizeof(" is ignored: handle it with match, try or catch") - 1 });
+    }
+    }
+    dz_expr(e, s);
+    return s;
+}
+
+AstNode* dz_stmt(Errs* e, AstNode* s) {
+    AstNode* outer = ((e)->pre);
+    ((e)->pre) = ((AstNode*)(0));
+    AstNode* lowered = dz_stmt_in(e, s);
+    AstNode* out = dz_append(((e)->pre), lowered);
+    ((e)->pre) = outer;
+    return out;
+}
+
+AstNode* dz_stmts(Errs* e, AstNode* first) {
+    size_t scope = ((e)->sym_count);
+    AstNode* head = ((AstNode*)(0));
+    AstNode* s = first;
+    while ((s != ((AstNode*)(0)))) {
+    AstNode* nxt = ((s)->next);
+    ((s)->next) = ((AstNode*)(0));
+    head = dz_append(head, dz_stmt(e, s));
+    s = nxt;
+    }
+    ((e)->sym_count) = scope;
+    return head;
+}
+
+oc_string dz_type(Errs* e, oc_string t) {
+    if ((((t).len) == 0)) {
+    return t;
+    }
+    StrBuf sb = strbuf_init(((e)->arena), __OC_ADD(((t).len), 24));
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    if (gx_is_ident_char(__oc_index_str(t, i))) {
+    size_t j = i;
+    while ((j < ((t).len))) {
+    if ((!gx_is_ident_char(__oc_index_str(t, j)))) {
+    break;
+    }
+    j = __OC_ADD(j, 1);
+    }
+    if ((dz_enum(e, __oc_slice_str(t, i, j)) != ((AstNode*)(0)))) {
+    strbuf_push_str((&(sb)), (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 });
+    }
+    else {
+    strbuf_push_str((&(sb)), __oc_slice_str(t, i, j));
+    }
+    i = j;
+    }
+    else {
+    strbuf_push((&(sb)), __oc_index_str(t, i));
+    i = __OC_ADD(i, 1);
+    }
+    }
+    oc_string s1 = gx_done(sb);
+    int64_t b = dz_bang(s1);
+    if ((b < 0)) {
+    return s1;
+    }
+    StrBuf u = strbuf_init(((e)->arena), __OC_ADD(((s1).len), 24));
+    strbuf_push_str((&(u)), (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion<"), .len = sizeof("__ErrorUnion<") - 1 });
+    strbuf_push_str((&(u)), dz_type(e, trim(__oc_slice_str(s1, 0, ({ __auto_type _v = (b); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))));
+    strbuf_push_str((&(u)), (oc_string){ .ptr = (const uint8_t*)(","), .len = sizeof(",") - 1 });
+    strbuf_push_str((&(u)), dz_type(e, trim(__oc_slice_str(s1, __OC_ADD(({ __auto_type _v = (b); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), 1), ((s1).len)))));
+    strbuf_push_str((&(u)), (oc_string){ .ptr = (const uint8_t*)(">"), .len = sizeof(">") - 1 });
+    return gx_done(u);
+}
+
+void dz_types(Errs* e, AstNode* n) {
+    AstNode* cur = n;
+    while ((cur != ((AstNode*)(0)))) {
+    if ((((((cur)->type_name)).len) > 0)) {
+    bool is_type = (((cur)->tag) != NODE_ADDRESS_OF);
+    if ((((cur)->tag) == NODE_FLOAT)) {
+    is_type = false;
+    }
+    if ((((cur)->tag) == NODE_STRUCT_DECL)) {
+    is_type = false;
+    }
+    if (is_type) {
+    ((cur)->type_name) = dz_type(e, ((cur)->type_name));
+    }
+    }
+    dz_types(e, ((cur)->left));
+    dz_types(e, ((cur)->right));
+    cur = ((cur)->next);
+    }
+}
+
+void dz_fn(Errs* e, AstNode* f) {
+    if ((((f)->right) == ((AstNode*)(0)))) {
+    return;
+    }
+    ((e)->fn_ret) = ((f)->type_name);
+    ((e)->sym_count) = 0;
+    AstNode* p = ((f)->left);
+    while ((p != ((AstNode*)(0)))) {
+    dz_sym_add(e, ((((p)->tok)).slice), ((p)->type_name));
+    p = ((p)->next);
+    }
+    ((((f)->right))->left) = dz_stmts(e, ((((f)->right))->left));
+}
+
+bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m) {
+    Errs e = (Errs){ .enums = { ((AstNode*)(0)) }, .enum_count = 0, .arena = arena, .m = m, .root = root, .ok = true, .tmp_n = 0, .fn_ret = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .syms = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .sym_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .sym_count = 0, .pre = ((AstNode*)(0)) };
+    AstNode* prev = ((AstNode*)(0));
+    AstNode* last = ((AstNode*)(0));
+    AstNode* d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    AstNode* nxt = ((d)->next);
+    if ((((d)->tag) == NODE_ENUM)) {
+    if ((dz_enum((&(e)), ((((d)->tok)).slice)) != ((AstNode*)(0)))) {
+    dz_err((&(e)), ((d)->tok), (oc_string){ .ptr = (const uint8_t*)("enum defined twice: "), .len = sizeof("enum defined twice: ") - 1 }, ((((d)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    }
+    else {
+    if ((((e).enum_count) < 64)) {
+    __OC_AT((((e).enums)), (((e).enum_count))) = d;
+    ((e).enum_count) = __OC_ADD(((e).enum_count), 1);
+    }
+    }
+    if ((prev == ((AstNode*)(0)))) {
+    ((root)->left) = nxt;
+    }
+    else {
+    ((prev)->next) = nxt;
+    }
+    }
+    else {
+    prev = d;
+    }
+    d = nxt;
+    }
+    last = prev;
+    Token at = ((root)->tok);
+    AstNode* tmpl = ast_alloc_node(arena, NODE_GENERIC, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion"), .len = sizeof("__ErrorUnion") - 1 }));
+    AstNode* pt = ast_alloc_node(arena, NODE_PARAM, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("T"), .len = sizeof("T") - 1 }));
+    ((pt)->next) = ast_alloc_node(arena, NODE_PARAM, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("E"), .len = sizeof("E") - 1 }));
+    ((tmpl)->left) = pt;
+    AstNode* sd = ast_alloc_node(arena, NODE_STRUCT_DECL, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion"), .len = sizeof("__ErrorUnion") - 1 }));
+    AstNode* fcode = ast_alloc_node(arena, NODE_PARAM, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("code"), .len = sizeof("code") - 1 }));
+    ((fcode)->type_name) = (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
+    AstNode* fval = ast_alloc_node(arena, NODE_PARAM, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("value"), .len = sizeof("value") - 1 }));
+    ((fval)->type_name) = (oc_string){ .ptr = (const uint8_t*)("T"), .len = sizeof("T") - 1 };
+    ((fcode)->next) = fval;
+    ((sd)->left) = fcode;
+    ((tmpl)->right) = sd;
+    if ((last == ((AstNode*)(0)))) {
+    ((root)->left) = tmpl;
+    }
+    else {
+    ((last)->next) = tmpl;
+    }
+    d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_FN)) {
+    dz_fn((&(e)), d);
+    }
+    if ((((d)->tag) == NODE_GENERIC)) {
+    if ((((((d)->right))->tag) == NODE_FN)) {
+    dz_fn((&(e)), ((d)->right));
+    }
+    }
+    if ((((d)->tag) == NODE_LET)) {
+    dz_expect((&(e)), ((d)->left), ((d)->type_name));
+    }
+    d = ((d)->next);
+    }
+    d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    AstNode* nxt = ((d)->next);
+    ((d)->next) = ((AstNode*)(0));
+    dz_types((&(e)), d);
+    ((d)->next) = nxt;
+    d = nxt;
+    }
+    return ((e).ok);
 }
 
 CodeBuffer buf_init(size_t capacity) {
@@ -13826,6 +14931,11 @@ int main(int argc, char** argv) {
     return 1;
     }
     Generics gen = (Generics){ .tmpl = { ((AstNode*)(0)) }, .tmpl_count = 0, .inst_name = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_tmpl = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_args = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_site = { (Token){ .tag = 0, .slice = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .line = 0, .col = 0 } }, .inst_count = 0, .arena = (&(arena)), .m = (&(((loader).map))), .root = prog, .last = ((AstNode*)(0)), .ok = true };
+    if ((!desugar_errors(prog, (&(arena)), (&(((loader).map)))))) {
+    buf_deinit((&(combined_buf)));
+    arena_deinit((&(arena)));
+    return 1;
+    }
     if ((!expand_generics(prog, (&(arena)), (&(((loader).map))), (&(gen))))) {
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));

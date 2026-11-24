@@ -1,0 +1,10 @@
+// A match on an enum must handle every variant (or have `_ =>`).
+enum E { A, B, C }
+
+fn main() {
+    let e: E = E.A;
+    match e {
+        E.A => print(1),
+        E.B => print(2),
+    }
+}

@@ -1,0 +1,19 @@
+// A string from an arena inside Ok is still tracked: using it after arena_reset is rejected.
+import "std/str.oc";
+
+enum E { Bad }
+
+fn make(a: *mut Arena) -> string!E {
+    return Ok(str_concat(a, "ab", "cd"));
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let r = make(&mut a);
+    arena_reset(&mut a);
+    match r {
+        Ok(s) => print(s),
+        Err(_) => print("error"),
+    }
+    arena_deinit(&mut a);
+}
