@@ -1224,6 +1224,7 @@ fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
 // Functions the compiler implements itself; every other call needs a declaration.
 fn is_builtin_fn(name: string) -> bool {
     if str_eq(name, "sqrt_f64") { return true; }
+    if str_eq(name, "f64_to_bits") { return true; }
     if str_eq(name, "wrapping_add") { return true; }
     if str_eq(name, "wrapping_sub") { return true; }
     if str_eq(name, "wrapping_mul") { return true; }
@@ -1398,6 +1399,7 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
     }
     if expr.tag == NODE_CALL {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; } // built-in
+        if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; } // built-in
         let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
         if callee == (0).as(*mut AstNode) { return ""; }
         return callee.type_name;

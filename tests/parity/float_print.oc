@@ -1,6 +1,6 @@
 // print_f64(x, digits) from std/fmt.oc against C's printf("%.<digits>g"): the expected
-// text was produced by Python's % formatting, which is correctly rounded like glibc. Generated; both
-// backends must print float_print.expected exactly.
+// text was produced by Python's % formatting, which is correctly rounded like glibc.
+// Generated; both backends must print float_print.expected exactly.
 import "std/fmt.oc";
 
 fn main() {
@@ -116,7 +116,7 @@ fn main() {
         i = i + 1;
     }
     let zero: f64 = 0.0;
-    print_f64(-0.0, 17);       // 0 (no sign, as with print)
+    print_f64(-0.0, 17);       // -0 (the sign bit, as C prints it)
     print_f64(zero / zero, 17); // NaN
     print_f64(1.0 / zero, 17);  // inf
     print_f64(-1.0 / zero, 3);  // -inf

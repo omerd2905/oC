@@ -16,7 +16,7 @@ import "str.oc";
 // [-4, digits), scientific otherwise, trailing zeros removed. 17 digits always identify
 // the f64 exactly. The digits are correctly rounded (halves to even) because they are
 // taken from the exact decimal value of x, computed with integer arithmetic.
-// Specials print as NaN, inf and -inf, and negative zero as 0, as with print.
+// Specials print as NaN, inf and -inf, and negative zero as -0, as with print.
 // ---------------------------------------------------------------------------------------
 
 struct FmtExact {
@@ -260,7 +260,7 @@ fn fmt_format_f64(o: *mut u8, x: f64, digits: u32) -> usize {
     if p > 40 { p = 40; }
     let mut n: usize = 0;
     let mut v: f64 = x;
-    if v < 0.0 {
+    if (f64_to_bits(x) >> 63) == 1 { // the sign bit: also set for -0.0, where x < 0.0 is false
         o[0] = 45; // '-'
         n = 1;
         v = -v;
@@ -271,9 +271,9 @@ fn fmt_format_f64(o: *mut u8, x: f64, digits: u32) -> usize {
         o[n + 2] = 102;
         return n + 3;
     }
-    if v <= 0.0 { // zero, either sign
-        o[0] = 48;
-        return 1;
+    if v <= 0.0 { // zero; a '-' is already there for -0.0
+        o[n] = 48;
+        return n + 1;
     }
     return fmt_put_g(o, n, v, p);
 }
