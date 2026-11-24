@@ -1,0 +1,15 @@
+// expect: reject use-after-free: variable 'r' used after arena 'a1' was reset
+// An array holding pointers from two arenas borrowed only from the first one, so resetting
+// the second went unnoticed.
+import "std/mem.oc";
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let mut a1: Arena = arena_init(4096);
+    let p0: *mut u8 = arena_alloc(&mut a0, 16);
+    let p1: *mut u8 = arena_alloc(&mut a1, 16);
+    p1[0] = 9;
+    let r: [2]*mut u8 = [p0, p1];
+    arena_reset(&mut a1);
+    print(r[1][0]);
+}

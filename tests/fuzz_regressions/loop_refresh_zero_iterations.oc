@@ -1,0 +1,15 @@
+// expect: reject use-after-free: variable 'p0' used after arena 'a0' was reset
+// Same hole through a loop that may run zero times: only the state after two iterations
+// was kept.
+import "std/mem.oc";
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let go: bool = false;
+    let mut p0: *mut u8 = arena_alloc(&mut a0, 16);
+    arena_reset(&mut a0);
+    while go {
+        p0 = arena_alloc(&mut a0, 16);
+    }
+    print(p0[0]);
+}

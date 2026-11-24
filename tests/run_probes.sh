@@ -333,6 +333,56 @@ for backend in c native; do
 done
 rm -rf "$WORK"
 
+echo "=== Fuzzer regressions (tests/fuzz_regressions): each finding stays fixed ==="
+# "// expect: reject <text>": rejected with <text>, on both backends.
+# "// expect: run": accepted, and with --arena-poison exits 0 and prints the same on both.
+for t in "$ROOT"/tests/fuzz_regressions/*.oc; do
+  base="$(basename "$t")"
+  expect="$(sed -n '1s|^// expect: ||p' "$t")"
+  TOTAL=$((TOTAL + 1))
+  if [ "${expect%% *}" = "reject" ]; then
+    want="${expect#reject }"
+    for backend in c native; do
+      if out="$("$OCC" build "$t" -o /tmp/oc_fz_bin --backend "$backend" 2>&1)"; then
+        echo "  [FAIL] $base (--backend $backend): accepted, expected: $want"
+        exit 1
+      elif ! grep -qF -- "$want" <<<"$out"; then
+        echo "  [FAIL] $base (--backend $backend): rejected with '$out', expected: $want"
+        exit 1
+      fi
+    done
+    echo "  [PASS] $base rejected: $want"
+  elif [ "$expect" = "run" ]; then
+    got_c=""
+    for backend in c native; do
+      if ! out="$("$OCC" build "$t" -o /tmp/oc_fz_bin --backend "$backend" --arena-poison 2>&1)"; then
+        echo "  [FAIL] $base (--backend $backend) was rejected: $out"
+        exit 1
+      fi
+      set +e
+      got="$(/tmp/oc_fz_bin 2>&1)"
+      RC=$?
+      set -e
+      if [ "$RC" -ne 0 ]; then
+        echo "  [FAIL] $base (--backend $backend, --arena-poison) exited $RC: $got"
+        exit 1
+      fi
+      if [ "$backend" = c ]; then
+        got_c="$got"
+      elif [ "$got" != "$got_c" ]; then
+        echo "  [FAIL] $base: C printed '$got_c', native printed '$got'"
+        exit 1
+      fi
+    done
+    echo "  [PASS] $base runs cleanly under --arena-poison on both backends"
+  else
+    echo "  [FAIL] $base: first line must be '// expect: reject <text>' or '// expect: run'"
+    exit 1
+  fi
+  rm -f /tmp/oc_fz_bin
+  PASS=$((PASS + 1))
+done
+
 echo "=== [4/4] Cross-Target PE32+ Verification (--backend native --target windows-x86_64) ==="
 PE_OUT=/tmp/oc_pe_bin
 pe_check() {

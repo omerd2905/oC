@@ -1,0 +1,19 @@
+// expect: run
+// The join keeps what is right: refreshed on every path, p0 is usable after the `if`.
+import "std/mem.oc";
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let c1: bool = true;
+    let mut p0: *mut u8 = arena_alloc(&mut a0, 16);
+    arena_reset(&mut a0);
+    if c1 {
+        p0 = arena_alloc(&mut a0, 16);
+        p0[0] = 1;
+    } else {
+        p0 = arena_alloc(&mut a0, 16);
+        p0[0] = 2;
+    }
+    print(p0[0]);
+    arena_deinit(&mut a0);
+}

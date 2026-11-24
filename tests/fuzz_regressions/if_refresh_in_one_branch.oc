@@ -1,0 +1,17 @@
+// expect: reject use-after-free: variable 'p0' used after arena 'a0' was reset
+// Fuzzer hole (lifetime, seed 1139): a reassignment inside one branch made p0 count as fresh
+// after the `if`, although the branch does not always run.
+import "std/mem.oc";
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let c1: bool = false;
+    let mut p0: *mut u8 = arena_alloc(&mut a0, 16);
+    p0[0] = 32;
+    arena_reset(&mut a0);
+    if c1 {
+        p0 = arena_alloc(&mut a0, 16);
+        p0[0] = 46;
+    }
+    print(p0[0]);
+}
