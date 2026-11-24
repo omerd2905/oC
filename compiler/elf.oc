@@ -510,6 +510,7 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     }
     if expr.tag == NODE_CALL {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
+        if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; }
         if wrapping_op(expr.tok.slice).len > 0 {
             // Same rule as the C backend: a narrow (< 32-bit) operand decides the width, then
             // 64-bit beats 32-bit and unsigned beats signed. Untyped literals do not decide.
@@ -2097,6 +2098,11 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     }
 
     if expr.tag == NODE_CALL {
+        if str_eq(expr.tok.slice, "f64_to_bits") {
+            // Built-in: floats already travel in %rax as their bit pattern.
+            ng_emit_expr_as(ng, code, data, expr.left, "f64");
+            return;
+        }
         if str_eq(expr.tok.slice, "sqrt_f64") {
             // Built-in: one correctly rounded instruction (the C backend uses __builtin_sqrt).
             ng_emit_expr_as(ng, code, data, expr.left, "f64");

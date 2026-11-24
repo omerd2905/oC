@@ -142,6 +142,7 @@ static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {
     return (oc_string){ .ptr = s.ptr + start, .len = end - start };
 }
 
+static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }
 #define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, "panic: floating-point result is NaN or infinite at %s\n", loc); exit(1); } _r; })
 
 #define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })
@@ -3469,6 +3470,9 @@ bool is_builtin_fn(oc_string name) {
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
     return true;
     }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
+    return true;
+    }
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
     return true;
     }
@@ -3698,6 +3702,9 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     if ((((expr)->tag) == NODE_CALL)) {
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
     }
     AstNode* callee = validator_find_fn(v, ((((expr)->tok)).slice));
     if ((callee == ((AstNode*)(0)))) {
@@ -6831,6 +6838,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    if (start > end || end > s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012"), .len = sizeof("    if (start > end || end > s.len) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012"), .len = sizeof("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012"), .len = sizeof("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012") - 1 });
@@ -7700,6 +7708,9 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     if ((((expr)->tag) == NODE_CALL)) {
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
     }
     if ((((wrapping_op(((((expr)->tok)).slice))).len) > 0)) {
     oc_string lt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -9694,6 +9705,10 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     return;
     }
     if ((((expr)->tag) == NODE_CALL)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
+    ng_emit_expr_as(ng, code, data, ((expr)->left), (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    return;
+    }
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("sqrt_f64"), .len = sizeof("sqrt_f64") - 1 })) {
     ng_emit_expr_as(ng, code, data, ((expr)->left), (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
     ng_emit_rax_to_xmm0(code, true);
@@ -12863,7 +12878,7 @@ void fmt_print_f64(double x) {
     uint8_t* b = ((uint8_t*)((&(buf))));
     size_t n = 0;
     double v = x;
-    if ((v < 0.0)) {
+    if (((f64_to_bits(x) >> 63) == 1)) {
     __OC_AT((b), (0)) = 45;
     n = 1;
     v = (-v);

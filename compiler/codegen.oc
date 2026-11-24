@@ -1390,6 +1390,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "}\n\n");
 
     // --fp-trap: x - x is 0 for every finite x, and NaN for NaN and for either infinity.
+    buf_append(out, "static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\n");
     buf_append(out, "#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite at %s\\n\", loc); exit(1); } _r; })\n\n");
 
     // View of a fixed-size array as a slice. A raw pointer has no length, so slicing one is a

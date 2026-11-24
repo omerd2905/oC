@@ -8,7 +8,7 @@
 //   NaN, inf, -inf            for the special values
 //   d.dddddd                  six digits after the point, for 0 and for 1e-4 <= |x| < 1e15
 //   d.dddddde+XX / e-XX       scientific notation with a six-digit fraction otherwise
-// Negative zero prints as 0.000000.
+// Negative zero prints as -0.000000 (its sign bit is set, as C's %f shows).
 
 extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
 
@@ -65,7 +65,7 @@ fn fmt_print_f64(x: f64) {
     let b: *mut u8 = (&mut buf).as(*mut u8);
     let mut n: usize = 0;
     let mut v: f64 = x;
-    if v < 0.0 {
+    if (f64_to_bits(x) >> 63) == 1 { // the sign bit: also set for -0.0, where x < 0.0 is false
         b[0] = 45; // '-'
         n = 1;
         v = -v;

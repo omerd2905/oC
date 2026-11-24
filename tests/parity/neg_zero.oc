@@ -1,0 +1,25 @@
+// Negative zero keeps its sign in text (issue #67): print, print_f64 and f64_to_str show it
+// like C's %f / %g, and parsing the text back gives -0.0 again. Both backends must match.
+import "std/fmt.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let z: f64 = 0.0;
+    let nz: f64 = -z;
+    print(1.0 / nz);                          // -inf
+    print(nz);                                // -0.000000
+    print(z);                                 // 0.000000
+    print_f64(nz, 17);                        // -0
+    print_f64(z, 17);                         // 0
+    print(f64_to_str(&mut a, nz, 6));         // -0
+    let back: ParsedF64 = parse_f64(f64_to_str(&mut a, nz, 17));
+    print(back.ok);                           // true
+    print(1.0 / back.value);                  // -inf
+    print(f64_to_bits(nz) >> 63);             // 1
+    print(f64_to_bits(z) >> 63);              // 0
+    print(f64_to_bits(1.0));                  // 4607182418800017408
+    let small: f32 = -0.0;
+    print(small);                             // -0.000000
+    print(-1.0e-300 * 1.0e-300);              // -0.000000 (underflow keeps the sign)
+    arena_deinit(&mut a);
+}
