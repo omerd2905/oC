@@ -22,6 +22,8 @@ def int_lit(rng, t):
     lo, hi = INTS[t]
     v = rng.choice([0, 1, 2, 3, 7, 10, 100, hi, hi - 1, lo, lo + 1, rng.randint(0, 50), rng.randint(lo, hi)])
     v = max(lo, min(hi, v))
+    if v > 2**63 - 1:   # an untyped literal above the i64 maximum is a u64 only on its own
+        return "(%d).as(u64)" % v
     if v < 0:
         if v == lo:   # -128 is written (-127 - 1): 128 alone does not fit i8
             return "(-%d - 1)" % (-v - 1)

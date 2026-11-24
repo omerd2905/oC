@@ -1,0 +1,7 @@
+// A shift count of the type's width or more panics (undefined behaviour in C, masked by the
+// CPU natively).
+fn main() {
+    let w: u32 = 1;
+    let c: u32 = 40;
+    print(w << c);
+}

@@ -62,6 +62,10 @@ COMPILE_REJECT=(
   "probe_union_ok_untyped.oc|probe_union_ok_untyped.oc:3:13: error: Ok(...) needs an error-union type (T!E) here"
   "probe_enum_mismatch.oc|probe_enum_mismatch.oc:8:18: error: expected E, found F"
   "probe_enum_number.oc|probe_enum_number.oc:5:16: error: values of E are written as E.Variant, not as numbers"
+  "probe_int_literal_too_big.oc|probe_int_literal_too_big.oc:3:17: error: integer literal 300 in a variable initializer does not fit u8"
+  "probe_int_narrowing.oc|probe_int_narrowing.oc:4:21: error: implicit conversion from i64 to u8 in a variable initializer can lose information"
+  "probe_int_narrowing_arg.oc|probe_int_narrowing_arg.oc:7:16: error: implicit conversion from i32 to u8 in a function argument can lose information"
+  "probe_int_literal_operand.oc|probe_int_literal_operand.oc:4:15: error: integer literal 300 in an operation does not fit u8"
   "probe_undefined_variable.oc|probe_undefined_variable.oc:3:11: error: undefined variable 'nope'"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
@@ -90,6 +94,8 @@ RUNTIME_TRAP=(
   "probe_float_cast_huge.oc"
   "probe_float_cast_neg_u32.oc"
   "probe_str_bad_radix.oc"
+  "probe_shift_count.oc"
+  "probe_int_literal_expr_overflow.oc"
 )
 
 PASS=0

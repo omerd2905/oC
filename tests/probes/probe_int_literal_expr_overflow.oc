@@ -1,0 +1,5 @@
+// Literal arithmetic in a u8 place is computed in u8: 30 * 10 overflows.
+fn main() {
+    let k: u8 = 30 * 10;
+    print(k);
+}
