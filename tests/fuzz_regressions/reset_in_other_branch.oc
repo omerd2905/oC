@@ -1,0 +1,17 @@
+// expect: run
+// Fuzzer false positive (lifetime, seed 1058): a reset in the then-branch made a use in the
+// else-branch an error, although the two never run together.
+import "std/mem.oc";
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let c0: bool = false;
+    let mut p2: *mut u8 = arena_alloc(&mut a0, 16);
+    p2[0] = 42;
+    if c0 {
+        arena_reset(&mut a0);
+    } else {
+        print(p2[0]);
+    }
+    arena_deinit(&mut a0);
+}

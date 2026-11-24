@@ -306,6 +306,7 @@ typedef struct Parser Parser;
 typedef struct VarInfo VarInfo;
 typedef struct FnEffects FnEffects;
 typedef struct Validator Validator;
+typedef struct VSnap VSnap;
 typedef struct Generics Generics;
 typedef struct GArgs GArgs;
 typedef struct GBind GBind;
@@ -429,6 +430,14 @@ struct Validator {
     SourceMap* srcmap;
     oc_string fn_name;
     Generics* gen;
+    Arena* arena;
+};
+
+struct VSnap {
+    bool inv[512];
+    oc_string arenas[512];
+    oc_string deinit[128];
+    size_t deinit_count;
 };
 
 struct Generics {
@@ -711,6 +720,10 @@ int32_t validator_find_var(Validator* v, oc_string name);
 void validator_set_points_to_stack_local(Validator* v, oc_string name);
 bool validator_is_arena_deinit(Validator* v, oc_string name);
 bool validator_mark_deinit(Validator* v, oc_string name);
+bool arena_list_has(oc_string list, oc_string name);
+oc_string arena_list_union(Validator* v, oc_string a, oc_string b);
+bool validator_is_arena_deinit(Validator* v, oc_string name);
+oc_string arena_list_deinit(Validator* v, oc_string list);
 void validator_invalidate_arena(Validator* v, oc_string arena_name);
 void validator_invalidate_var(Validator* v, oc_string var_name);
 oc_string get_ident_name(AstNode* expr);
@@ -752,8 +765,9 @@ bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, 
 oc_string get_local_array_slice_source(Validator* v, AstNode* expr);
 oc_string contains_stack_ref(Validator* v, AstNode* expr);
 bool check_expr_use(Validator* v, AstNode* expr);
-void validator_save_invalidated(Validator* v, bool* out);
-void validator_restore_invalidated(Validator* v, bool* saved);
+void vsnap_take(Validator* v, VSnap* s);
+void vsnap_restore(Validator* v, VSnap* s);
+void vsnap_join(Validator* v, VSnap* s);
 bool block_always_returns(AstNode* block);
 bool validate_stmt(Validator* v, AstNode* stmt);
 bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m, Generics* g);
@@ -3713,11 +3727,79 @@ bool validator_mark_deinit(Validator* v, oc_string name) {
     return true;
 }
 
+bool arena_list_has(oc_string list, oc_string name) {
+    size_t start = 0;
+    size_t i = 0;
+    while ((i <= ((list).len))) {
+    bool at_end = (i == ((list).len));
+    if ((!at_end)) {
+    at_end = (__oc_index_str(list, i) == 44);
+    }
+    if (at_end) {
+    if (str_eq(__oc_slice_str(list, start, i), name)) {
+    return true;
+    }
+    start = __OC_ADD(i, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+}
+
+oc_string arena_list_union(Validator* v, oc_string a, oc_string b) {
+    if ((((b).len) == 0)) {
+    return a;
+    }
+    if ((((a).len) == 0)) {
+    return b;
+    }
+    oc_string out = a;
+    size_t start = 0;
+    size_t i = 0;
+    while ((i <= ((b).len))) {
+    bool at_end = (i == ((b).len));
+    if ((!at_end)) {
+    at_end = (__oc_index_str(b, i) == 44);
+    }
+    if (at_end) {
+    oc_string name = __oc_slice_str(b, start, i);
+    if ((!arena_list_has(out, name))) {
+    out = str_concat(((v)->arena), str_concat(((v)->arena), out, (oc_string){ .ptr = (const uint8_t*)(","), .len = sizeof(",") - 1 }), name);
+    }
+    start = __OC_ADD(i, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return out;
+}
+
+oc_string arena_list_deinit(Validator* v, oc_string list) {
+    size_t start = 0;
+    size_t i = 0;
+    while ((i <= ((list).len))) {
+    bool at_end = (i == ((list).len));
+    if ((!at_end)) {
+    at_end = (__oc_index_str(list, i) == 44);
+    }
+    if (at_end) {
+    if ((i > start)) {
+    if (validator_is_arena_deinit(v, __oc_slice_str(list, start, i))) {
+    return __oc_slice_str(list, start, i);
+    }
+    }
+    start = __OC_ADD(i, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
 void validator_invalidate_arena(Validator* v, oc_string arena_name) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
-    if (str_eq(((__OC_AT((((v)->vars)), (i))).borrowed_from_arena), arena_name)) {
+    if (arena_list_has(((__OC_AT((((v)->vars)), (i))).borrowed_from_arena), arena_name)) {
     ((__OC_AT((((v)->vars)), (i))).is_invalidated) = true;
+    ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena) = arena_name;
     }
     i = __OC_ADD(i, 1);
     }
@@ -3919,26 +4001,22 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     return get_expr_arena_borrow(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_STRUCT_INIT)) {
+    oc_string all = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
-    oc_string wrapped = get_expr_arena_borrow(v, ((f)->left));
-    if ((((wrapped).len) > 0)) {
-    return wrapped;
-    }
+    all = arena_list_union(v, all, get_expr_arena_borrow(v, ((f)->left)));
     f = ((f)->next);
     }
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    return all;
     }
     if ((((expr)->tag) == NODE_ARRAY_INIT)) {
+    oc_string all = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     AstNode* el = ((expr)->left);
     while ((el != ((AstNode*)(0)))) {
-    oc_string held = get_expr_arena_borrow(v, el);
-    if ((((held).len) > 0)) {
-    return held;
-    }
+    all = arena_list_union(v, all, get_expr_arena_borrow(v, el));
     el = ((el)->next);
     }
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    return all;
     }
     bool is_load = (((expr)->tag) == NODE_INDEX);
     if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
@@ -3969,11 +4047,7 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     return get_expr_arena_borrow(v, ((expr)->left));
     }
     if ((((expr)->tag) == NODE_BINARY)) {
-    oc_string l = get_expr_arena_borrow(v, ((expr)->left));
-    if ((((l).len) > 0)) {
-    return l;
-    }
-    return get_expr_arena_borrow(v, ((expr)->right));
+    return arena_list_union(v, get_expr_arena_borrow(v, ((expr)->left)), get_expr_arena_borrow(v, ((expr)->right)));
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
@@ -4993,12 +5067,11 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     ((v)->has_error) = true;
     return false;
     }
-    if ((((((__OC_AT((((v)->vars)), (i))).borrowed_from_arena)).len) > 0)) {
-    if (validator_is_arena_deinit(v, ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena))) {
-    print_err_uaf_deinit(((((expr)->tok)).slice), ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena));
+    oc_string dead = arena_list_deinit(v, ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena));
+    if ((((dead).len) > 0)) {
+    print_err_uaf_deinit(((((expr)->tok)).slice), dead);
     ((v)->has_error) = true;
     return false;
-    }
     }
     }
     return true;
@@ -5250,18 +5323,48 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return true;
 }
 
-void validator_save_invalidated(Validator* v, bool* out) {
+void vsnap_take(Validator* v, VSnap* s) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
-    __OC_AT((out), (i)) = ((__OC_AT((((v)->vars)), (i))).is_invalidated);
+    __OC_AT((((s)->inv)), (i)) = ((__OC_AT((((v)->vars)), (i))).is_invalidated);
+    __OC_AT((((s)->arenas)), (i)) = ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena);
     i = __OC_ADD(i, 1);
     }
+    i = 0;
+    while ((i < ((v)->deinit_count))) {
+    __OC_AT((((s)->deinit)), (i)) = __OC_AT((((v)->deinit_arenas)), (i));
+    i = __OC_ADD(i, 1);
+    }
+    ((s)->deinit_count) = ((v)->deinit_count);
 }
 
-void validator_restore_invalidated(Validator* v, bool* saved) {
+void vsnap_restore(Validator* v, VSnap* s) {
     size_t i = 0;
     while ((i < ((v)->vars_count))) {
-    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = __OC_AT((saved), (i));
+    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = __OC_AT((((s)->inv)), (i));
+    ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena) = __OC_AT((((s)->arenas)), (i));
+    i = __OC_ADD(i, 1);
+    }
+    i = 0;
+    while ((i < ((s)->deinit_count))) {
+    __OC_AT((((v)->deinit_arenas)), (i)) = __OC_AT((((s)->deinit)), (i));
+    i = __OC_ADD(i, 1);
+    }
+    ((v)->deinit_count) = ((s)->deinit_count);
+}
+
+void vsnap_join(Validator* v, VSnap* s) {
+    size_t i = 0;
+    while ((i < ((v)->vars_count))) {
+    if (__OC_AT((((s)->inv)), (i))) {
+    ((__OC_AT((((v)->vars)), (i))).is_invalidated) = true;
+    }
+    ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena) = arena_list_union(v, ((__OC_AT((((v)->vars)), (i))).borrowed_from_arena), __OC_AT((((s)->arenas)), (i)));
+    i = __OC_ADD(i, 1);
+    }
+    i = 0;
+    while ((i < ((s)->deinit_count))) {
+    validator_mark_deinit(v, __OC_AT((((s)->deinit)), (i)));
     i = __OC_ADD(i, 1);
     }
 }
@@ -5416,8 +5519,24 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if ((!is_direct_ident)) {
+    if ((((validator_stack_place_type(v, ((stmt)->left))).len) > 0)) {
+    AstNode* place = ((stmt)->left);
+    while ((place != ((AstNode*)(0)))) {
+    if ((((place)->tag) == NODE_INDEX)) {
+    if ((!check_expr_use(v, ((place)->right)))) {
+    return false;
+    }
+    }
+    if ((((place)->tag) == NODE_IDENT)) {
+    break;
+    }
+    place = ((place)->left);
+    }
+    }
+    else {
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
+    }
     }
     }
     else {
@@ -5464,8 +5583,20 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((rhs_arena).len) > 0)) {
     if ((((tgt_opt).len) > 0)) {
     int32_t t_idx = validator_find_var(v, tgt_opt);
-    if ((t_idx >= 0)) {
-    int32_t a_idx = validator_find_var(v, rhs_arena);
+    size_t start = 0;
+    size_t k = 0;
+    while ((k <= ((rhs_arena).len))) {
+    bool at_end = (k == ((rhs_arena).len));
+    if ((!at_end)) {
+    at_end = (__oc_index_str(rhs_arena, k) == 44);
+    }
+    if (at_end) {
+    if ((t_idx < 0)) {
+    break;
+    }
+    oc_string one = __oc_slice_str(rhs_arena, start, k);
+    start = __OC_ADD(k, 1);
+    int32_t a_idx = validator_find_var(v, one);
     uint32_t arena_depth = ((v)->scope_depth);
     bool arena_is_local = true;
     if ((a_idx >= 0)) {
@@ -5482,10 +5613,12 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     }
     }
     if (cross_escape) {
-    print_err_cross_arena(rhs_arena, tgt_opt);
+    print_err_cross_arena(one, tgt_opt);
     ((v)->has_error) = true;
     return false;
     }
+    }
+    k = __OC_ADD(k, 1);
     }
     }
     }
@@ -5494,9 +5627,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((((validator_stack_place_type(v, ((stmt)->left))).len) > 0)) {
     int32_t agg_idx = validator_find_var(v, tgt_opt);
     if ((agg_idx >= 0)) {
-    if ((((((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena)).len) == 0)) {
-    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena) = rhs_arena;
-    }
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena) = arena_list_union(v, ((__OC_AT((((v)->vars)), (({ __auto_type _v = (agg_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena), rhs_arena);
     }
     }
     }
@@ -5633,34 +5764,40 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
-    bool saved[512] = {0};
-    bool* saved_ptr = ((bool*)((&(saved))));
-    size_t saved_deinit = ((v)->deinit_count);
-    validator_save_invalidated(v, saved_ptr);
+    VSnap before = (VSnap){ .inv = { false }, .arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0 };
+    VSnap after_then = (VSnap){ .inv = { false }, .arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0 };
+    vsnap_take(v, (&(before)));
     if ((!validate_stmt(v, ((stmt)->right)))) {
     return false;
     }
-    if (block_always_returns(((stmt)->right))) {
-    validator_restore_invalidated(v, saved_ptr);
-    ((v)->deinit_count) = saved_deinit;
-    }
+    bool then_returns = block_always_returns(((stmt)->right));
+    vsnap_take(v, (&(after_then)));
+    vsnap_restore(v, (&(before)));
+    bool else_returns = false;
     if ((((stmt)->right) != ((AstNode*)(0)))) {
     if ((((((stmt)->right))->next) != ((AstNode*)(0)))) {
-    size_t else_deinit = ((v)->deinit_count);
-    validator_save_invalidated(v, saved_ptr);
     if ((!validate_stmt(v, ((((stmt)->right))->next)))) {
     return false;
     }
-    if (block_always_returns(((((stmt)->right))->next))) {
-    validator_restore_invalidated(v, saved_ptr);
-    ((v)->deinit_count) = else_deinit;
+    else_returns = block_always_returns(((((stmt)->right))->next));
     }
+    }
+    if (else_returns) {
+    if ((!then_returns)) {
+    vsnap_restore(v, (&(after_then)));
+    }
+    }
+    else {
+    if ((!then_returns)) {
+    vsnap_join(v, (&(after_then)));
     }
     }
     return true;
     }
     if ((((stmt)->tag) == NODE_WHILE)) {
     size_t pre_vars_len = ((v)->vars_count);
+    VSnap head = (VSnap){ .inv = { false }, .arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0 };
+    vsnap_take(v, (&(head)));
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
@@ -5668,6 +5805,8 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return false;
     }
     ((v)->vars_count) = pre_vars_len;
+    vsnap_join(v, (&(head)));
+    vsnap_take(v, (&(head)));
     if ((!check_expr_use(v, ((stmt)->left)))) {
     return false;
     }
@@ -5675,6 +5814,7 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return false;
     }
     ((v)->vars_count) = pre_vars_len;
+    vsnap_join(v, (&(head)));
     return true;
     }
     if ((((stmt)->tag) == NODE_PRINT)) {
@@ -5687,7 +5827,7 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = ((((f)->tok)).slice), .gen = g };
+    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = ((((f)->tok)).slice), .gen = g, .arena = ((g)->arena) };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -6643,7 +6783,7 @@ bool expand_generics(AstNode* root, Arena* arena, SourceMap* m, Generics* g) {
     }
     i = __OC_ADD(i, 1);
     }
-    Validator v = (Validator){ .fx = ((FnEffects*)(0)), .program = root, .ret_type = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .gen = g };
+    Validator v = (Validator){ .fx = ((FnEffects*)(0)), .program = root, .ret_type = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .gen = g, .arena = ((g)->arena) };
     d = ((root)->left);
     while ((d != ((AstNode*)(0)))) {
     if ((((d)->tag) == NODE_STRUCT_DECL)) {

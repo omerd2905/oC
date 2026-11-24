@@ -1076,6 +1076,7 @@ struct Validator {
     srcmap: *SourceMap, // for file:line:col in diagnostics
     fn_name: string,    // function being checked
     gen: *Generics,     // generic instantiations, to say which one an error is in
+    arena: *mut Arena,  // for arena lists ("a0,a1")
 }
 
 fn validator_find_var(v: *mut Validator, name: string) -> i32 {
@@ -1123,11 +1124,71 @@ fn validator_mark_deinit(v: *mut Validator, name: string) -> bool {
     return true;
 }
 
+// What a variable borrows from is a list of arena names, "a0" or "a0,a1": after an `if` whose
+// branches assigned it from different arenas, or for an array or struct holding pointers from
+// several. A reset or deinit of any of them ends it.
+fn arena_list_has(list: string, name: string) -> bool {
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i <= list.len {
+        let mut at_end: bool = i == list.len;
+        if !at_end { at_end = list[i] == 44; } // ','
+        if at_end {
+            if str_eq(list[start..i], name) { return true; }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn arena_list_union(v: *mut Validator, a: string, b: string) -> string {
+    if b.len == 0 { return a; }
+    if a.len == 0 { return b; }
+    let mut out: string = a;
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i <= b.len {
+        let mut at_end: bool = i == b.len;
+        if !at_end { at_end = b[i] == 44; }
+        if at_end {
+            let name: string = b[start..i];
+            if !arena_list_has(out, name) {
+                out = str_concat(v.arena, str_concat(v.arena, out, ","), name);
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return out;
+}
+
+extern fn validator_is_arena_deinit(v: *mut Validator, name: string) -> bool;
+
+// The first arena of the list that is deinitialized, or "".
+fn arena_list_deinit(v: *mut Validator, list: string) -> string {
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i <= list.len {
+        let mut at_end: bool = i == list.len;
+        if !at_end { at_end = list[i] == 44; }
+        if at_end {
+            if i > start {
+                if validator_is_arena_deinit(v, list[start..i]) { return list[start..i]; }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return "";
+}
+
 fn validator_invalidate_arena(v: *mut Validator, arena_name: string) {
     let mut i: usize = 0;
     while i < v.vars_count {
-        if str_eq(v.vars[i].borrowed_from_arena, arena_name) {
+        if arena_list_has(v.vars[i].borrowed_from_arena, arena_name) {
             v.vars[i].is_invalidated = true;
+            v.vars[i].borrowed_from_arena = arena_name; // the one named in the error
         }
         i = i + 1;
     }
@@ -1283,23 +1344,23 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr.tag == NODE_STRUCT_INIT {
         // A struct literal that stores an arena pointer (e.g. string { ptr: p, len: n })
         // borrows from that arena just like the pointer does.
+        let mut all: string = "";
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
-            let wrapped: string = get_expr_arena_borrow(v, f.left);
-            if wrapped.len > 0 { return wrapped; }
+            all = arena_list_union(v, all, get_expr_arena_borrow(v, f.left));
             f = f.next;
         }
-        return "";
+        return all;
     }
     if expr.tag == NODE_ARRAY_INIT {
         // An array literal holding an arena pointer borrows from that arena as a whole.
+        let mut all: string = "";
         let mut el: *mut AstNode = expr.left;
         while el != (0).as(*mut AstNode) {
-            let held: string = get_expr_arena_borrow(v, el);
-            if held.len > 0 { return held; }
+            all = arena_list_union(v, all, get_expr_arena_borrow(v, el));
             el = el.next;
         }
-        return "";
+        return all;
     }
     let mut is_load: bool = expr.tag == NODE_INDEX;
     if expr.tag == NODE_FIELD_ACCESS { is_load = true; }
@@ -1324,9 +1385,7 @@ fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
         return get_expr_arena_borrow(v, expr.left);
     }
     if expr.tag == NODE_BINARY {
-        let l: string = get_expr_arena_borrow(v, expr.left);
-        if l.len > 0 { return l; }
-        return get_expr_arena_borrow(v, expr.right);
+        return arena_list_union(v, get_expr_arena_borrow(v, expr.left), get_expr_arena_borrow(v, expr.right));
     }
     return "";
 }
@@ -2054,12 +2113,11 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                 v.has_error = true;
                 return false;
             }
-            if v.vars[i].borrowed_from_arena.len > 0 {
-                if validator_is_arena_deinit(v, v.vars[i].borrowed_from_arena) {
-                    print_err_uaf_deinit(expr.tok.slice, v.vars[i].borrowed_from_arena);
-                    v.has_error = true;
-                    return false;
-                }
+            let dead: string = arena_list_deinit(v, v.vars[i].borrowed_from_arena);
+            if dead.len > 0 {
+                print_err_uaf_deinit(expr.tok.slice, dead);
+                v.has_error = true;
+                return false;
             }
         }
         return true;
@@ -2261,18 +2319,58 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     return true;
 }
 
-fn validator_save_invalidated(v: *mut Validator, out: *mut bool) {
-    let mut i: usize = 0;
-    while i < v.vars_count {
-        out[i] = v.vars[i].is_invalidated;
-        i = i + 1;
-    }
+// The part of the validator state that differs between paths: per variable, whether it is
+// invalidated and what it borrows from; and the deinitialized arenas. An `if` checks each
+// branch from the state before it and then joins them; a loop joins the states at its head.
+struct VSnap {
+    inv: [512]bool,
+    arenas: [512]string,
+    deinit: [128]string,
+    deinit_count: usize,
 }
 
-fn validator_restore_invalidated(v: *mut Validator, saved: *mut bool) {
+fn vsnap_take(v: *mut Validator, s: *mut VSnap) {
     let mut i: usize = 0;
     while i < v.vars_count {
-        v.vars[i].is_invalidated = saved[i];
+        s.inv[i] = v.vars[i].is_invalidated;
+        s.arenas[i] = v.vars[i].borrowed_from_arena;
+        i = i + 1;
+    }
+    i = 0;
+    while i < v.deinit_count {
+        s.deinit[i] = v.deinit_arenas[i];
+        i = i + 1;
+    }
+    s.deinit_count = v.deinit_count;
+}
+
+fn vsnap_restore(v: *mut Validator, s: *VSnap) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        v.vars[i].is_invalidated = s.inv[i];
+        v.vars[i].borrowed_from_arena = s.arenas[i];
+        i = i + 1;
+    }
+    i = 0;
+    while i < s.deinit_count {
+        v.deinit_arenas[i] = s.deinit[i];
+        i = i + 1;
+    }
+    v.deinit_count = s.deinit_count;
+}
+
+// Current state := current joined with s: what is invalid or deinitialized on either path is
+// afterwards, and a variable may borrow from the arenas of both paths.
+fn vsnap_join(v: *mut Validator, s: *VSnap) {
+    let mut i: usize = 0;
+    while i < v.vars_count {
+        if s.inv[i] { v.vars[i].is_invalidated = true; }
+        v.vars[i].borrowed_from_arena = arena_list_union(v, v.vars[i].borrowed_from_arena, s.arenas[i]);
+        i = i + 1;
+    }
+    i = 0;
+    while i < s.deinit_count {
+        validator_mark_deinit(v, s.deinit[i]);
         i = i + 1;
     }
 }
@@ -2419,7 +2517,21 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
             }
         }
         if !is_direct_ident {
-            if !check_expr_use(v, stmt.left) { return false; }
+            if validator_stack_place_type(v, stmt.left).len > 0 {
+                // Storing into an element or field of a local array or struct writes the
+                // variable's own stack memory: only the indices are read. (Through a pointer,
+                // the write is a use of the pointer.)
+                let mut place: *mut AstNode = stmt.left;
+                while place != (0).as(*mut AstNode) {
+                    if place.tag == NODE_INDEX {
+                        if !check_expr_use(v, place.right) { return false; }
+                    }
+                    if place.tag == NODE_IDENT { break; }
+                    place = place.left;
+                }
+            } else {
+                if !check_expr_use(v, stmt.left) { return false; }
+            }
         } else {
             let lhs_idx: i32 = validator_find_var(v, stmt.left.tok.slice);
             if lhs_idx >= 0 {
@@ -2461,27 +2573,37 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
         if rhs_arena.len > 0 {
             if tgt_opt.len > 0 {
                 let t_idx: i32 = validator_find_var(v, tgt_opt);
-                if t_idx >= 0 {
-                    let a_idx: i32 = validator_find_var(v, rhs_arena);
-                    let mut arena_depth: u32 = v.scope_depth;
-                    // An arena the caller passed in outlives this call, like any target the
-                    // caller passed in; only an arena owned by this function can die first.
-                    let mut arena_is_local: bool = true;
-                    if a_idx >= 0 {
-                        arena_depth = v.vars[a_idx.as(usize)].scope_depth;
-                        arena_is_local = v.vars[a_idx.as(usize)].is_stack_local;
+                let mut start: usize = 0;
+                let mut k: usize = 0;
+                while k <= rhs_arena.len { // each arena the value may borrow from
+                    let mut at_end: bool = k == rhs_arena.len;
+                    if !at_end { at_end = rhs_arena[k] == 44; }
+                    if at_end {
+                        if t_idx < 0 { break; }
+                        let one: string = rhs_arena[start..k];
+                        start = k + 1;
+                        let a_idx: i32 = validator_find_var(v, one);
+                        let mut arena_depth: u32 = v.scope_depth;
+                        // An arena the caller passed in outlives this call, like any target the
+                        // caller passed in; only an arena owned by this function can die first.
+                        let mut arena_is_local: bool = true;
+                        if a_idx >= 0 {
+                            arena_depth = v.vars[a_idx.as(usize)].scope_depth;
+                            arena_is_local = v.vars[a_idx.as(usize)].is_stack_local;
+                        }
+                        let mut cross_escape: bool = false;
+                        if v.vars[t_idx.as(usize)].scope_depth < arena_depth {
+                            cross_escape = true;
+                        } else if !v.vars[t_idx.as(usize)].is_stack_local {
+                            cross_escape = arena_is_local;
+                        }
+                        if cross_escape {
+                            print_err_cross_arena(one, tgt_opt);
+                            v.has_error = true;
+                            return false;
+                        }
                     }
-                    let mut cross_escape: bool = false;
-                    if v.vars[t_idx.as(usize)].scope_depth < arena_depth {
-                        cross_escape = true;
-                    } else if !v.vars[t_idx.as(usize)].is_stack_local {
-                        cross_escape = arena_is_local;
-                    }
-                    if cross_escape {
-                        print_err_cross_arena(rhs_arena, tgt_opt);
-                        v.has_error = true;
-                        return false;
-                    }
+                    k = k + 1;
                 }
             }
         }
@@ -2493,9 +2615,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
                 if validator_stack_place_type(v, stmt.left).len > 0 {
                     let agg_idx: i32 = validator_find_var(v, tgt_opt);
                     if agg_idx >= 0 {
-                        if v.vars[agg_idx.as(usize)].borrowed_from_arena.len == 0 {
-                            v.vars[agg_idx.as(usize)].borrowed_from_arena = rhs_arena;
-                        }
+                        // It keeps borrowing from what it held before: other elements still point there.
+                        v.vars[agg_idx.as(usize)].borrowed_from_arena = arena_list_union(v, v.vars[agg_idx.as(usize)].borrowed_from_arena, rhs_arena);
                     }
                 }
             }
@@ -2617,39 +2738,45 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
 
     if stmt.tag == NODE_IF {
         if !check_expr_use(v, stmt.left) { return false; }
-        // A branch that always returns cannot affect the code after the `if`: what it reset
-        // or deinitialized is forgotten again once the branch has been checked.
-        let mut saved: [512]bool = [false];
-        let saved_ptr: *mut bool = (&mut saved).as(*mut bool);
-        let saved_deinit: usize = v.deinit_count;
-        validator_save_invalidated(v, saved_ptr);
+        // Each branch starts from the state before the `if`; afterwards the paths that fall
+        // out of a branch are joined. A branch that always returns adds no path.
+        let mut before: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
+        let mut after_then: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
+        vsnap_take(v, &mut before);
         if !validate_stmt(v, stmt.right) { return false; }
-        if block_always_returns(stmt.right) {
-            validator_restore_invalidated(v, saved_ptr);
-            v.deinit_count = saved_deinit;
-        }
+        let then_returns: bool = block_always_returns(stmt.right);
+        vsnap_take(v, &mut after_then);
+        vsnap_restore(v, &before);
+        let mut else_returns: bool = false;
         if stmt.right != (0).as(*mut AstNode) {
             if stmt.right.next != (0).as(*mut AstNode) {
-                let else_deinit: usize = v.deinit_count;
-                validator_save_invalidated(v, saved_ptr);
                 if !validate_stmt(v, stmt.right.next) { return false; }
-                if block_always_returns(stmt.right.next) {
-                    validator_restore_invalidated(v, saved_ptr);
-                    v.deinit_count = else_deinit;
-                }
+                else_returns = block_always_returns(stmt.right.next);
             }
+        }
+        if else_returns {
+            if !then_returns { vsnap_restore(v, &after_then); }
+        } else if !then_returns {
+            vsnap_join(v, &after_then);
         }
         return true;
     }
 
     if stmt.tag == NODE_WHILE {
+        // Two passes over the body, each from the join of every state the loop head can see
+        // (0, 1 or 2 iterations so far); the loop exits from the last join.
         let pre_vars_len: usize = v.vars_count;
+        let mut head: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
+        vsnap_take(v, &mut head);
         if !check_expr_use(v, stmt.left) { return false; }
         if !validate_stmt(v, stmt.right) { return false; }
         v.vars_count = pre_vars_len;
+        vsnap_join(v, &head);
+        vsnap_take(v, &mut head);
         if !check_expr_use(v, stmt.left) { return false; }
         if !validate_stmt(v, stmt.right) { return false; }
         v.vars_count = pre_vars_len;
+        vsnap_join(v, &head);
         return true;
     }
 
@@ -2688,6 +2815,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
         srcmap: m,
         fn_name: f.tok.slice,
         gen: g,
+        arena: g.arena,
     };
 
     let mut p: *mut AstNode = f.left;
@@ -3545,6 +3673,7 @@ fn expand_generics(root: *mut AstNode, arena: *mut Arena, m: *SourceMap, g: *mut
         srcmap: m,
         fn_name: "",
         gen: g,
+        arena: g.arena,
     };
     // Every ordinary declaration, including instances appended while this loop runs.
     d = root.left;
