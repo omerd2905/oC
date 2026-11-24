@@ -799,9 +799,9 @@ fn main() {
 
         <div class="fn-box">
           <h3>min, max, clamp, abs, sign</h3>
-          <div class="fn-sig">fn min_T(a: T, b: T) -&gt; T<br>fn max_T(a: T, b: T) -&gt; T<br>fn clamp_T(x: T, lo: T, hi: T) -&gt; T<br>fn abs_i32(x: i32) -&gt; i32 &nbsp; fn abs_i64(x: i64) -&gt; i64<br>fn sign_i32(x: i32) -&gt; i32 &nbsp; fn sign_i64(x: i64) -&gt; i32</div>
+          <div class="fn-sig">fn min&lt;T&gt;(a: T, b: T) -&gt; T &nbsp; fn max&lt;T&gt;(a: T, b: T) -&gt; T &nbsp; fn clamp&lt;T&gt;(x: T, lo: T, hi: T) -&gt; T<br>fn abs&lt;T&gt;(x: T) -&gt; T &nbsp; fn sign&lt;T&gt;(x: T) -&gt; i32<br>fn min_i32, max_i32, clamp_i32, abs_i32, sign_i32, ... (per-type names)</div>
           <p>
-            There are no generics yet, so each function names its type: <code>T</code> is one of <code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code>, <code>usize</code>. <code>abs</code> of the most negative value has no result and panics with <code>integer overflow</code> (in C it silently returns the same negative number). <code>clamp</code> requires <code>lo &lt;= hi</code>.
+            Generic over any number type, floats included: <code>min(3, 9)</code>, <code>clamp(level, 10, 100)</code> with <code>level: u8</code>, <code>abs(-2.5)</code>. The older per-type names (<code>min_i32</code>, <code>clamp_u64</code>, <code>abs_i64</code>, ... for <code>i32</code>, <code>i64</code>, <code>u32</code>, <code>u64</code>, <code>usize</code>) remain and call the generic versions. <code>abs</code> of the most negative value of a signed type has no result and panics with <code>integer overflow</code> (in C it silently returns the same negative number). <code>clamp</code> requires <code>lo &lt;= hi</code>.
           </p>
         </div>
 
