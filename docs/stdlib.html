@@ -80,9 +80,9 @@
         <h2>SYNOPSIS</h2>
         <pre><code>// Importing modules into oC source units
 import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_reset, arena_deinit
-import "std/fs.oc"    // OC-FS(3):    cstr_path, read_file, write_file, chmod_exec, unlink_file
-import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace, StrBuf, parse_i64
-import "std/io.oc"    // OC-IO(3):    read_line, read_all, read_i64, read_int (deprecated), sys_read
+import "std/fs.oc"    // OC-FS(3):    cstr_path, file_read, file_write, chmod_exec, unlink_file (read_file, write_file: deprecated)
+import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace, StrBuf, str_to_i64
+import "std/io.oc"    // OC-IO(3):    stdin_line, stdin_all, stdin_i64, sys_read (read_line, read_all, read_i64, read_int: deprecated)
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
 import "std/os.oc"    // OC-OS(3):    OC_PROT_*, OC_MAP_*, OC_O_*, OC_MODE_*, OC_AF_*, OC_SOCK_*, OC_TARGET_*, sys_host_target
@@ -470,18 +470,26 @@ fn main() {
         </div>
 
         <div class="fn-box">
-          <h3>read_file</h3>
-          <div class="fn-sig">fn read_file(path: string, out_buf: *mut u8, max_len: usize) i64</div>
+          <h3>file_read</h3>
+          <div class="fn-sig">fn file_read(path: string, out_buf: *mut u8, max_len: usize) -&gt; usize!FsError<br>enum FsError { OpenFailed, ReadFailed, WriteFailed }</div>
           <p>
-            Opens file at <code>path</code> with flags <code>0 | 655360</code> (<code>O_RDONLY | O_NOFOLLOW | O_CLOEXEC</code>). <code>O_NOFOLLOW</code> guarantees symlinks are rejected to prevent redirection attacks. <code>O_CLOEXEC</code> guarantees the descriptor is closed if <code>execve</code> is called. Reads up to <code>max_len</code> bytes into <code>out_buf</code>, closes the descriptor, and returns bytes read.
+            Opens file at <code>path</code> with flags <code>0 | 655360</code> (<code>O_RDONLY | O_NOFOLLOW | O_CLOEXEC</code>). <code>O_NOFOLLOW</code> guarantees symlinks are rejected to prevent redirection attacks. <code>O_CLOEXEC</code> guarantees the descriptor is closed if <code>execve</code> is called. Reads up to <code>max_len</code> bytes into <code>out_buf</code>, closes the descriptor, and returns <code>Ok(bytes read)</code>; <code>Err(FsError.OpenFailed)</code> if the file cannot be opened (missing, not allowed, or a symlink) and <code>Err(FsError.ReadFailed)</code> if reading fails. It returns an <a href="syntax.html#errors">error union</a>, so the caller must handle the failure.
           </p>
         </div>
 
         <div class="fn-box">
-          <h3>write_file</h3>
-          <div class="fn-sig">fn write_file(path: string, content: string) bool</div>
+          <h3>file_write</h3>
+          <div class="fn-sig">fn file_write(path: string, content: string) -&gt; usize!FsError</div>
           <p>
-            Opens or creates file at <code>path</code> with flags <code>577 | 655360 = 655937</code> (<code>O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC</code>) and mode <code>420</code> (octal <code>0644</code>). Writes <code>content.len</code> bytes directly via <code>sys_write</code>, safely closes the descriptor, and returns <code>true</code> if all bytes were written.
+            Opens or creates file at <code>path</code> with flags <code>577 | 655360 = 655937</code> (<code>O_WRONLY | O_CREAT | O_TRUNC | O_NOFOLLOW | O_CLOEXEC</code>) and mode <code>420</code> (octal <code>0644</code>). Writes <code>content.len</code> bytes directly via <code>sys_write</code>, safely closes the descriptor, and returns <code>Ok(content.len)</code>; <code>Err(FsError.OpenFailed)</code>, or <code>Err(FsError.WriteFailed)</code> if fewer bytes were written.
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>read_file, write_file (deprecated)</h3>
+          <div class="fn-sig">fn read_file(path: string, out_buf: *mut u8, max_len: usize) i64 &nbsp; fn write_file(path: string, content: string) bool</div>
+          <p>
+            Kept for one release as wrappers: <code>read_file</code> returns the byte count or <code>-1</code>, <code>write_file</code> returns <code>true</code> if <code>file_write</code> succeeded. Nothing forces a caller to check either result; use <code>file_read</code> and <code>file_write</code>.
           </p>
         </div>
 
@@ -519,15 +527,16 @@ fn main() {
     let file_path: string = "/tmp/oc_secure.txt";
     
     // 1. Atomic write with O_NOFOLLOW | O_CLOEXEC (CWE-367 / CWE-403)
-    let written: bool = write_file(file_path, "oC Active-Defense Filesystem");
-    print("File write status:");
-    print(written);
+    match file_write(file_path, "oC Active-Defense Filesystem") {
+        Ok(n) =&gt; { print("Bytes written:"); print(n); }
+        Err(_) =&gt; print("write failed"),
+    }
 
     // 2. Safe read with 4096-byte bounded path buffer (CWE-170)
     let mut buf: [64]u8 = [0];
-    let bytes: i64 = read_file(file_path, (&amp;mut buf).as(*mut u8), 63);
+    let bytes: usize = file_read(file_path, (&amp;mut buf).as(*mut u8), 63) catch 0;
     if bytes &gt; 0 {
-        buf[bytes.as(usize)] = 0;
+        buf[bytes] = 0;
         print("Read content:");
         print(buf);
     }
@@ -544,8 +553,8 @@ fn main() {
                 
               </div>
               <pre><code><span class="term-cmd">$ occ run secure_fs.oc</span>
-<span class="term-out">File write status:</span>
-<span class="term-pass">true</span>
+<span class="term-out">Bytes written:</span>
+<span class="term-pass">28</span>
 <span class="term-out">Read content:</span>
 <span class="term-out">oC Active-Defense Filesystem</span>
 <span class="term-out">Unlink status:</span>
@@ -599,9 +608,9 @@ fn main() {
 
         <div class="fn-box">
           <h3>Parsing and formatting integers</h3>
-          <div class="fn-sig">fn parse_i64(s: string) -&gt; ParsedI64 &nbsp; fn parse_u64(s: string) -&gt; ParsedU64<br>fn parse_i64_radix(s: string, radix: u32) -&gt; ParsedI64 &nbsp; fn parse_u64_radix(s: string, radix: u32) -&gt; ParsedU64<br>struct ParsedI64 { ok: bool, value: i64 } &nbsp; struct ParsedU64 { ok: bool, value: u64 }<br>fn i64_to_str(arena: *mut Arena, n: i64) -&gt; string &nbsp; fn u64_to_str(arena: *mut Arena, n: u64) -&gt; string &nbsp; fn u64_to_hex(arena: *mut Arena, n: u64) -&gt; string<br>fn print_str(s: string) &nbsp; fn print_i64(n: i64) &nbsp; fn print_u64(n: u64) &nbsp; fn print_hex(n: u64)</div>
+          <div class="fn-sig">fn str_to_i64(s: string) -&gt; i64!NumError &nbsp; fn str_to_u64(s: string) -&gt; u64!NumError<br>fn str_to_i64_radix(s: string, radix: u32) -&gt; i64!NumError &nbsp; fn str_to_u64_radix(s: string, radix: u32) -&gt; u64!NumError<br>enum NumError { Empty, BadDigit, Overflow }<br>fn i64_to_str(arena: *mut Arena, n: i64) -&gt; string &nbsp; fn u64_to_str(arena: *mut Arena, n: u64) -&gt; string &nbsp; fn u64_to_hex(arena: *mut Arena, n: u64) -&gt; string<br>fn print_str(s: string) &nbsp; fn print_i64(n: i64) &nbsp; fn print_u64(n: u64) &nbsp; fn print_hex(n: u64)</div>
           <p>
-            A parser takes the whole string: an optional sign (<code>+</code>, or <code>-</code> for the signed versions) and at least one digit. Empty input, any other character (spaces included, so <code>trim</code> first), and a value outside the type's range give <code>ok = false</code> and <code>value = 0</code>. <code>radix</code> is 2 to 16, without a prefix (<code>parse_u64_radix("ff", 16)</code>). <code>u64_to_hex</code> writes lowercase digits without <code>0x</code> or padding. The <code>print_*</code> functions write to stdout without a newline, so a line can be built piece by piece; <code>print</code> always ends its line.
+            A parser takes the whole string: an optional sign (<code>+</code>, or <code>-</code> for the signed versions) and at least one digit, and returns an <a href="syntax.html#errors">error union</a>: <code>Err(NumError.Empty)</code> for <code>""</code>, <code>Err(NumError.BadDigit)</code> for any other character (spaces included, so <code>trim</code> first, and a sign with no digits), <code>Err(NumError.Overflow)</code> for a value outside the type's range. <code>radix</code> is 2 to 16, without a prefix (<code>str_to_u64_radix("ff", 16)</code>); any other radix is a bug in the caller and panics. Typical uses: <code>let n: i64 = str_to_i64(s) catch 0;</code>, or <code>try str_to_i64(s)</code> in a function whose own errors are <code>NumError</code>. The older <code>parse_i64</code>, <code>parse_u64</code>, <code>parse_i64_radix</code> and <code>parse_u64_radix</code> (returning <code>struct ParsedI64 { ok: bool, value: i64 }</code> / <code>ParsedU64</code>, with <code>ok = false</code> instead of a panic for a bad radix) are deprecated and kept for one release. <code>u64_to_hex</code> writes lowercase digits without <code>0x</code> or padding. The <code>print_*</code> functions write to stdout without a newline, so a line can be built piece by piece; <code>print</code> always ends its line.
           </p>
         </div>
 
@@ -633,13 +642,13 @@ fn main() {
         </div>
 
         <div class="fn-box">
-          <h3>print_f64, f64_to_str, parse_f64 (<code>std/fmt.oc</code>)</h3>
-          <div class="fn-sig">fn print_f64(x: f64, digits: u32) &nbsp; fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -&gt; string<br>fn parse_f64(s: string) -&gt; ParsedF64 &nbsp; fn parse_f64_ieee(s: string) -&gt; ParsedF64 &nbsp; struct ParsedF64 { ok: bool, value: f64 }</div>
+          <h3>print_f64, f64_to_str, str_to_f64 (<code>std/fmt.oc</code>)</h3>
+          <div class="fn-sig">fn print_f64(x: f64, digits: u32) &nbsp; fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -&gt; string<br>fn str_to_f64(s: string) -&gt; f64!NumError &nbsp; fn str_to_f64_ieee(s: string) -&gt; f64!NumError<br>deprecated: fn parse_f64(s: string) -&gt; ParsedF64 &nbsp; fn parse_f64_ieee(s: string) -&gt; ParsedF64 &nbsp; struct ParsedF64 { ok: bool, value: f64 }</div>
           <p>
             <code>print</code> shows a float with six decimals (<code>3.750000</code>, or <code>9.007199e+15</code> in scientific form). <code>print_f64</code> prints <code>x</code> with <code>digits</code> significant digits (1 to 40) in the format of C's <code>printf("%.<em>digits</em>g\n", x)</code>: fixed notation when the decimal exponent is between -4 and <code>digits</code>, scientific otherwise, trailing zeros removed. 17 digits always identify an <code>f64</code> exactly: <code>print_f64(0.1, 17)</code> prints <code>0.10000000000000001</code>. The digits are correctly rounded (halves to even) because they come from the exact decimal value of <code>x</code>. NaN, infinities and negative zero print as with <code>print</code>. <code>f64_to_str</code> returns the same text, without the newline, in an arena.
           </p>
           <p>
-            <code>parse_f64</code> reads an optional sign, digits with at most one point, and an optional exponent (<code>-2.5e-3</code>, <code>.5</code>, <code>5.</code>). Anything else, including surrounding spaces, gives <code>ok = false</code>. <code>ok = true</code> always means a finite value: a number too large for <code>f64</code> (<code>1e999</code>, or <code>1.7976931348623159e308</code>, which rounds to infinity) gives <code>ok = false</code>, like an out-of-range <code>parse_i64</code>, and so do <code>inf</code> and <code>nan</code>, so input read with <code>parse_f64</code> can never bring NaN or infinity into a program. <code>parse_f64_ieee</code> is the IEEE 754 / <code>strtod</code> variant for data that may legitimately hold them: it also accepts <code>inf</code>, <code>infinity</code> and <code>nan</code> in any case, and turns overflow into an infinity with <code>ok = true</code>. The result is the nearest <code>f64</code>, ties to even, like C's <code>strtod</code>: the decimal is turned into an exact ratio of big integers and divided, so even inputs exactly halfway between two doubles round correctly. Up to 800 significant digits take part exactly; further digits only break ties. Magnitudes too small for <code>f64</code> give 0 or a subnormal, with <code>ok = true</code>. <code>parse_f64</code> of the text from <code>print_f64(x, 17)</code> gives back exactly <code>x</code>.
+            <code>str_to_f64</code> reads an optional sign, digits with at most one point, and an optional exponent (<code>-2.5e-3</code>, <code>.5</code>, <code>5.</code>). <code>""</code> gives <code>Err(NumError.Empty)</code>; anything else it does not accept, including surrounding spaces, gives <code>Err(NumError.BadDigit)</code>. <code>Ok</code> always holds a finite value: a number too large for <code>f64</code> (<code>1e999</code>, or <code>1.7976931348623159e308</code>, which rounds to infinity) gives <code>Err(NumError.Overflow)</code>, like an out-of-range <code>str_to_i64</code>, and <code>inf</code> and <code>nan</code> give <code>BadDigit</code>, so input read with <code>str_to_f64</code> can never bring NaN or infinity into a program. <code>str_to_f64_ieee</code> is the IEEE 754 / <code>strtod</code> variant for data that may legitimately hold them: it also accepts <code>inf</code>, <code>infinity</code> and <code>nan</code> in any case, and turns overflow into an infinity (never <code>Overflow</code>). The deprecated <code>parse_f64</code> and <code>parse_f64_ieee</code> behave the same with <code>ok = false</code> for every error. The result is the nearest <code>f64</code>, ties to even, like C's <code>strtod</code>: the decimal is turned into an exact ratio of big integers and divided, so even inputs exactly halfway between two doubles round correctly. Up to 800 significant digits take part exactly; further digits only break ties. Magnitudes too small for <code>f64</code> give 0 or a subnormal (not an error). <code>str_to_f64</code> of the text from <code>print_f64(x, 17)</code> gives back exactly <code>x</code>.
           </p>
           <p>
             These live in their own module because the exact conversions, with <code>std/str.oc</code> which they use, add about 35 KB to a native binary.
@@ -647,18 +656,18 @@ fn main() {
         </div>
 
         <div class="fn-box">
-          <h3>read_line, read_all</h3>
-          <div class="fn-sig">fn read_line(arena: *mut Arena) -&gt; ReadLine &nbsp; struct ReadLine { ok: bool, line: string }<br>fn read_all(arena: *mut Arena) -&gt; ReadAll &nbsp; struct ReadAll { ok: bool, data: string }</div>
+          <h3>stdin_line, stdin_all</h3>
+          <div class="fn-sig">fn stdin_line(arena: *mut Arena) -&gt; string!StdinError &nbsp; fn stdin_all(arena: *mut Arena) -&gt; string!StdinError<br>enum StdinError { Eof, ReadFailed, TooLong, BadNumber }<br>deprecated: fn read_line(arena: *mut Arena) -&gt; ReadLine &nbsp; struct ReadLine { ok: bool, line: string } &nbsp; fn read_all(arena: *mut Arena) -&gt; ReadAll &nbsp; struct ReadAll { ok: bool, data: string }</div>
           <p>
-            <code>read_line</code> returns the next line of standard input without its line break (<code>"\n"</code> or <code>"\r\n"</code>). A last line without a line break is still returned; after it, <code>ok</code> is false. The line is built in the arena, which grows the buffer as needed, so its length is limited only by the arena: a line that does not fit panics with <code>arena out of memory</code>. Size the arena for the longest line you accept. <code>read_line</code> reads one byte per system call, so it never takes input beyond the line it returns. <code>read_all</code> reads the rest of standard input in large blocks; <code>ok</code> is false only if reading fails.
+            <code>stdin_line</code> returns the next line of standard input without its line break (<code>"\n"</code> or <code>"\r\n"</code>). A last line without a line break is still returned; after it, <code>Err(StdinError.Eof)</code>. The line is built in the arena, which grows the buffer as needed, so its length is limited only by the arena: a line that does not fit panics with <code>arena out of memory</code>. Size the arena for the longest line you accept. <code>stdin_line</code> reads one byte per system call, so it never takes input beyond the line it returns. <code>stdin_all</code> reads the rest of standard input in large blocks; it fails only with <code>Err(StdinError.ReadFailed)</code>. The line or data lives in the arena: using it after <code>arena_reset</code> is a compile error, through <code>match</code>, <code>try</code> and <code>catch</code> too. <code>read_line</code> and <code>read_all</code> are the deprecated versions, with <code>ok = false</code> for any error.
           </p>
         </div>
 
         <div class="fn-box">
-          <h3>read_i64, read_int</h3>
-          <div class="fn-sig">fn read_i64() -&gt; ParsedI64 &nbsp; fn read_int() -&gt; i32</div>
+          <h3>stdin_i64</h3>
+          <div class="fn-sig">fn stdin_i64() -&gt; i64!StdinError<br>deprecated: fn read_i64() -&gt; ParsedI64 &nbsp; fn read_int() -&gt; i32</div>
           <p>
-            <code>read_i64</code> reads one line and parses it with <code>parse_i64</code>, ignoring spaces around the number. <code>ok</code> is false at end of input, for a line that is not a number (<code>"7x"</code>), and for a line longer than 64 bytes; the whole line is consumed in every case. <code>read_int</code> is deprecated because it cannot report failure: it returns the same number, or 0 at end of input, for a non-number, or for a value outside <code>i32</code>. The values are ordinary data: validate them before using them as a length, index or path.
+            <code>stdin_i64</code> reads one line and parses it with <code>str_to_i64</code>, ignoring spaces around the number: <code>Err(StdinError.Eof)</code> at end of input, <code>BadNumber</code> for a line that is not a number (<code>"7x"</code>), <code>TooLong</code> for a line longer than 64 bytes; the whole line is consumed in every case. <code>read_i64</code> is the deprecated version with <code>ok = false</code> for any error. <code>read_int</code> is deprecated because it cannot report failure: it returns the same number, or 0 at end of input, for a non-number, or for a value outside <code>i32</code>. The values are ordinary data: validate them before using them as a length, index or path.
           </p>
         </div>
 
@@ -679,11 +688,15 @@ fn main() {
 fn main() {
     let mut a: Arena = arena_init(4096);
     print("Name?");
-    let r: ReadLine = read_line(&amp;mut a);
-    if r.ok { print(str_concat(&amp;mut a, "Hello, ", trim(r.line))); }
+    match stdin_line(&amp;mut a) {
+        Ok(line) =&gt; print(str_concat(&amp;mut a, "Hello, ", trim(line))),
+        Err(_) =&gt; print("no input"),
+    }
     print("Port?");
-    let port: ParsedI64 = read_i64();
-    if port.ok { print(port.value); } else { print("not a number"); }
+    match stdin_i64() {
+        Ok(port) =&gt; print(port),
+        Err(_) =&gt; print("not a number"),
+    }
     arena_deinit(&amp;mut a);
 }</code></pre>
             </div>
@@ -702,7 +715,7 @@ fn main() {
             </div>
           </div>
           <div class="explanation-box">
-            <strong>Dataflow Taint Tracking (planned, not implemented):</strong> values read via <code>sys_read</code>, <code>read_line</code> or <code>read_i64</code> are ordinary values. The compiler does not yet stop them from reaching file paths or slice indices unvalidated; bounds and overflow checks still apply at run time.
+            <strong>Dataflow Taint Tracking (planned, not implemented):</strong> values read via <code>sys_read</code>, <code>stdin_line</code> or <code>stdin_i64</code> are ordinary values. The compiler does not yet stop them from reaching file paths or slice indices unvalidated; bounds and overflow checks still apply at run time.
           </div>
         </div>
       </section>
@@ -860,7 +873,7 @@ fn main() {
             Angles are in radians. These are written in oC with <code>+ - * /</code> only (<code>sqrt_f64</code> is the processor's instruction), so both backends give bit-identical results and no C math library is linked. Measured against the C library on 200,000 inputs per function: <code>sin</code>, <code>cos</code>, <code>atan</code>, <code>atan2</code>, <code>exp</code> and <code>log</code> are within 1 ulp (one step of the last binary digit); <code>tan</code>, <code>log10</code> and <code>hypot</code> within 2 ulp; <code>sqrt</code> is exact.
           </p>
           <p>
-            Limits worth knowing: <code>sin_f64</code> and <code>cos_f64</code> have that accuracy for <code>|x|</code> up to 10<sup>6</sup>. Beyond it the absolute error grows to about <code>|x| &times; 1.1e-16</code>, and from 2<sup>52</sup> the result is NaN, so keep a running phase wrapped to one turn rather than letting it grow. <code>pow_f64</code> is exact for integer exponents whenever the result is representable (<code>pow_f64(2.0, 10.0)</code> is exactly 1024) and accurate to about 10<sup>-13</sup> relative otherwise; a negative base with a non-integer exponent gives NaN. <code>log10_f64</code> of an exact power of ten can be one step off (<code>log10_f64(1.0e15)</code> is 14.999999999999998), so round it before casting to an integer. <code>log_f64</code> of a negative number is NaN and of zero is <code>-inf</code>; under <code>--fp-trap</code> those panic instead. Reading a float from text (<code>parse_f64</code>) is not provided yet.
+            Limits worth knowing: <code>sin_f64</code> and <code>cos_f64</code> have that accuracy for <code>|x|</code> up to 10<sup>6</sup>. Beyond it the absolute error grows to about <code>|x| &times; 1.1e-16</code>, and from 2<sup>52</sup> the result is NaN, so keep a running phase wrapped to one turn rather than letting it grow. <code>pow_f64</code> is exact for integer exponents whenever the result is representable (<code>pow_f64(2.0, 10.0)</code> is exactly 1024) and accurate to about 10<sup>-13</sup> relative otherwise; a negative base with a non-integer exponent gives NaN. <code>log10_f64</code> of an exact power of ten can be one step off (<code>log10_f64(1.0e15)</code> is 14.999999999999998), so round it before casting to an integer. <code>log_f64</code> of a negative number is NaN and of zero is <code>-inf</code>; under <code>--fp-trap</code> those panic instead. Reading a float from text is <code>str_to_f64</code> in <code>std/fmt.oc</code>.
           </p>
         </div>
 

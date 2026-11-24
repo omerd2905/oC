@@ -2,7 +2,7 @@
 //
 // Everything here follows oC's rule for arithmetic: a result that does not fit panics.
 // Behaviour that deliberately differs is spelled out in the name (sat_* saturates, the
-// checksums wrap). There are no generics yet, so each function names its type.
+// checksums wrap). min, max, clamp, abs and sign are generic; the rest name their type.
 
 extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
 extern fn sys_exit(code: i32);

@@ -1,0 +1,41 @@
+// std/io.oc error-union input functions (issue #70, phase 4), fed by tests/run_probes.sh
+// with the same input as read_input.oc:
+//   "  Ada \r\n" "-42\n" "7x\n" "-2147483649\n" "abc\r\n" "\n" <100000 x's> "\n" "tail1\ntail2"
+import "std/io.oc";
+
+fn why(e: StdinError) -> string {
+    match e {
+        StdinError.Eof => { return "end of input"; }
+        StdinError.ReadFailed => { return "read failed"; }
+        StdinError.TooLong => { return "too long"; }
+        StdinError.BadNumber => { return "not a number"; }
+    }
+    return "?";
+}
+
+fn main() {
+    let mut a: Arena = arena_init(1048576);
+    match stdin_line(&mut a) {
+        Ok(line) => print(str_concat(&mut a, "Hello, ", trim(line))),  // Hello, Ada
+        Err(e) => print(why(e)),
+    }
+    print(stdin_i64() catch 0);                                      // -42
+    match stdin_i64() {
+        Ok(v) => print(v),
+        Err(e) => print(why(e)),                                     // not a number
+    }
+    print(stdin_i64() catch 0);                                      // -2147483649
+    print(stdin_line(&mut a) catch "?");                             // abc
+    let empty: string = stdin_line(&mut a) catch "?";
+    print(empty.len);                                                // 0
+    match stdin_i64() {
+        Ok(v) => print(v),
+        Err(e) => print(why(e)),                                     // too long
+    }
+    print(stdin_all(&mut a) catch "?");                              // tail1, tail2
+    match stdin_line(&mut a) {
+        Ok(line) => print(line),
+        Err(e) => print(why(e)),                                     // end of input
+    }
+    arena_deinit(&mut a);
+}

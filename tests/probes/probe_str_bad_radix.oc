@@ -1,0 +1,7 @@
+// A radix outside 2..16 is a bug in the caller, so str_to_u64_radix panics instead of
+// returning an error.
+import "std/str.oc";
+
+fn main() {
+    print(str_to_u64_radix("10", 37) catch 0);
+}

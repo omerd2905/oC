@@ -1,13 +1,22 @@
 // Standard input.
 //
-// read_line and read_all build their result in an arena; read_i64 needs none. Input is
-// read one byte per system call by read_line and read_i64, so they never consume more than
-// the line they return (a later read sees the rest); read_all reads in large blocks.
+// stdin_line and stdin_all build their result in an arena; stdin_i64 needs none. Input is
+// read one byte per system call by stdin_line and stdin_i64, so they never consume more
+// than the line they return (a later read sees the rest); stdin_all reads in large blocks.
+// read_line, read_all, read_i64 and read_int are the deprecated versions with an `ok` flag.
 
 import "mem.oc";
 import "str.oc";
 
 extern fn sys_read(fd: i32, buf: *mut u8, count: usize) -> i64;
+
+// Why reading standard input failed.
+enum StdinError {
+    Eof,        // end of input, nothing read
+    ReadFailed, // the system call failed
+    TooLong,    // stdin_i64: a line longer than 64 bytes
+    BadNumber,  // stdin_i64: the line is not an i64
+}
 
 struct ReadLine {
     ok: bool,     // false at end of input with nothing read
@@ -20,9 +29,9 @@ struct ReadAll {
 }
 
 // The next line of standard input. At end of input, a last line without a line break is
-// still returned (ok = true); after it, ok is false. A line may be as long as the arena
-// allows: one that does not fit panics with "arena out of memory".
-fn read_line(arena: *mut Arena) -> ReadLine {
+// still returned; after it, Err(StdinError.Eof). A line may be as long as the arena allows:
+// one that does not fit panics with "arena out of memory".
+fn stdin_line(arena: *mut Arena) -> string!StdinError {
     let mut cap: usize = 128;
     let mut buf: *mut u8 = str_alloc(arena, cap);
     let mut len: usize = 0;
@@ -47,15 +56,24 @@ fn read_line(arena: *mut Arena) -> ReadLine {
             }
         }
     }
-    if !got { return ReadLine { ok: false, line: "" }; }
+    if !got { return Err(StdinError.Eof); }
     if len > 0 {
         if buf[len - 1] == 13 { len = len - 1; } // "\r\n"
     }
-    return ReadLine { ok: true, line: string { ptr: buf.as(*u8), len: len } };
+    return Ok(string { ptr: buf.as(*u8), len: len });
 }
 
-// All remaining standard input.
-fn read_all(arena: *mut Arena) -> ReadAll {
+// Deprecated (kept for one release): use stdin_line.
+fn read_line(arena: *mut Arena) -> ReadLine {
+    match stdin_line(arena) {
+        Ok(line) => { return ReadLine { ok: true, line: line }; }
+        Err(_) => { return ReadLine { ok: false, line: "" }; }
+    }
+    return ReadLine { ok: false, line: "" };
+}
+
+// All remaining standard input; Err(StdinError.ReadFailed) if reading fails.
+fn stdin_all(arena: *mut Arena) -> string!StdinError {
     let mut cap: usize = 4096;
     let mut buf: *mut u8 = str_alloc(arena, cap);
     let mut len: usize = 0;
@@ -66,20 +84,29 @@ fn read_all(arena: *mut Arena) -> ReadAll {
             cap = cap * 2;
         }
         let n: i64 = sys_read(0, (buf + len).as(*mut u8), cap - len);
-        if n < 0 { return ReadAll { ok: false, data: "" }; }
+        if n < 0 { return Err(StdinError.ReadFailed); }
         if n == 0 {
             reading = false;
         } else {
             len = len + n.as(usize);
         }
     }
-    return ReadAll { ok: true, data: string { ptr: buf.as(*u8), len: len } };
+    return Ok(string { ptr: buf.as(*u8), len: len });
 }
 
-// Reads one line and parses it as an i64, ignoring surrounding spaces. ok is false at end
-// of input, for a line that is not a number, and for one longer than 64 bytes (the rest of
-// that line is still consumed).
-fn read_i64() -> ParsedI64 {
+// Deprecated (kept for one release): use stdin_all.
+fn read_all(arena: *mut Arena) -> ReadAll {
+    match stdin_all(arena) {
+        Ok(data) => { return ReadAll { ok: true, data: data }; }
+        Err(_) => { return ReadAll { ok: false, data: "" }; }
+    }
+    return ReadAll { ok: false, data: "" };
+}
+
+// Reads one line and parses it as an i64, ignoring surrounding spaces: Err(StdinError.Eof) at
+// end of input, BadNumber for a line that is not a number, TooLong for one longer than 64
+// bytes (the rest of that line is still consumed).
+fn stdin_i64() -> i64!StdinError {
     let mut buf: [64]u8 = [0];
     let mut len: usize = 0;
     let mut got: bool = false;
@@ -102,19 +129,26 @@ fn read_i64() -> ParsedI64 {
             }
         }
     }
-    let mut ok: bool = got;
-    if too_long { ok = false; }
-    let mut value: i64 = 0;
-    if ok {
-        let all: string = string { ptr: (&buf).as(*u8), len: 64 };
-        let r: ParsedI64 = parse_i64(trim(all[0..len]));
-        ok = r.ok;
-        value = r.value;
+    if !got { return Err(StdinError.Eof); }
+    if too_long { return Err(StdinError.TooLong); }
+    let all: string = string { ptr: (&buf).as(*u8), len: 64 };
+    match str_to_i64(trim(all[0..len])) {
+        Ok(v) => { return Ok(v); }
+        Err(_) => { return Err(StdinError.BadNumber); }
     }
-    return ParsedI64 { ok: ok, value: value };
+    return Err(StdinError.BadNumber);
 }
 
-// Deprecated: cannot tell a bad line from 0. Use read_i64.
+// Deprecated (kept for one release): use stdin_i64.
+fn read_i64() -> ParsedI64 {
+    match stdin_i64() {
+        Ok(v) => { return ParsedI64 { ok: true, value: v }; }
+        Err(_) => { return ParsedI64 { ok: false, value: 0 }; }
+    }
+    return ParsedI64 { ok: false, value: 0 };
+}
+
+// Deprecated: cannot tell a bad line from 0. Use stdin_i64.
 // The number on the next line, or 0 at end of input, for a non-number or outside i32.
 fn read_int() -> i32 {
     let r: ParsedI64 = read_i64();

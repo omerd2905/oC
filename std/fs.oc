@@ -21,28 +21,61 @@ fn cstr_path(path: string, out_buf: *mut u8) -> *u8 {
     return out_buf.as(*u8)
 }
 
-fn read_file(path: string, out_buf: *mut u8, max_len: usize) -> i64 {
+// Why a file operation failed.
+enum FsError {
+    OpenFailed,  // missing, not allowed, or a symlink (paths are opened without following them)
+    ReadFailed,
+    WriteFailed, // includes writing fewer bytes than asked
+}
+
+// Reads up to max_len bytes of the file into out_buf; Ok(number of bytes read).
+fn file_read(path: string, out_buf: *mut u8, max_len: usize) -> usize!FsError {
     let mut pbuf: [4096]u8 = [0]
     let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
     let fd: i32 = sys_open(p, OC_O_SAFE_READ, 0)
     if fd < 0 {
-        return -1
+        return Err(FsError.OpenFailed)
     }
     let n: i64 = sys_read(fd, out_buf, max_len)
     sys_close(fd)
-    return n
+    if n < 0 {
+        return Err(FsError.ReadFailed)
+    }
+    return Ok(n.as(usize))
 }
 
-fn write_file(path: string, content: string) -> bool {
+// Creates or truncates the file and writes content; Ok(content.len).
+fn file_write(path: string, content: string) -> usize!FsError {
     let mut pbuf: [4096]u8 = [0]
     let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
     let fd: i32 = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE)
     if fd < 0 {
-        return false
+        return Err(FsError.OpenFailed)
     }
     let n: i64 = sys_write(fd, content.ptr.as(*u8), content.len)
     sys_close(fd)
-    return n >= 0
+    if n != content.len.as(i64) {
+        return Err(FsError.WriteFailed)
+    }
+    return Ok(content.len)
+}
+
+// Deprecated (kept for one release): use file_read. The byte count, or -1 on failure.
+fn read_file(path: string, out_buf: *mut u8, max_len: usize) -> i64 {
+    match file_read(path, out_buf, max_len) {
+        Ok(n) => { return n.as(i64) }
+        Err(_) => { return -1 }
+    }
+    return -1
+}
+
+// Deprecated (kept for one release): use file_write.
+fn write_file(path: string, content: string) -> bool {
+    match file_write(path, content) {
+        Ok(_) => { return true }
+        Err(_) => { return false }
+    }
+    return false
 }
 
 fn chmod_exec(path: string) -> bool {
