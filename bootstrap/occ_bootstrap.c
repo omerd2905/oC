@@ -13,6 +13,7 @@
 #include <io.h>
 __declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);
 __declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);
+__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);
 #define O_CLOEXEC_HOST _O_NOINHERIT
 #else
 #include <unistd.h>
@@ -50,6 +51,7 @@ static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) {
 static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }
 static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }
 static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }
+static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { unsigned long old; return VirtualProtect(addr, len, prot == 0 ? 0x01 : 0x04, &old) ? 0 : -1; }
 static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }
 static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }
 static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }
@@ -61,6 +63,7 @@ static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) {
 static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }
 static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }
 static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }
+static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; return (int32_t)mprotect(addr, len, p); }
 static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }
 static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }
 static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }
@@ -91,6 +94,7 @@ static inline int64_t sys_exe_path(char* buf, size_t cap) { ssize_t n = cap ? re
 static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }
 static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }
 static inline void sys_exit(int32_t code) { _exit(code); }
+static inline bool sys_arena_poison(void) { return 0; }
 #if defined(_WIN32)
 static inline int32_t sys_host_target(void) { return 2; }
 #elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))
@@ -285,7 +289,7 @@ static const uint32_t NODE_CONTINUE = 28;
 static const size_t NG_IMP_EXIT_PROCESS = 0;
 static const size_t NG_IMP_GET_STD_HANDLE = 1;
 static const size_t NG_IMP_WRITE_FILE = 2;
-static const size_t NG_IMP_COUNT = 9;
+static const size_t NG_IMP_COUNT = 10;
 
 typedef struct Arena Arena;
 typedef struct Split Split;
@@ -492,6 +496,7 @@ struct CodeBuffer {
     oc_string flt_types[256];
     size_t flt_count;
     bool fp_trap;
+    bool arena_poison;
     SourceMap* srcmap;
     AstNode* program;
 };
@@ -534,6 +539,7 @@ struct NativeGen {
     size_t field_count;
     AstNode* root;
     bool fp_trap;
+    bool arena_poison;
     SourceMap* srcmap;
     oc_string cur_ret;
     oc_string const_types[128];
@@ -579,6 +585,7 @@ struct __ErrorUnion__usize__u32 {
     size_t value;
 };
 
+void arena_poison_region(Arena* arena);
 Arena arena_init(size_t capacity);
 uint8_t* arena_alloc(Arena* arena, size_t size);
 void arena_reset(Arena* arena);
@@ -944,9 +951,9 @@ size_t pe_align(size_t v, size_t a);
 void pe_append_zeros(CodeBuffer* buf, size_t n);
 void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size_t rva, size_t raw_size, size_t raw_off, uint32_t flags);
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
-bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap, SourceMap* m);
-bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
-bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m);
+bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap, bool arena_poison, SourceMap* m);
+bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, bool arena_poison, SourceMap* m);
+bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, bool arena_poison, SourceMap* m);
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
 bool is_safe_path(oc_string s, bool allow_backslash);
 oc_string arena_dup_str(Arena* arena, oc_string s);
@@ -973,6 +980,12 @@ size_t fmt_put_u64(uint8_t* buf, size_t n, uint64_t v);
 size_t fmt_put_fixed6(uint8_t* buf, size_t n, double v);
 void fmt_print_f64(double x);
 size_t fmt_put_sci(uint8_t* buf, size_t n, double v);
+
+void arena_poison_region(Arena* arena) {
+    if ((((arena)->capacity) > 0)) {
+    sys_mprotect(((void*)(((arena)->buffer))), ((arena)->capacity), 0);
+    }
+}
 
 Arena arena_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, OC_PROT_RW, OC_MAP_PRIVATE_ANON, (-1), 0);
@@ -1006,6 +1019,13 @@ uint8_t* arena_alloc(Arena* arena, size_t size) {
 }
 
 void arena_reset(Arena* arena) {
+    if (sys_arena_poison()) {
+    arena_poison_region(arena);
+    Arena fresh = arena_init(((arena)->capacity));
+    ((arena)->buffer) = ((fresh).buffer);
+    ((arena)->offset) = 0;
+    return;
+    }
     size_t i = 0;
     while ((i < ((arena)->offset))) {
     __OC_AT((((arena)->buffer)), (i)) = 0;
@@ -1015,6 +1035,13 @@ void arena_reset(Arena* arena) {
 }
 
 void arena_deinit(Arena* arena) {
+    if (sys_arena_poison()) {
+    arena_poison_region(arena);
+    ((arena)->buffer) = ((uint8_t*)(0));
+    ((arena)->capacity) = 0;
+    ((arena)->offset) = 0;
+    return;
+    }
     size_t i = 0;
     while ((i < ((arena)->offset))) {
     __OC_AT((((arena)->buffer)), (i)) = 0;
@@ -7571,7 +7598,7 @@ bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m) {
 
 CodeBuffer buf_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, 3, 34, (-1), 0);
-    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0, .flt_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_count = 0, .fp_trap = false, .srcmap = ((SourceMap*)(0)), .program = ((AstNode*)(0)) };
+    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0, .flt_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_count = 0, .fp_trap = false, .arena_poison = false, .srcmap = ((SourceMap*)(0)), .program = ((AstNode*)(0)) };
 }
 
 void buf_append_u8(CodeBuffer* buf, uint8_t byte) {
@@ -9205,6 +9232,12 @@ bool is_builtin_c_fn(oc_string fn_name) {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_host_target"), .len = sizeof("sys_host_target") - 1 })) {
     return true;
     }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_mprotect"), .len = sizeof("sys_mprotect") - 1 })) {
+    return true;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_arena_poison"), .len = sizeof("sys_arena_poison") - 1 })) {
+    return true;
+    }
     return false;
 }
 
@@ -9225,6 +9258,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <io.h>\012"), .len = sizeof("#include <io.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\012"), .len = sizeof("__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\012"), .len = sizeof("__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);\012"), .len = sizeof("__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define O_CLOEXEC_HOST _O_NOINHERIT\012"), .len = sizeof("#define O_CLOEXEC_HOST _O_NOINHERIT\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <unistd.h>\012"), .len = sizeof("#include <unistd.h>\012") - 1 });
@@ -9247,6 +9281,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\012"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p \077 p : (void*)-1; }\012"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p \077 p : (void*)-1; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) \077 0 : -1; }\012"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) \077 0 : -1; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { unsigned long old; return VirtualProtect(addr, len, prot == 0 \077 0x01 : 0x04, &old) \077 0 : -1; }\012"), .len = sizeof("static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { unsigned long old; return VirtualProtect(addr, len, prot == 0 \077 0x01 : 0x04, &old) \077 0 : -1; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) \077 _S_IWRITE : 0)); }\012"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) \077 _S_IWRITE : 0)); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\012"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012") - 1 });
@@ -9258,6 +9293,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\012"), .len = sizeof("static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; return (int32_t)mprotect(addr, len, p); }\012"), .len = sizeof("static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; return (int32_t)mprotect(addr, len, p); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\012"), .len = sizeof("static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\012"), .len = sizeof("static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\012"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\012") - 1 });
@@ -9288,6 +9324,12 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\012"), .len = sizeof("static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\012"), .len = sizeof("static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void sys_exit(int32_t code) { _exit(code); }\012"), .len = sizeof("static inline void sys_exit(int32_t code) { _exit(code); }\012") - 1 });
+    if (((out)->arena_poison)) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline bool sys_arena_poison(void) { return 1; }\012"), .len = sizeof("static inline bool sys_arena_poison(void) { return 1; }\012") - 1 });
+    }
+    else {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline bool sys_arena_poison(void) { return 0; }\012"), .len = sizeof("static inline bool sys_arena_poison(void) { return 0; }\012") - 1 });
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#if defined(_WIN32)\012static inline int32_t sys_host_target(void) { return 2; }\012"), .len = sizeof("#if defined(_WIN32)\012static inline int32_t sys_host_target(void) { return 2; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\012static inline int32_t sys_host_target(void) { return 4; }\012"), .len = sizeof("#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\012static inline int32_t sys_host_target(void) { return 4; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#elif defined(__APPLE__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 3; }\012"), .len = sizeof("#elif defined(__APPLE__) && defined(__x86_64__)\012static inline int32_t sys_host_target(void) { return 3; }\012") - 1 });
@@ -9690,7 +9732,10 @@ oc_string ng_imp_name(size_t slot) {
     if ((slot == 7)) {
     return (oc_string){ .ptr = (const uint8_t*)("VirtualAlloc"), .len = sizeof("VirtualAlloc") - 1 };
     }
+    if ((slot == 8)) {
     return (oc_string){ .ptr = (const uint8_t*)("VirtualFree"), .len = sizeof("VirtualFree") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)("VirtualProtect"), .len = sizeof("VirtualProtect") - 1 };
 }
 
 int32_t ng_imp_slot(oc_string name) {
@@ -12473,6 +12518,11 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     sys_nr = 11;
     }
     else {
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_mprotect"), .len = sizeof("sys_mprotect") - 1 })) {
+    is_sys = true;
+    sys_nr = 10;
+    }
+    else {
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_socket"), .len = sizeof("sys_socket") - 1 })) {
     is_sys = true;
     sys_nr = 41;
@@ -12507,6 +12557,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     }
+    }
     if (stack_args) {
     bool direct = (!is_sys);
     if ((((fn_name).len) > 6)) {
@@ -12518,6 +12569,18 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: system calls and win32_* imports take at most 6 register words"), .len = sizeof("native codegen error: system calls and win32_* imports take at most 6 register words") - 1 });
     return;
     }
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_arena_poison"), .len = sizeof("sys_arena_poison") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 199);
+    buf_append_u8(code, 192);
+    if (((ng)->arena_poison)) {
+    elf_append_u32(code, 1);
+    }
+    else {
+    elf_append_u32(code, 0);
+    }
+    return;
     }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_host_target"), .len = sizeof("sys_host_target") - 1 })) {
     buf_append_u8(code, 72);
@@ -13508,7 +13571,7 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     size_t ilt_off = __OC_ADD(iat_off, thunk_bytes);
     size_t idt_off = __OC_ADD(ilt_off, thunk_bytes);
     size_t idt_bytes = __OC_MUL(2, 20);
-    size_t hint_offs[9] = {0};
+    size_t hint_offs[10] = {0};
     size_t cur = __OC_ADD(idt_off, idt_bytes);
     size_t k = 0;
     while ((k < NG_IMP_COUNT)) {
@@ -13689,12 +13752,12 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     return ok;
 }
 
-bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap, SourceMap* m) {
+bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap, bool arena_poison, SourceMap* m) {
     CodeBuffer code_buf = buf_init(262144);
     CodeBuffer data_buf = buf_init(65536);
     CodeBuffer* code = (&(code_buf));
     CodeBuffer* data = (&(data_buf));
-    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_packed = { false }, .field_count = 0, .root = root, .fp_trap = fp_trap, .srcmap = m, .cur_ret = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .const_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
+    NativeGen ng_state = (NativeGen){ .fn_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_offsets = { 0 }, .fn_ret_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fn_count = 0, .fixup_offsets = { 0 }, .fixup_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .fixup_is_6byte = { false }, .fixup_count = 0, .data_reloc_code = { 0 }, .data_reloc_data = { 0 }, .data_reloc_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_offsets = { 0 }, .var_is_slice = { false }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_active = { false }, .var_scope = { 0 }, .var_arr_len = { 0 }, .var_count = 0, .curr_off = 0, .scope_depth = 0, .struct_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .struct_sizes = { 0 }, .struct_count = 0, .field_struct = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_offsets = { 0 }, .field_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .field_packed = { false }, .field_count = 0, .root = root, .fp_trap = fp_trap, .arena_poison = arena_poison, .srcmap = m, .cur_ret = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .const_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .const_vals = { 0 }, .const_count = 0, .loop_start = 0, .loop_depth = 0, .break_patches = { 0 }, .break_depths = { 0 }, .break_count = 0, .target = target, .has_error = false, .iat_fix_code = { 0 }, .iat_fix_slot = { 0 }, .iat_fix_count = 0 };
     NativeGen* ng = (&(ng_state));
     bool is_win = (target == OC_TARGET_WINDOWS_X86_64);
     AstNode* scan = ((root)->left);
@@ -14315,12 +14378,12 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     return true;
 }
 
-bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m) {
-    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap, m);
+bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, bool arena_poison, SourceMap* m) {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap, arena_poison, m);
 }
 
-bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, SourceMap* m) {
-    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap, m);
+bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, bool arena_poison, SourceMap* m) {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap, arena_poison, m);
 }
 
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
@@ -14868,8 +14931,9 @@ bool source_uses_floats(oc_string src) {
 }
 
 void print_usage(void) {
-    fwrite("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]", 1, sizeof("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]") - 1, stdout); fputc('\n', stdout);
+    fwrite("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap] [--arena-poison]", 1, sizeof("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap] [--arena-poison]") - 1, stdout); fputc('\n', stdout);
     fwrite("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)", 1, sizeof("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)") - 1, stdout); fputc('\n', stdout);
+    fwrite("       --arena-poison: freed and reset arena memory becomes inaccessible, so a dangling access faults (testing aid)", 1, sizeof("       --arena-poison: freed and reset arena memory becomes inaccessible, so a dangling access faults (testing aid)") - 1, stdout); fputc('\n', stdout);
     fwrite("       occ install | update | version | help   (also: --version, -v, --help, -h)", 1, sizeof("       occ install | update | version | help   (also: --version, -v, --help, -h)") - 1, stdout); fputc('\n', stdout);
     fwrite("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.", 1, sizeof("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.") - 1, stdout); fputc('\n', stdout);
     fwrite("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)", 1, sizeof("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)") - 1, stdout); fputc('\n', stdout);
@@ -15025,6 +15089,7 @@ int main(int argc, char** argv) {
     bool is_run = false;
     bool is_native = false;
     bool fp_trap = false;
+    bool arena_poison = false;
     oc_string target_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     bool target_explicit = false;
     int32_t i = 1;
@@ -15128,6 +15193,10 @@ int main(int argc, char** argv) {
     fp_trap = true;
     }
     else {
+    if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--arena-poison"), .len = sizeof("--arena-poison") - 1 })) {
+    arena_poison = true;
+    }
+    else {
     if (str_eq(arg, (oc_string){ .ptr = (const uint8_t*)("--help"), .len = sizeof("--help") - 1 })) {
     print_usage();
     return 0;
@@ -15146,6 +15215,7 @@ int main(int argc, char** argv) {
     return 1;
     }
     in_file_str = arg;
+    }
     }
     }
     }
@@ -15325,10 +15395,10 @@ int main(int argc, char** argv) {
     if (is_native) {
     bool ok_native = false;
     if ((out_target == OC_TARGET_WINDOWS_X86_64)) {
-    ok_native = emit_native_pe(prog, out_file_str, fp_trap, (&(((loader).map))));
+    ok_native = emit_native_pe(prog, out_file_str, fp_trap, arena_poison, (&(((loader).map))));
     }
     else {
-    ok_native = emit_native_elf(prog, out_file_str, fp_trap, (&(((loader).map))));
+    ok_native = emit_native_elf(prog, out_file_str, fp_trap, arena_poison, (&(((loader).map))));
     }
     buf_deinit((&(combined_buf)));
     if ((!ok_native)) {
@@ -15341,6 +15411,7 @@ int main(int argc, char** argv) {
     else {
     CodeBuffer out = buf_init(4194304);
     ((out).fp_trap) = fp_trap;
+    ((out).arena_poison) = arena_poison;
     ((out).srcmap) = (&(((loader).map)));
     codegen_program(prog, (&(out)));
     buf_deinit((&(combined_buf)));

@@ -2,7 +2,20 @@ import "os.oc";
 
 extern fn sys_mmap(addr: usize, len: usize, prot: i32, flags: i32, fd: i32, off: usize) -> *mut void;
 extern fn sys_munmap(addr: *mut void, len: usize) -> i32;
+extern fn sys_mprotect(addr: *mut void, len: usize, prot: i32) -> i32;
 extern fn sys_exit(code: i32);
+extern fn sys_arena_poison() -> bool; // true when built with --arena-poison
+
+// --arena-poison (a testing aid): memory given up by arena_reset or arena_deinit is made
+// inaccessible instead of being reused or unmapped, so a dangling pointer faults (SIGSEGV)
+// at its first use instead of reading stale or reused bytes. A reset arena continues in a
+// fresh mapping; the old one stays reserved, so no later mapping can land on its addresses.
+// Costs address space per reset; off by default, and then the code below is never taken.
+fn arena_poison_region(arena: *mut Arena) {
+    if arena.capacity > 0 {
+        sys_mprotect(arena.buffer.as(*mut void), arena.capacity, 0);
+    }
+}
 
 struct Arena {
     offset: usize,
@@ -46,6 +59,13 @@ fn arena_alloc(arena: *mut Arena, size: usize) -> *mut u8 {
 }
 
 fn arena_reset(arena: *mut Arena) {
+    if sys_arena_poison() {
+        arena_poison_region(arena);
+        let fresh: Arena = arena_init(arena.capacity);
+        arena.buffer = fresh.buffer;
+        arena.offset = 0;
+        return;
+    }
     let mut i: usize = 0
     while i < arena.offset {
         arena.buffer[i] = 0
@@ -55,6 +75,13 @@ fn arena_reset(arena: *mut Arena) {
 }
 
 fn arena_deinit(arena: *mut Arena) {
+    if sys_arena_poison() {
+        arena_poison_region(arena);
+        arena.buffer = (0).as(*mut u8);
+        arena.capacity = 0;
+        arena.offset = 0;
+        return;
+    }
     let mut i: usize = 0
     while i < arena.offset {
         arena.buffer[i] = 0

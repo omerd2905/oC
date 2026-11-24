@@ -1,0 +1,24 @@
+// --arena-poison: a dangling pointer into a reset arena faults instead of reading reused
+// memory. The address is laundered through a usize array, which the validator does not
+// track (raw integer-to-pointer casts are unchecked by design), so this compiles.
+import "std/mem.oc";
+
+fn addr_of_first(a: *mut Arena) -> usize {
+    return a.buffer.as(usize);
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_alloc(&mut a, 16);
+    p[0] = 42;
+    print(p[0]);
+    let mut slot: [1]usize = [0];
+    slot[0] = addr_of_first(&mut a);
+    arena_reset(&mut a);
+    let q: *mut u8 = arena_alloc(&mut a, 16);
+    q[0] = 7;
+    print(q[0]);
+    let dangling: *mut u8 = slot[0].as(*mut u8);
+    print(dangling[0]);   // 7 by default (the memory was reused); a fault with --arena-poison
+    arena_deinit(&mut a);
+}

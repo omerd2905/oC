@@ -101,6 +101,7 @@ struct NativeGen {
 
     root: *mut AstNode,
     fp_trap: bool,   // --fp-trap: trap when a float operation produces NaN or infinity
+    arena_poison: bool, // --arena-poison: sys_arena_poison() returns true
     srcmap: *SourceMap, // source locations for --fp-trap panics
     cur_ret: string, // return type of the function being emitted
     const_types: [128]string,
@@ -127,7 +128,7 @@ struct NativeGen {
 let NG_IMP_EXIT_PROCESS: usize = 0;
 let NG_IMP_GET_STD_HANDLE: usize = 1;
 let NG_IMP_WRITE_FILE: usize = 2;
-let NG_IMP_COUNT: usize = 9;
+let NG_IMP_COUNT: usize = 10;
 
 fn ng_imp_name(slot: usize) -> string {
     if slot == 0 { return "ExitProcess"; }
@@ -138,7 +139,8 @@ fn ng_imp_name(slot: usize) -> string {
     if slot == 5 { return "CloseHandle"; }
     if slot == 6 { return "DeleteFileA"; }
     if slot == 7 { return "VirtualAlloc"; }
-    return "VirtualFree";
+    if slot == 8 { return "VirtualFree"; }
+    return "VirtualProtect";
 }
 
 // IAT slot of a KERNEL32 import by name, -1 if this image does not import it.
@@ -2278,6 +2280,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         else if str_eq(fn_name, "sys_close") { is_sys = true; sys_nr = 3; }
         else if str_eq(fn_name, "sys_mmap") { is_sys = true; sys_nr = 9; }
         else if str_eq(fn_name, "sys_munmap") { is_sys = true; sys_nr = 11; }
+        else if str_eq(fn_name, "sys_mprotect") { is_sys = true; sys_nr = 10; }
         else if str_eq(fn_name, "sys_socket") { is_sys = true; sys_nr = 41; }
         else if str_eq(fn_name, "sys_connect") { is_sys = true; sys_nr = 42; }
         else if str_eq(fn_name, "sys_exit") { is_sys = true; sys_nr = 60; }
@@ -2293,6 +2296,12 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 ng_fail(ng, "native codegen error: system calls and win32_* imports take at most 6 register words");
                 return;
             }
+        }
+
+        if str_eq(fn_name, "sys_arena_poison") {
+            buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 192); // mov $flag, %rax
+            if ng.arena_poison { elf_append_u32(code, 1); } else { elf_append_u32(code, 0); }
+            return;
         }
 
         if str_eq(fn_name, "sys_host_target") {
@@ -3130,7 +3139,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     let ilt_off: usize = iat_off + thunk_bytes;
     let idt_off: usize = ilt_off + thunk_bytes;
     let idt_bytes: usize = 2 * 20;
-    let mut hint_offs: [9]usize = [0]; // NG_IMP_COUNT entries
+    let mut hint_offs: [10]usize = [0]; // NG_IMP_COUNT entries
     let mut cur: usize = idt_off + idt_bytes;
     let mut k: usize = 0;
     while k < NG_IMP_COUNT {
@@ -3327,7 +3336,7 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     return ok;
 }
 
-fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_trap: bool, m: *SourceMap) -> bool {
+fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_trap: bool, arena_poison: bool, m: *SourceMap) -> bool {
     let mut code_buf: CodeBuffer = buf_init(262144);
     let mut data_buf: CodeBuffer = buf_init(65536);
     let code: *mut CodeBuffer = &mut code_buf;
@@ -3366,6 +3375,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
         field_count: 0,
         root: root,
         fp_trap: fp_trap,
+        arena_poison: arena_poison,
         srcmap: m,
         cur_ret: "",
         const_types: [""],
@@ -3898,12 +3908,12 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     return true;
 }
 
-fn emit_native_elf(root: *mut AstNode, out_file_str: string, fp_trap: bool, m: *SourceMap) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap, m);
+fn emit_native_elf(root: *mut AstNode, out_file_str: string, fp_trap: bool, arena_poison: bool, m: *SourceMap) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_LINUX_X86_64, fp_trap, arena_poison, m);
 }
 
-fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool, m: *SourceMap) -> bool {
-    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap, m);
+fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool, arena_poison: bool, m: *SourceMap) -> bool {
+    return emit_native_image(root, out_file_str, OC_TARGET_WINDOWS_X86_64, fp_trap, arena_poison, m);
 }
 
 fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {

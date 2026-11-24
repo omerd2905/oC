@@ -30,6 +30,7 @@ struct CodeBuffer {
     flt_types: [256]string,
     flt_count: usize,
     fp_trap: bool, // --fp-trap: panic when a float operation produces NaN or infinity
+    arena_poison: bool, // --arena-poison: sys_arena_poison() returns true
     srcmap: *SourceMap, // source locations for --fp-trap panics (null: line:col only)
     program: *mut AstNode, // for struct field types
 }
@@ -59,6 +60,7 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         flt_types: [""],
         flt_count: 0,
         fp_trap: false,
+        arena_poison: false,
         srcmap: (0).as(*SourceMap),
         program: (0).as(*mut AstNode),
     };
@@ -1319,6 +1321,8 @@ fn is_builtin_c_fn(fn_name: string) -> bool {
     if str_eq(fn_name, "sys_connect") { return true; }
     if str_eq(fn_name, "sys_exit") { return true; }
     if str_eq(fn_name, "sys_host_target") { return true; }
+    if str_eq(fn_name, "sys_mprotect") { return true; }
+    if str_eq(fn_name, "sys_arena_poison") { return true; }
     return false;
 }
 
@@ -1341,6 +1345,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#include <io.h>\n");
     buf_append(out, "__declspec(dllimport) void* __stdcall VirtualAlloc(void*, size_t, unsigned long, unsigned long);\n");
     buf_append(out, "__declspec(dllimport) int __stdcall VirtualFree(void*, size_t, unsigned long);\n");
+    buf_append(out, "__declspec(dllimport) int __stdcall VirtualProtect(void*, size_t, unsigned long, unsigned long*);\n");
     buf_append(out, "#define O_CLOEXEC_HOST _O_NOINHERIT\n");
     buf_append(out, "#else\n");
     buf_append(out, "#include <unistd.h>\n");
@@ -1363,6 +1368,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n");
     buf_append(out, "static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n");
     buf_append(out, "static inline int32_t sys_munmap(void* addr, size_t len) { (void)len; return VirtualFree(addr, 0, 0x8000) ? 0 : -1; }\n");
+    buf_append(out, "static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { unsigned long old; return VirtualProtect(addr, len, prot == 0 ? 0x01 : 0x04, &old) ? 0 : -1; }\n");
     buf_append(out, "static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)_chmod(path, _S_IREAD | ((mode & 128) ? _S_IWRITE : 0)); }\n");
     buf_append(out, "static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(path); }\n");
     buf_append(out, "static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n");
@@ -1374,6 +1380,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n");
     buf_append(out, "static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n");
     buf_append(out, "static inline int32_t sys_munmap(void* addr, size_t len) { return (int32_t)munmap(addr, len); }\n");
+    buf_append(out, "static inline int32_t sys_mprotect(void* addr, size_t len, int32_t prot) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; return (int32_t)mprotect(addr, len, p); }\n");
     buf_append(out, "static inline int32_t sys_chmod(const char* path, uint32_t mode) { return (int32_t)chmod(path, (mode_t)mode); }\n");
     buf_append(out, "static inline int32_t sys_unlink(const char* path) { return (int32_t)unlink(path); }\n");
     buf_append(out, "static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { return (int32_t)socket(domain, type, protocol); }\n");
@@ -1408,6 +1415,11 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline uint64_t sys_f64_bits(const char* text) { double d = strtod(text, 0); uint64_t u; memcpy(&u, &d, sizeof u); return u; }\n");
     buf_append(out, "static inline uint64_t sys_f32_bits(const char* text) { float f = strtof(text, 0); uint32_t u; memcpy(&u, &f, sizeof u); return u; }\n");
     buf_append(out, "static inline void sys_exit(int32_t code) { _exit(code); }\n");
+    if (out.arena_poison) {
+        buf_append(out, "static inline bool sys_arena_poison(void) { return 1; }\n");
+    } else {
+        buf_append(out, "static inline bool sys_arena_poison(void) { return 0; }\n");
+    }
     // Host identity is fixed when the C is compiled, so a bootstrap built on any host reports that host.
     buf_append(out, "#if defined(_WIN32)\nstatic inline int32_t sys_host_target(void) { return 2; }\n");
     buf_append(out, "#elif defined(__APPLE__) && (defined(__aarch64__) || defined(__arm64__))\nstatic inline int32_t sys_host_target(void) { return 4; }\n");
