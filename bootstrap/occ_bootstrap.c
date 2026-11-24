@@ -502,9 +502,9 @@ struct LitByte {
 };
 
 struct NativeGen {
-    oc_string fn_names[256];
-    size_t fn_offsets[256];
-    oc_string fn_ret_types[256];
+    oc_string fn_names[1024];
+    size_t fn_offsets[1024];
+    oc_string fn_ret_types[1024];
     size_t fn_count;
     size_t fixup_offsets[1024];
     oc_string fixup_names[1024];
@@ -523,14 +523,14 @@ struct NativeGen {
     size_t var_count;
     int32_t curr_off;
     int32_t scope_depth;
-    oc_string struct_names[64];
-    int32_t struct_sizes[64];
+    oc_string struct_names[256];
+    int32_t struct_sizes[256];
     size_t struct_count;
-    oc_string field_struct[256];
-    oc_string field_names[256];
-    int32_t field_offsets[256];
-    oc_string field_types[256];
-    bool field_packed[256];
+    oc_string field_struct[1024];
+    oc_string field_names[1024];
+    int32_t field_offsets[1024];
+    oc_string field_types[1024];
+    bool field_packed[1024];
     size_t field_count;
     AstNode* root;
     bool fp_trap;
@@ -13325,14 +13325,14 @@ void ng_emit_store_param(CodeBuffer* code, size_t reg_idx, size_t total, int32_t
 }
 
 void ng_define_helper(NativeGen* ng, bool* has_offset, oc_string name, size_t off) {
-    if ((((ng)->fn_count) < 256)) {
+    if ((((ng)->fn_count) < 1024)) {
     __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = name;
     __OC_AT((has_offset), (((ng)->fn_count))) = true;
     __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = off;
     ((ng)->fn_count) = __OC_ADD(((ng)->fn_count), 1);
     }
     else {
-    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: function table full (256)"), .len = sizeof("native codegen error: function table full (256)") - 1 });
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many functions (1024)"), .len = sizeof("native codegen error: too many functions (1024)") - 1 });
     }
 }
 
@@ -13740,7 +13740,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     }
     }
     }
-    if ((((ng)->field_count) < 256)) {
+    if ((((ng)->field_count) < 1024)) {
     __OC_AT((((ng)->field_struct)), (((ng)->field_count))) = s_name;
     __OC_AT((((ng)->field_names)), (((ng)->field_count))) = ((((sf)->tok)).slice);
     __OC_AT((((ng)->field_offsets)), (((ng)->field_count))) = f_off;
@@ -13748,13 +13748,19 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     __OC_AT((((ng)->field_packed)), (((ng)->field_count))) = is_packed;
     ((ng)->field_count) = __OC_ADD(((ng)->field_count), 1);
     }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many struct fields in the program (1024)"), .len = sizeof("native codegen error: too many struct fields in the program (1024)") - 1 });
+    }
     f_off = __OC_ADD(f_off, f_sz);
     sf = ((sf)->next);
     }
-    if ((((ng)->struct_count) < 64)) {
+    if ((((ng)->struct_count) < 256)) {
     __OC_AT((((ng)->struct_names)), (((ng)->struct_count))) = s_name;
     __OC_AT((((ng)->struct_sizes)), (((ng)->struct_count))) = f_off;
     ((ng)->struct_count) = __OC_ADD(((ng)->struct_count), 1);
+    }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many structs in the program (256)"), .len = sizeof("native codegen error: too many structs in the program (256)") - 1 });
     }
     }
     else {
@@ -13810,18 +13816,21 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     }
     else {
     if ((((scan)->tag) == NODE_FN)) {
-    if ((((ng)->fn_count) < 256)) {
+    if ((((ng)->fn_count) < 1024)) {
     __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = ((((scan)->tok)).slice);
     __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = 0;
     __OC_AT((((ng)->fn_ret_types)), (((ng)->fn_count))) = ((scan)->type_name);
     ((ng)->fn_count) = __OC_ADD(((ng)->fn_count), 1);
+    }
+    else {
+    ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many functions (1024)"), .len = sizeof("native codegen error: too many functions (1024)") - 1 });
     }
     }
     }
     }
     scan = ((scan)->next);
     }
-    bool fn_has_offset[256] = {0};
+    bool fn_has_offset[1024] = {0};
     if (is_win) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 131);
@@ -13861,7 +13870,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     fi_idx = __OC_ADD(fi_idx, 1);
     }
     if ((!found_fn)) {
-    if ((((ng)->fn_count) < 256)) {
+    if ((((ng)->fn_count) < 1024)) {
     __OC_AT((((ng)->fn_names)), (((ng)->fn_count))) = ((((decl)->tok)).slice);
     __OC_AT((((ng)->fn_offsets)), (((ng)->fn_count))) = ((code)->len);
     __OC_AT((((ng)->fn_ret_types)), (((ng)->fn_count))) = ((decl)->type_name);
