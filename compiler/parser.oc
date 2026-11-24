@@ -143,6 +143,22 @@ fn parse_type(p: *mut Parser) -> string {
         end_ptr = p.current.slice.ptr + p.current.slice.len;
         parser_advance(p);
     }
+    if p.current.tag == TOK_LT { // a generic struct type: Pair<i32, u8>
+        let mut depth: i32 = 0;
+        let mut scanning: bool = true;
+        while scanning {
+            let t: u32 = p.current.tag;
+            if t == TOK_LT { depth = depth + 1; }
+            if t == TOK_GT { depth = depth - 1; }
+            if t == TOK_SHR { depth = depth - 2; } // `>>` closes two levels
+            if t == TOK_EOF { scanning = false; }
+            if scanning {
+                end_ptr = p.current.slice.ptr + p.current.slice.len;
+                parser_advance(p);
+                if depth <= 0 { scanning = false; }
+            }
+        }
+    }
 
     let len: usize = end_ptr.as(usize) - start_ptr.as(usize);
     return string {
@@ -152,6 +168,90 @@ fn parse_type(p: *mut Parser) -> string {
 }
 
 extern fn parse_expr(p: *mut Parser, min_prec: u32) -> *mut AstNode;
+
+// `<T, U, const N: usize>` after a fn or struct name: a list of NODE_PARAM.
+fn parse_generic_params(p: *mut Parser) -> *mut AstNode {
+    parser_expect(p, TOK_LT);
+    let mut first: *mut AstNode = (0).as(*mut AstNode);
+    let mut last: *mut AstNode = (0).as(*mut AstNode);
+    while p.current.tag != TOK_GT {
+        if p.current.tag == TOK_EOF { break; }
+        let mut is_const: bool = false;
+        if p.current.tag == TOK_IDENT {
+            if str_eq(p.current.slice, "const") {
+                is_const = true;
+                parser_advance(p);
+            }
+        }
+        let name: Token = parser_expect(p, TOK_IDENT);
+        let node: *mut AstNode = ast_alloc_node(p.arena, NODE_PARAM, name);
+        if is_const {
+            parser_expect(p, TOK_COLON);
+            node.type_name = parse_type(p);
+        }
+        if first == (0).as(*mut AstNode) { first = node; } else { last.next = node; }
+        last = node;
+        if p.current.tag == TOK_COMMA { parser_advance(p); } else { break; }
+    }
+    parser_expect(p, TOK_GT);
+    return first;
+}
+
+// At `<` after a name in an expression: if what follows is a list of types (or integers, for
+// const parameters) closed by `>` and then `(` or `{`, consume it and return its text
+// ("i32, u8"); otherwise leave the parser untouched and return "" (it is a comparison).
+fn parser_try_type_args(p: *mut Parser) -> string {
+    let saved_lex: Lexer = p.lex;
+    let saved_cur: Token = p.current;
+    let start: *u8 = p.current.slice.ptr + 1;
+    let mut end: *u8 = start;
+    let mut depth: i32 = 0;
+    let mut ok: bool = true;
+    let mut scanning: bool = true;
+    while scanning {
+        let t: u32 = p.current.tag;
+        let mut allowed: bool = false;
+        if t == TOK_LT { depth = depth + 1; allowed = true; }
+        if t == TOK_GT {
+            depth = depth - 1;
+            allowed = true;
+            if depth == 0 { end = p.current.slice.ptr; }
+        }
+        if t == TOK_SHR {
+            depth = depth - 2;
+            allowed = true;
+            if depth == 0 { end = p.current.slice.ptr + 1; }
+        }
+        if t == TOK_IDENT { allowed = true; }
+        if t == TOK_INT { allowed = true; }
+        if t == TOK_STAR { allowed = true; }
+        if t == TOK_AMP { allowed = true; }
+        if t == TOK_MUT { allowed = true; }
+        if t == TOK_LBRACKET { allowed = true; }
+        if t == TOK_RBRACKET { allowed = true; }
+        if t == TOK_COMMA { allowed = true; }
+        if !allowed { ok = false; }
+        if depth < 0 { ok = false; }
+        if !ok { scanning = false; }
+        if scanning {
+            p.current = lexer_next(&mut p.lex); // no error reporting while guessing
+            if depth == 0 { scanning = false; }
+        }
+    }
+    if ok {
+        ok = p.current.tag == TOK_LPAREN;
+        if p.current.tag == TOK_LBRACE { ok = p.allow_struct_init; }
+    }
+    if ok {
+        if end.as(usize) <= start.as(usize) { ok = false; } // `<>`
+    }
+    if !ok {
+        p.lex = saved_lex;
+        p.current = saved_cur;
+        return "";
+    }
+    return string { ptr: start, len: end.as(usize) - start.as(usize) };
+}
 
 fn parse_primary(p: *mut Parser) -> *mut AstNode {
     let tok: Token = p.current;
@@ -202,10 +302,13 @@ fn parse_primary(p: *mut Parser) -> *mut AstNode {
     }
     if tok.tag == TOK_IDENT {
         parser_advance(p);
+        let mut type_args: string = "";
+        if p.current.tag == TOK_LT { type_args = parser_try_type_args(p); }
         if p.allow_struct_init {
             if p.current.tag == TOK_LBRACE {
                 parser_advance(p);
                 let s_node: *mut AstNode = ast_alloc_node(p.arena, NODE_STRUCT_INIT, tok);
+                s_node.type_name = type_args; // Pair<i32, u8> { ... }
                 let mut first_f: *mut AstNode = (0).as(*mut AstNode);
                 let mut last_f: *mut AstNode = (0).as(*mut AstNode);
                 while p.current.tag != TOK_RBRACE {
@@ -236,7 +339,9 @@ fn parse_primary(p: *mut Parser) -> *mut AstNode {
                 return s_node;
             }
         }
-        return ast_alloc_node(p.arena, NODE_IDENT, tok);
+        let id_node: *mut AstNode = ast_alloc_node(p.arena, NODE_IDENT, tok);
+        id_node.type_name = type_args; // min<i32>(...): handed to the call node
+        return id_node;
     }
     if tok.tag == TOK_LPAREN {
         parser_advance(p);
@@ -262,6 +367,9 @@ fn parse_postfix(p: *mut Parser) -> *mut AstNode {
             }
             parser_advance(p);
             let call_node: *mut AstNode = ast_alloc_node(p.arena, NODE_CALL, call_tok);
+            if expr != (0).as(*mut AstNode) {
+                if expr.tag == NODE_IDENT { call_node.type_name = expr.type_name; } // explicit type arguments
+            }
             let mut first_arg: *mut AstNode = (0).as(*mut AstNode);
             let mut last_arg: *mut AstNode = (0).as(*mut AstNode);
             while p.current.tag != TOK_RPAREN {
@@ -636,6 +744,8 @@ fn parse_stmt(p: *mut Parser) -> *mut AstNode {
 
 fn parse_struct_decl(p: *mut Parser, is_packed: bool) -> *mut AstNode {
     let name_tok: Token = parser_expect(p, TOK_IDENT);
+    let mut gparams: *mut AstNode = (0).as(*mut AstNode);
+    if p.current.tag == TOK_LT { gparams = parse_generic_params(p); }
     parser_expect(p, TOK_LBRACE);
     let node: *mut AstNode = ast_alloc_node(p.arena, NODE_STRUCT_DECL, name_tok);
     if is_packed {
@@ -663,6 +773,12 @@ fn parse_struct_decl(p: *mut Parser, is_packed: bool) -> *mut AstNode {
     }
     parser_expect(p, TOK_RBRACE);
     node.left = first_f;
+    if gparams != (0).as(*mut AstNode) {
+        let g: *mut AstNode = ast_alloc_node(p.arena, NODE_GENERIC, name_tok);
+        g.left = gparams;
+        g.right = node;
+        return g;
+    }
     return node;
 }
 
@@ -670,6 +786,8 @@ fn parse_fn_decl(p: *mut Parser) -> *mut AstNode {
     let fn_tok: Token = parser_expect(p, TOK_FN);
     let name_tok: Token = parser_expect(p, TOK_IDENT);
     let fn_node: *mut AstNode = ast_alloc_node(p.arena, NODE_FN, name_tok);
+    let mut gparams: *mut AstNode = (0).as(*mut AstNode);
+    if p.current.tag == TOK_LT { gparams = parse_generic_params(p); }
 
     parser_expect(p, TOK_LPAREN);
     let mut first_param: *mut AstNode = (0).as(*mut AstNode);
@@ -714,6 +832,12 @@ fn parse_fn_decl(p: *mut Parser) -> *mut AstNode {
     let body: *mut AstNode = parse_block(p);
     fn_node.left = first_param;
     fn_node.right = body;
+    if gparams != (0).as(*mut AstNode) {
+        let g: *mut AstNode = ast_alloc_node(p.arena, NODE_GENERIC, name_tok);
+        g.left = gparams;
+        g.right = fn_node;
+        return g;
+    }
     return fn_node;
 }
 
@@ -871,6 +995,8 @@ struct Validator {
     has_error: bool,
     initializing_var: string,
     srcmap: *SourceMap, // for file:line:col in diagnostics
+    fn_name: string,    // function being checked
+    gen: *Generics,     // generic instantiations, to say which one an error is in
 }
 
 fn validator_find_var(v: *mut Validator, name: string) -> i32 {
@@ -1522,6 +1648,62 @@ fn is_scalar_load(v: *mut Validator, expr: *mut AstNode) -> bool {
     return is_scalar_value_type(validator_expr_type(v, expr));
 }
 
+fn validator_is_struct_type(v: *mut Validator, t: string) -> bool {
+    if t.len == 0 { return false; }
+    let mut decl: *mut AstNode = v.program.left;
+    while decl != (0).as(*mut AstNode) {
+        if decl.tag == NODE_STRUCT_DECL {
+            if str_eq(decl.tok.slice, t) { return true; }
+        }
+        decl = decl.next;
+    }
+    return false;
+}
+
+// " (in min<Arena>, instantiated at prog.oc:7:5)" when the current function is a generic
+// instantiation, so an error in shared generic code names the use that caused it.
+fn validator_print_instance(v: *mut Validator) {
+    if v.gen == (0).as(*Generics) { return; }
+    let mut i: usize = 0;
+    while i < v.gen.inst_count {
+        if str_eq(v.gen.inst_name[i], v.fn_name) {
+            print_str_raw(" (in ");
+            print_str_raw(v.gen.inst_tmpl[i]);
+            print_str_raw("<");
+            print_str_raw(v.gen.inst_args[i]);
+            print_str_raw(">, instantiated at ");
+            print_src_pos(v.srcmap, v.gen.inst_site[i]);
+            print_str_raw(")");
+            return;
+        }
+        i = i + 1;
+    }
+}
+
+// Operators work on numbers, bools and pointers. A struct or a string operand used to reach
+// the C compiler (and produce garbage on the native backend); generics make it easy to
+// write by accident (min<Arena>), so it is an error here, at the operator.
+fn validator_check_operands(v: *mut Validator, expr: *mut AstNode) -> bool {
+    let lt: string = validator_expr_type(v, expr.left);
+    let rt: string = validator_expr_type(v, expr.right);
+    let mut bad: string = "";
+    if str_eq(rt, "string") { bad = rt; }
+    if validator_is_struct_type(v, rt) { bad = rt; }
+    if str_eq(lt, "string") { bad = lt; }
+    if validator_is_struct_type(v, lt) { bad = lt; }
+    if bad.len == 0 { return true; }
+    print_src_loc(v.srcmap, expr.tok);
+    print_str_raw("error: '");
+    print_str_raw(expr.tok.slice);
+    print_str_raw("' is not defined for ");
+    print_str_raw(bad);
+    if str_eq(bad, "string") { print_str_raw(" (compare strings with str_eq from std/str.oc)"); }
+    validator_print_instance(v);
+    print_str_raw("\n");
+    v.has_error = true;
+    return false;
+}
+
 fn validator_is_float(v: *mut Validator, expr: *mut AstNode) -> bool {
     return is_float_type_name(validator_expr_type(v, expr));
 }
@@ -1926,6 +2108,7 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
         return check_expr_use(v, expr.right);
     }
     if expr.tag == NODE_BINARY {
+        if !validator_check_operands(v, expr) { return false; }
         let mut float_operand: bool = validator_is_float(v, expr.left);
         if validator_is_float(v, expr.right) { float_operand = true; }
         if float_operand {
@@ -2399,7 +2582,7 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     return check_expr_use(v, stmt);
 }
 
-fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode, m: *SourceMap) -> bool {
+fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
     if f.right == (0).as(*mut AstNode) { return true; } // extern/prototype
 
     let mut v: Validator = Validator {
@@ -2424,6 +2607,8 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
         has_error: false,
         initializing_var: "",
         srcmap: m,
+        fn_name: f.tok.slice,
+        gen: g,
     };
 
     let mut p: *mut AstNode = f.left;
@@ -2468,7 +2653,7 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
     return true;
 }
 
-fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
+fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
     if !check_unique_names(root, m) { return false; }
     if !check_calls_resolved(root, m, root.left) { return false; }
     if !check_string_escapes(m, root.left) { return false; }
@@ -2519,7 +2704,7 @@ fn validate_program(root: *mut AstNode, m: *SourceMap) -> bool {
     decl = root.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
-            if !validate_function(decl, &mut fx, root, m) {
+            if !validate_function(decl, &mut fx, root, m, g) {
                 return false;
             }
         }
@@ -2586,4 +2771,724 @@ fn parse_program(p: *mut Parser) -> *mut AstNode {
 
     prog_node.left = first_decl;
     return prog_node;
+}
+
+// -------------------------------------------------------------
+// Generics: monomorphization (expand_generics)
+//
+// `fn min<T>(a: T, b: T) -> T`, `struct Pair<A, B>` and `const N: usize` parameters are
+// templates. Each use with concrete types (explicit `min<i32>(..)`, or inferred from the
+// argument types) creates an ordinary copy of the function or struct with the types filled
+// in and a mangled name (min__i32, Pair__i32__u8), appended to the program; the use is
+// rewritten to that name. Templates are then removed, so the validator and both backends
+// only ever see ordinary code: every instantiation is checked exactly like hand-written code
+// and costs what hand-written code costs.
+// -------------------------------------------------------------
+
+struct Generics {
+    tmpl: [256]*mut AstNode,  // NODE_GENERIC templates
+    tmpl_count: usize,
+    inst_name: [1024]string,  // mangled name of each instantiation
+    inst_tmpl: [1024]string,  // template it came from
+    inst_args: [1024]string,  // its type arguments, canonical, comma-separated
+    inst_site: [1024]Token,   // first use
+    inst_count: usize,
+    arena: *mut Arena,
+    m: *SourceMap,
+    root: *mut AstNode,
+    last: *mut AstNode,       // tail of the declaration list, where instances are appended
+    ok: bool,
+}
+
+struct GArgs {
+    n: usize,
+    items: [8]string,
+}
+
+// The text of a finished StrBuf. (Taking it by value: the validator cannot tell that
+// strbuf_to_string(&sb) points into the arena rather than into the local sb.)
+fn gx_done(sb: StrBuf) -> string {
+    return string { ptr: sb.buf.as(*u8), len: sb.len };
+}
+
+fn gx_err(g: *mut Generics, tok: Token, msg: string, name: string) {
+    print_src_loc(g.m, tok);
+    print_str_raw("error: ");
+    print_str_raw(msg);
+    print_str_raw(name);
+    print_str_raw("\n");
+    g.ok = false;
+}
+
+fn gx_is_ident_char(c: u8) -> bool {
+    if is_alpha(c) { return true; }
+    if is_digit(c) { return true; }
+    return c == 95;
+}
+
+// Type text without incidental spaces ("Pair< i32 ,u8 >" -> "Pair<i32,u8>"), so equal types
+// have equal text. The space in "*mut u8" stays.
+fn gx_canon(g: *mut Generics, t: string) -> string {
+    let mut sb: StrBuf = strbuf_init(g.arena, t.len + 1);
+    let mut i: usize = 0;
+    while i < t.len {
+        let c: u8 = t[i];
+        if is_space(c) {
+            let mut keep: bool = sb.len > 0;
+            if keep {
+                let prev: u8 = sb.buf[sb.len - 1];
+                if !gx_is_ident_char(prev) { keep = false; }
+            }
+            let mut j: usize = i;
+            while j < t.len {
+                if !is_space(t[j]) { break; }
+                j = j + 1;
+            }
+            if j >= t.len { keep = false; } else if !gx_is_ident_char(t[j]) { keep = false; }
+            if keep { strbuf_push(&mut sb, 32); }
+            i = j;
+        } else {
+            strbuf_push(&mut sb, c);
+            i = i + 1;
+        }
+    }
+    return gx_done(sb);
+}
+
+// Splits "A, Pair<B,C>, 4" at its top-level commas.
+fn gx_split(g: *mut Generics, text: string) -> GArgs {
+    let mut r: GArgs = GArgs { n: 0, items: [""] };
+    let mut depth: i32 = 0;
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i <= text.len {
+        let mut cut: bool = i == text.len;
+        if !cut {
+            let c: u8 = text[i];
+            if c == 60 { depth = depth + 1; }
+            if c == 91 { depth = depth + 1; }
+            if c == 62 { depth = depth - 1; }
+            if c == 93 { depth = depth - 1; }
+            if c == 44 { if depth == 0 { cut = true; } }
+        }
+        if cut {
+            if r.n < 8 {
+                r.items[r.n] = gx_canon(g, trim(text[start..i]));
+                r.n = r.n + 1;
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return r;
+}
+
+// An identifier for a type: letters and digits stay, the rest is spelled out.
+fn gx_mangle_into(sb: *mut StrBuf, t: string) {
+    let mut i: usize = 0;
+    while i < t.len {
+        let c: u8 = t[i];
+        if gx_is_ident_char(c) { strbuf_push(sb, c); }
+        else if c == 42 { strbuf_push_str(sb, "P"); }   // *
+        else if c == 38 { strbuf_push_str(sb, "R"); }   // &
+        else if c == 91 { strbuf_push_str(sb, "A"); }   // [
+        else if c == 93 { strbuf_push_str(sb, "_"); }   // ]
+        else if c == 60 { strbuf_push_str(sb, "_L_"); } // <
+        else if c == 62 { strbuf_push_str(sb, "_G_"); } // >
+        else if c == 44 { strbuf_push_str(sb, "_C_"); } // ,
+        i = i + 1;
+    }
+}
+
+fn gx_mangled(g: *mut Generics, name: string, args: GArgs) -> string {
+    let mut sb: StrBuf = strbuf_init(g.arena, 32);
+    strbuf_push_str(&mut sb, name);
+    let mut i: usize = 0;
+    while i < args.n {
+        strbuf_push_str(&mut sb, "__");
+        gx_mangle_into(&mut sb, args.items[i]);
+        i = i + 1;
+    }
+    return gx_done(sb);
+}
+
+fn gx_join(g: *mut Generics, args: GArgs) -> string {
+    let mut sb: StrBuf = strbuf_init(g.arena, 32);
+    let mut i: usize = 0;
+    while i < args.n {
+        if i > 0 { strbuf_push_str(&mut sb, ", "); }
+        strbuf_push_str(&mut sb, args.items[i]);
+        i = i + 1;
+    }
+    return gx_done(sb);
+}
+
+fn gx_template(g: *mut Generics, name: string) -> *mut AstNode {
+    let mut i: usize = 0;
+    while i < g.tmpl_count {
+        let t: *mut AstNode = g.tmpl[i]; // (through a local: the C backend reads g.tmpl[i].tok as a value)
+        if str_eq(t.tok.slice, name) { return t; }
+        i = i + 1;
+    }
+    return (0).as(*mut AstNode);
+}
+
+fn gx_count(list: *mut AstNode) -> usize {
+    let mut n: usize = 0;
+    let mut p: *mut AstNode = list;
+    while p != (0).as(*mut AstNode) {
+        n = n + 1;
+        p = p.next;
+    }
+    return n;
+}
+
+// Type text with each template parameter name replaced by its argument.
+fn gx_subst(g: *mut Generics, t: string, params: *mut AstNode, args: GArgs) -> string {
+    if t.len == 0 { return t; }
+    let mut sb: StrBuf = strbuf_init(g.arena, t.len + 16);
+    let mut i: usize = 0;
+    while i < t.len {
+        if gx_is_ident_char(t[i]) {
+            let mut j: usize = i;
+            while j < t.len {
+                if !gx_is_ident_char(t[j]) { break; }
+                j = j + 1;
+            }
+            let word: string = t[i..j];
+            let mut replaced: bool = false;
+            let mut p: *mut AstNode = params;
+            let mut k: usize = 0;
+            while p != (0).as(*mut AstNode) {
+                if k < args.n {
+                    if str_eq(p.tok.slice, word) {
+                        strbuf_push_str(&mut sb, args.items[k]);
+                        replaced = true;
+                        break;
+                    }
+                }
+                p = p.next;
+                k = k + 1;
+            }
+            if !replaced { strbuf_push_str(&mut sb, t[i..j]); } // (a slice of a parameter: the validator sees it outlives sb)
+            i = j;
+        } else {
+            strbuf_push(&mut sb, t[i]);
+            i = i + 1;
+        }
+    }
+    return gx_done(sb);
+}
+
+fn gx_clone(g: *mut Generics, n: *mut AstNode) -> *mut AstNode {
+    if n == (0).as(*mut AstNode) { return n; }
+    let c: *mut AstNode = ast_alloc_node(g.arena, n.tag, n.tok);
+    c.type_name = n.type_name;
+    c.left = gx_clone(g, n.left);
+    c.right = gx_clone(g, n.right);
+    c.next = gx_clone(g, n.next);
+    return c;
+}
+
+// Fills in the parameters through a cloned subtree: every type text, and every use of a
+// `const` parameter as a value (it becomes an integer literal).
+fn gx_fill(g: *mut Generics, n: *mut AstNode, params: *mut AstNode, args: GArgs) {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        if cur.type_name.len > 0 {
+            if cur.tag != NODE_ADDRESS_OF { cur.type_name = gx_subst(g, cur.type_name, params, args); }
+        }
+        if cur.tag == NODE_IDENT {
+            let mut p: *mut AstNode = params;
+            let mut k: usize = 0;
+            while p != (0).as(*mut AstNode) {
+                if k < args.n {
+                    if p.type_name.len > 0 {
+                        if str_eq(p.tok.slice, cur.tok.slice) {
+                            cur.tag = NODE_INT;
+                            cur.tok.slice = args.items[k];
+                            cur.type_name = "";
+                        }
+                    }
+                }
+                p = p.next;
+                k = k + 1;
+            }
+        }
+        gx_fill(g, cur.left, params, args);
+        gx_fill(g, cur.right, params, args);
+        cur = cur.next;
+    }
+}
+
+fn gx_append(g: *mut Generics, d: *mut AstNode) {
+    d.next = (0).as(*mut AstNode);
+    if g.last == (0).as(*mut AstNode) {
+        g.root.left = d;
+    } else {
+        g.last.next = d;
+    }
+    g.last = d;
+}
+
+// The instantiation of template `t` with `args`, created on first use. Returns its name, or
+// "" after reporting an error.
+fn gx_instantiate(g: *mut Generics, t: *mut AstNode, args: GArgs, site: Token) -> string {
+    let want: usize = gx_count(t.left);
+    if args.n != want {
+        print_src_loc(g.m, site);
+        print_str_raw("error: '");
+        print_str_raw(t.tok.slice);
+        print_str_raw("' takes ");
+        print_u32_raw(want.as(u32));
+        print_str_raw(" type argument(s), not ");
+        print_u32_raw(args.n.as(u32));
+        print_str_raw("\n");
+        g.ok = false;
+        return "";
+    }
+    let name: string = gx_mangled(g, t.tok.slice, args);
+    let mut i: usize = 0;
+    while i < g.inst_count {
+        if str_eq(g.inst_name[i], name) { return name; }
+        i = i + 1;
+    }
+    if g.inst_count >= 1024 {
+        gx_err(g, site, "too many generic instantiations (1024); is a generic instantiating itself with ever larger types? ", t.tok.slice);
+        return "";
+    }
+    // A const parameter takes an integer, a type parameter a type.
+    let mut p: *mut AstNode = t.left;
+    let mut k: usize = 0;
+    while p != (0).as(*mut AstNode) {
+        let a: string = args.items[k];
+        let mut numeric: bool = a.len > 0;
+        let mut q: usize = 0;
+        while q < a.len {
+            if !is_digit(a[q]) { numeric = false; }
+            q = q + 1;
+        }
+        if p.type_name.len > 0 {
+            if !numeric {
+                gx_err(g, site, "const parameter needs an integer argument: ", p.tok.slice);
+                return "";
+            }
+        } else if numeric {
+            gx_err(g, site, "type parameter needs a type, not a number: ", p.tok.slice);
+            return "";
+        }
+        p = p.next;
+        k = k + 1;
+    }
+    g.inst_name[g.inst_count] = name;
+    g.inst_tmpl[g.inst_count] = t.tok.slice;
+    g.inst_args[g.inst_count] = gx_join(g, args);
+    g.inst_site[g.inst_count] = site;
+    g.inst_count = g.inst_count + 1;
+    let copy: *mut AstNode = gx_clone(g, t.right);
+    copy.next = (0).as(*mut AstNode);
+    copy.tok.slice = name;
+    let struct_kind: string = copy.type_name; // struct: "packed" or ""
+    gx_fill(g, copy, t.left, args);
+    if copy.tag == NODE_STRUCT_DECL { copy.type_name = struct_kind; }
+    gx_append(g, copy);
+    return name;
+}
+
+// Type text with every generic struct use (Pair<i32,u8>, nested ones too) replaced by the
+// name of its instantiation.
+fn gx_resolve(g: *mut Generics, t: string, site: Token) -> string {
+    let mut has_lt: bool = false;
+    let mut i: usize = 0;
+    while i < t.len {
+        if t[i] == 60 { has_lt = true; }
+        i = i + 1;
+    }
+    if !has_lt { return t; }
+    let ct: string = gx_canon(g, t);
+    let mut sb: StrBuf = strbuf_init(g.arena, ct.len + 16);
+    i = 0;
+    while i < ct.len {
+        if gx_is_ident_char(ct[i]) {
+            let mut j: usize = i;
+            while j < ct.len {
+                if !gx_is_ident_char(ct[j]) { break; }
+                j = j + 1;
+            }
+            let word: string = ct[i..j];
+            let mut done: bool = false;
+            if j < ct.len {
+                if ct[j] == 60 { // word<...>
+                    let mut depth: i32 = 0;
+                    let mut k: usize = j;
+                    while k < ct.len {
+                        if ct[k] == 60 { depth = depth + 1; }
+                        if ct[k] == 62 {
+                            depth = depth - 1;
+                            if depth == 0 { break; }
+                        }
+                        k = k + 1;
+                    }
+                    let inner: string = gx_resolve(g, ct[j + 1..k], site);
+                    let tmpl: *mut AstNode = gx_template(g, word);
+                    if tmpl == (0).as(*mut AstNode) {
+                        gx_err(g, site, "not a generic struct: ", word);
+                    } else if tmpl.right.tag != NODE_STRUCT_DECL {
+                        gx_err(g, site, "a generic function is not a type: ", word);
+                    } else {
+                        strbuf_push_str(&mut sb, gx_instantiate(g, tmpl, gx_split(g, inner), site));
+                    }
+                    i = k + 1;
+                    done = true;
+                }
+            }
+            if !done {
+                strbuf_push_str(&mut sb, ct[i..j]);
+                i = j;
+            }
+        } else {
+            strbuf_push(&mut sb, ct[i]);
+            i = i + 1;
+        }
+    }
+    return gx_done(sb);
+}
+
+struct GBind {
+    n: usize,
+    b_name: [8]string,
+    b_val: [8]string,
+    conflict: string, // parameter bound to two different types
+}
+
+fn gx_param_index(params: *mut AstNode, word: string) -> i32 {
+    let mut p: *mut AstNode = params;
+    let mut k: i32 = 0;
+    while p != (0).as(*mut AstNode) {
+        if str_eq(p.tok.slice, word) { return k; }
+        p = p.next;
+        k = k + 1;
+    }
+    return -1;
+}
+
+fn gx_bind(b: *mut GBind, name: string, val: string) -> bool {
+    let mut i: usize = 0;
+    while i < b.n {
+        if str_eq(b.b_name[i], name) {
+            if str_eq(b.b_val[i], val) { return true; }
+            b.conflict = name;
+            return false;
+        }
+        i = i + 1;
+    }
+    if b.n < 8 {
+        b.b_name[b.n] = name;
+        b.b_val[b.n] = val;
+        b.n = b.n + 1;
+    }
+    return true;
+}
+
+// Matches a parameter type of a template (pattern, e.g. "*mut T" or "[N]T") against the
+// type of an argument, binding the template parameters it mentions.
+fn gx_unify(g: *mut Generics, params: *mut AstNode, pat: string, con: string, b: *mut GBind) -> bool {
+    if gx_param_index(params, pat) >= 0 { return gx_bind(b, pat, con); }
+    let mut prefixes: [4]string = ["*mut ", "&mut ", "*", "&"];
+    let mut k: usize = 0;
+    while k < 4 {
+        if starts_with(pat, prefixes[k]) {
+            if !starts_with(con, prefixes[k]) { return false; }
+            return gx_unify(g, params, pat[prefixes[k].len..pat.len], con[prefixes[k].len..con.len], b);
+        }
+        k = k + 1;
+    }
+    if starts_with(pat, "[") {
+        if !starts_with(con, "[") { return false; }
+        let pe: i64 = find(pat, "]");
+        let ce: i64 = find(con, "]");
+        if pe < 0 { return false; }
+        if ce < 0 { return false; }
+        let plen: string = pat[1..pe.as(usize)];
+        let clen: string = con[1..ce.as(usize)];
+        if gx_param_index(params, plen) >= 0 {
+            if !gx_bind(b, plen, clen) { return false; }
+        } else if !str_eq(plen, clen) {
+            return false;
+        }
+        return gx_unify(g, params, pat[pe.as(usize) + 1..pat.len], con[ce.as(usize) + 1..con.len], b);
+    }
+    let lt: i64 = find(pat, "<");
+    if lt > 0 { // Pair<T,U> against an instantiation name: compare template and arguments
+        let mut i: usize = 0;
+        while i < g.inst_count {
+            if str_eq(g.inst_name[i], con) {
+                if !str_eq(g.inst_tmpl[i], pat[0..lt.as(usize)]) { return false; }
+                let pa: GArgs = gx_split(g, pat[lt.as(usize) + 1..pat.len - 1]);
+                let ca: GArgs = gx_split(g, g.inst_args[i]);
+                if pa.n != ca.n { return false; }
+                let mut j: usize = 0;
+                while j < pa.n {
+                    if !gx_unify(g, params, pa.items[j], ca.items[j], b) { return false; }
+                    j = j + 1;
+                }
+                return true;
+            }
+            i = i + 1;
+        }
+        return false;
+    }
+    return str_eq(pat, con);
+}
+
+// Type of a call argument, including `&x` / `&mut x` (which the validator leaves untyped).
+fn gx_arg_type(g: *mut Generics, v: *mut Validator, arg: *mut AstNode) -> string {
+    if arg.tag == NODE_ADDRESS_OF {
+        let inner: string = validator_expr_type(v, arg.left);
+        if inner.len == 0 { return ""; }
+        if str_eq(arg.type_name, "mut") { return str_concat(g.arena, "*mut ", inner); }
+        return str_concat(g.arena, "*", inner);
+    }
+    return validator_expr_type(v, arg);
+}
+
+// Type arguments of a call to template `t` without explicit ones, from its argument types.
+// An untyped integer literal only decides a parameter nothing else decides (then i64).
+fn gx_infer(g: *mut Generics, v: *mut Validator, t: *mut AstNode, call: *mut AstNode) -> GArgs {
+    let fail: GArgs = GArgs { n: 0, items: [""] };
+    let mut b: GBind = GBind { n: 0, b_name: [""], b_val: [""], conflict: "" };
+    let mut defaults: GBind = GBind { n: 0, b_name: [""], b_val: [""], conflict: "" };
+    let mut prm: *mut AstNode = t.right.left;
+    let mut arg: *mut AstNode = call.left;
+    // Declared out here because they are stored into b: arena text, but the validator only
+    // sees variables of the loop body flowing into an outer struct.
+    let mut pat: string = "";
+    let mut con: string = "";
+    while prm != (0).as(*mut AstNode) {
+        if arg == (0).as(*mut AstNode) { break; }
+        pat = gx_canon(g, prm.type_name);
+        con = gx_canon(g, gx_arg_type(g, v, arg));
+        if con.len == 0 {
+            if is_int_literal(arg) {
+                if gx_param_index(t.left, pat) >= 0 { gx_bind(&mut defaults, pat, "i64"); }
+            }
+        } else if !gx_unify(g, t.left, pat, con, &mut b) {
+            print_src_loc(g.m, arg.tok);
+            print_str_raw("error: argument of type ");
+            print_str_raw(con);
+            print_str_raw(" does not fit parameter type ");
+            print_str_raw(pat);
+            print_str_raw(" of '");
+            print_str_raw(t.tok.slice);
+            if b.conflict.len > 0 {
+                print_str_raw("' (");
+                print_str_raw(b.conflict);
+                print_str_raw(" would have two types)");
+            } else {
+                print_str_raw("'");
+            }
+            print_str_raw("; write the type arguments: ");
+            print_str_raw(t.tok.slice);
+            print_str_raw("<...>(...)\n");
+            g.ok = false;
+            return fail;
+        }
+        prm = prm.next;
+        arg = arg.next;
+    }
+    let mut r: GArgs = GArgs { n: 0, items: [""] };
+    let mut p: *mut AstNode = t.left;
+    while p != (0).as(*mut AstNode) {
+        let mut found: string = "";
+        let mut i: usize = 0;
+        while i < b.n {
+            if str_eq(b.b_name[i], p.tok.slice) { found = b.b_val[i]; }
+            i = i + 1;
+        }
+        if found.len == 0 {
+            i = 0;
+            while i < defaults.n {
+                if str_eq(defaults.b_name[i], p.tok.slice) { found = defaults.b_val[i]; }
+                i = i + 1;
+            }
+        }
+        if found.len == 0 {
+            print_src_loc(g.m, call.tok);
+            print_str_raw("error: cannot infer ");
+            print_str_raw(p.tok.slice);
+            print_str_raw(" for '");
+            print_str_raw(t.tok.slice);
+            print_str_raw("'; write the type arguments: ");
+            print_str_raw(t.tok.slice);
+            print_str_raw("<...>(...)\n");
+            g.ok = false;
+            return fail;
+        }
+        if r.n < 8 {
+            r.items[r.n] = found;
+            r.n = r.n + 1;
+        }
+        p = p.next;
+    }
+    return r;
+}
+
+fn gx_add_var(v: *mut Validator, name: string, t: string) {
+    if v.vars_count >= 512 { return; }
+    v.vars[v.vars_count] = VarInfo {
+        name: name,
+        type_name: t,
+        scope_depth: 1,
+        is_stack_local: true,
+        points_to_stack_local: false,
+        borrowed_from_arena: "",
+        borrowed_from_var: "",
+        is_invalidated: false,
+        is_mut: true,
+    };
+    v.vars_count = v.vars_count + 1;
+}
+
+// Walks a function body in order: resolves generic types, rewrites calls and struct literals
+// that use templates, and records local variable types so later arguments can be typed.
+fn gx_walk(g: *mut Generics, v: *mut Validator, n: *mut AstNode) {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        gx_walk(g, v, cur.left);
+        gx_walk(g, v, cur.right);
+        if cur.type_name.len > 0 {
+            let mut is_type: bool = cur.tag != NODE_ADDRESS_OF;
+            if cur.tag == NODE_FLOAT { is_type = false; }
+            if is_type { cur.type_name = gx_resolve(g, cur.type_name, cur.tok); }
+        }
+        if cur.tag == NODE_CALL {
+            let t: *mut AstNode = gx_template(g, cur.tok.slice);
+            if t != (0).as(*mut AstNode) {
+                if t.right.tag != NODE_FN {
+                    gx_err(g, cur.tok, "a generic struct is not a function: ", cur.tok.slice);
+                } else {
+                    let mut args: GArgs = GArgs { n: 0, items: [""] };
+                    if cur.type_name.len > 0 {
+                        args = gx_split(g, cur.type_name);
+                    } else {
+                        args = gx_infer(g, v, t, cur);
+                    }
+                    if g.ok {
+                        let name: string = gx_instantiate(g, t, args, cur.tok);
+                        if name.len > 0 { cur.tok.slice = name; }
+                    }
+                }
+                cur.type_name = "";
+            } else if cur.type_name.len > 0 {
+                gx_err(g, cur.tok, "type arguments given to a function that is not generic: ", cur.tok.slice);
+                cur.type_name = "";
+            }
+        }
+        if cur.tag == NODE_STRUCT_INIT {
+            let t: *mut AstNode = gx_template(g, cur.tok.slice);
+            if t != (0).as(*mut AstNode) {
+                if cur.type_name.len == 0 {
+                    gx_err(g, cur.tok, "a generic struct needs its type arguments: ", cur.tok.slice);
+                } else if t.right.tag != NODE_STRUCT_DECL {
+                    gx_err(g, cur.tok, "a generic function is not a struct: ", cur.tok.slice);
+                } else {
+                    let name: string = gx_instantiate(g, t, gx_split(g, cur.type_name), cur.tok);
+                    if name.len > 0 { cur.tok.slice = name; }
+                }
+                cur.type_name = "";
+            }
+        }
+        if cur.tag == NODE_LET {
+            let mut var_t: string = cur.type_name; // (not `t`: the C backend keys local types by name per function)
+            if var_t.len == 0 { var_t = validator_expr_type(v, cur.left); }
+            gx_add_var(v, cur.tok.slice, var_t);
+        }
+        cur = cur.next;
+    }
+}
+
+// Runs before validation. Returns false after reporting errors.
+fn expand_generics(root: *mut AstNode, arena: *mut Arena, m: *SourceMap, g: *mut Generics) -> bool {
+    g.arena = arena;
+    g.m = m;
+    g.root = root;
+    g.ok = true;
+    // Take the templates out of the program.
+    let mut prev: *mut AstNode = (0).as(*mut AstNode);
+    let mut d: *mut AstNode = root.left;
+    while d != (0).as(*mut AstNode) {
+        let nxt: *mut AstNode = d.next;
+        if d.tag == NODE_GENERIC {
+            if gx_template(g, d.tok.slice) != (0).as(*mut AstNode) {
+                gx_err(g, d.tok, "generic defined twice: ", d.tok.slice);
+            } else if g.tmpl_count < 256 {
+                g.tmpl[g.tmpl_count] = d;
+                g.tmpl_count = g.tmpl_count + 1;
+            }
+            if prev == (0).as(*mut AstNode) { root.left = nxt; } else { prev.next = nxt; }
+        } else {
+            prev = d;
+        }
+        d = nxt;
+    }
+    g.last = prev;
+    let mut i: usize = 0;
+    while i < g.tmpl_count {
+        let t: *mut AstNode = g.tmpl[i];
+        if program_find_fn(root, t.tok.slice) != (0).as(*mut AstNode) {
+            gx_err(g, t.tok, "a generic and an ordinary function share the name ", t.tok.slice);
+        }
+        i = i + 1;
+    }
+    let mut v: Validator = Validator {
+        fx: (0).as(*mut FnEffects),
+        program: root,
+        ret_type: "",
+        vars: [VarInfo {
+            name: "",
+            type_name: "",
+            scope_depth: 0,
+            is_stack_local: false,
+            points_to_stack_local: false,
+            borrowed_from_arena: "",
+            borrowed_from_var: "",
+            is_invalidated: false,
+            is_mut: false,
+        }],
+        vars_count: 0,
+        deinit_arenas: [""],
+        deinit_count: 0,
+        scope_depth: 1,
+        has_error: false,
+        initializing_var: "",
+        srcmap: m,
+        fn_name: "",
+        gen: g,
+    };
+    // Every ordinary declaration, including instances appended while this loop runs.
+    d = root.left;
+    while d != (0).as(*mut AstNode) {
+        if d.tag == NODE_STRUCT_DECL {
+            let mut f: *mut AstNode = d.left;
+            while f != (0).as(*mut AstNode) {
+                f.type_name = gx_resolve(g, f.type_name, f.tok);
+                f = f.next;
+            }
+        } else if d.tag == NODE_LET {
+            d.type_name = gx_resolve(g, d.type_name, d.tok);
+            gx_walk(g, &mut v, d.left);
+        } else if d.tag == NODE_FN {
+            d.type_name = gx_resolve(g, d.type_name, d.tok);
+            v.vars_count = 0;
+            let mut prm: *mut AstNode = d.left;
+            while prm != (0).as(*mut AstNode) {
+                prm.type_name = gx_resolve(g, prm.type_name, prm.tok);
+                gx_add_var(&mut v, prm.tok.slice, prm.type_name);
+                prm = prm.next;
+            }
+            if d.right != (0).as(*mut AstNode) { gx_walk(g, &mut v, d.right.left); }
+        }
+        d = d.next;
+    }
+    return g.ok;
 }

@@ -770,7 +770,28 @@ fn main(argc: i32, argv: **u8) -> i32 {
     }
 
     // Active defense: compile-time escape & borrow safety validation
-    let valid: bool = validate_program(prog, &loader.map);
+    // Generic functions and structs become ordinary code before anything checks it.
+    let mut gen: Generics = Generics {
+        tmpl: [(0).as(*mut AstNode)],
+        tmpl_count: 0,
+        inst_name: [""],
+        inst_tmpl: [""],
+        inst_args: [""],
+        inst_site: [Token { tag: 0, slice: "", line: 0, col: 0 }],
+        inst_count: 0,
+        arena: &mut arena,
+        m: &loader.map,
+        root: prog,
+        last: (0).as(*mut AstNode),
+        ok: true,
+    };
+    if !expand_generics(prog, &mut arena, &loader.map, &mut gen) {
+        buf_deinit(&mut combined_buf);
+        arena_deinit(&mut arena);
+        return 1;
+    }
+
+    let valid: bool = validate_program(prog, &loader.map, &gen);
     if !valid {
         buf_deinit(&mut combined_buf);
         arena_deinit(&mut arena);

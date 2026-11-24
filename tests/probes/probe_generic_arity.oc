@@ -1,0 +1,9 @@
+// A generic called with the wrong number of type arguments.
+fn min<T>(a: T, b: T) -> T {
+    if a < b { return a; }
+    return b;
+}
+
+fn main() {
+    print(min<i32, u8>(1, 2));
+}

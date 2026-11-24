@@ -1,0 +1,14 @@
+// A pointer returned by a generic that allocates from an arena is tracked like any other
+// arena pointer: using it after arena_reset is rejected.
+import "std/mem.oc";
+
+fn alloc_one<T>(a: *mut Arena) -> *mut T {
+    return arena_alloc(a, 8).as(*mut T);
+}
+
+fn main() {
+    let mut a: Arena = arena_init(64);
+    let p: *mut i64 = alloc_one<i64>(&mut a);
+    arena_reset(&mut a);
+    print(*p);
+}

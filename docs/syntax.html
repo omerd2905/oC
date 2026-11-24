@@ -484,6 +484,52 @@ Slice: sub | Length: 14</code></pre>
       </section>
 
       <!-- Section 3b: Floating point -->
+      <section id="generics">
+        <h2>Generics</h2>
+        <p>
+          Functions and structs can take type parameters, and <code>const</code> parameters for array lengths. Each use with concrete types makes an ordinary copy of the function or struct with the types filled in (monomorphization, as in C++, Rust and Zig): no boxing, no runtime type information, and each copy is checked and compiled exactly like hand-written code, on both backends.
+        </p>
+        <pre><code>fn min&lt;T&gt;(a: T, b: T) -&gt; T {
+    if a &lt; b { return a; }
+    return b;
+}
+
+struct Pair&lt;A, B&gt; {
+    first: A,
+    second: B,
+}
+
+struct Ring&lt;T, const N: usize&gt; {
+    data: [N]T,
+    head: usize,
+}
+
+fn ring_sum&lt;T, const N: usize&gt;(r: *Ring&lt;T, N&gt;) -&gt; T {
+    let mut s: T = r.data[0];
+    let mut i: usize = 1;
+    while i &lt; N {               // N is a compile-time constant here
+        s = s + r.data[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn main() {
+    print(min&lt;i32&gt;(3, 4));      // 3: explicit type argument
+    print(min(2.5, 1.0));       // 1.000000: T inferred as f64
+    let p: Pair&lt;i32, u8&gt; = Pair&lt;i32, u8&gt; { first: 1, second: 2 };
+    print(p.second);            // 2
+    let r: Ring&lt;i32, 4&gt; = Ring&lt;i32, 4&gt; { data: [1, 2, 3, 4], head: 0 };
+    print(ring_sum(&amp;r));        // 10: T and N inferred from the argument
+}</code></pre>
+        <ul>
+          <li><strong>Type arguments</strong> are written after the name, <code>min&lt;i32&gt;(…)</code>, or inferred from the argument types. An untyped integer literal alone makes <code>T</code> an <code>i64</code>, a float literal an <code>f64</code>. A generic struct always takes its arguments: <code>Pair&lt;i32, u8&gt; { … }</code>.</li>
+          <li><strong>No constraints to declare:</strong> each instantiation is checked on its own, so a type without an operator the body uses is an error at that operator, naming the instantiation: <code>'&lt;' is not defined for Arena (in min&lt;Arena&gt;, instantiated at prog.oc:9:20)</code>.</li>
+          <li><strong>Everything else is unchanged:</strong> arithmetic in <code>T</code> code traps on overflow for the instantiated type, <code>==</code> on floats is still an error when <code>T</code> is <code>f64</code>, and a pointer a generic returns from an arena is tracked like any other.</li>
+          <li><strong>Not supported:</strong> traits or interfaces, specialization, and generic types at run time.</li>
+        </ul>
+      </section>
+
       <section id="floats">
         <h2>Floating Point: <code>f32</code> and <code>f64</code></h2>
         <p>

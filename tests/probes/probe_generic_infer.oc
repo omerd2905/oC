@@ -1,0 +1,8 @@
+// Nothing tells the compiler what T is: the type arguments must be written.
+fn zero<T>() -> T {
+    return 0;
+}
+
+fn main() {
+    print(zero());
+}
