@@ -1,0 +1,11 @@
+// T cannot be i32 and i64 at once.
+fn min<T>(a: T, b: T) -> T {
+    if a < b { return a; }
+    return b;
+}
+
+fn main() {
+    let a: i32 = 1;
+    let b: i64 = 2;
+    print(min(a, b));
+}

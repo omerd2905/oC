@@ -1,0 +1,15 @@
+// A type argument without the operator the generic body uses: the error names the
+// operator, the type, the instantiation and where it was made.
+import "std/mem.oc";
+
+fn min<T>(a: T, b: T) -> T {
+    if a < b { return a; }
+    return b;
+}
+
+fn main() {
+    let a: Arena = arena_init(64);
+    let b: Arena = arena_init(64);
+    let c: Arena = min(a, b);
+    print(c.offset);
+}

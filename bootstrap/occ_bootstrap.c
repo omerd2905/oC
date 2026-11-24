@@ -269,6 +269,7 @@ static const uint32_t NODE_ARRAY_INIT = 24;
 static const uint32_t NODE_STRUCT_DECL = 25;
 static const uint32_t NODE_UNARY = 26;
 static const uint32_t NODE_FLOAT = 29;
+static const uint32_t NODE_GENERIC = 30;
 static const uint32_t NODE_BREAK = 27;
 static const uint32_t NODE_CONTINUE = 28;
 static const size_t NG_IMP_EXIT_PROCESS = 0;
@@ -291,6 +292,9 @@ typedef struct Parser Parser;
 typedef struct VarInfo VarInfo;
 typedef struct FnEffects FnEffects;
 typedef struct Validator Validator;
+typedef struct Generics Generics;
+typedef struct GArgs GArgs;
+typedef struct GBind GBind;
 typedef struct CodeBuffer CodeBuffer;
 typedef struct LitByte LitByte;
 typedef struct NativeGen NativeGen;
@@ -404,6 +408,35 @@ struct Validator {
     bool has_error;
     oc_string initializing_var;
     SourceMap* srcmap;
+    oc_string fn_name;
+    Generics* gen;
+};
+
+struct Generics {
+    AstNode* tmpl[256];
+    size_t tmpl_count;
+    oc_string inst_name[1024];
+    oc_string inst_tmpl[1024];
+    oc_string inst_args[1024];
+    Token inst_site[1024];
+    size_t inst_count;
+    Arena* arena;
+    SourceMap* m;
+    AstNode* root;
+    AstNode* last;
+    bool ok;
+};
+
+struct GArgs {
+    size_t n;
+    oc_string items[8];
+};
+
+struct GBind {
+    size_t n;
+    oc_string b_name[8];
+    oc_string b_val[8];
+    oc_string conflict;
 };
 
 struct CodeBuffer {
@@ -572,6 +605,8 @@ Token parser_expect(Parser* p, uint32_t expected_tag);
 uint32_t get_precedence(uint32_t tag);
 oc_string parse_type(Parser* p);
 AstNode* parse_expr(Parser* p, uint32_t min_prec);
+AstNode* parse_generic_params(Parser* p);
+oc_string parser_try_type_args(Parser* p);
 AstNode* parse_primary(Parser* p);
 AstNode* parse_postfix(Parser* p);
 AstNode* parse_unary(Parser* p);
@@ -630,6 +665,9 @@ bool is_untyped_float(AstNode* expr);
 void bind_float_literals(AstNode* expr, oc_string t);
 void bind_to_target(oc_string target, AstNode* value);
 bool is_scalar_load(Validator* v, AstNode* expr);
+bool validator_is_struct_type(Validator* v, oc_string t);
+void validator_print_instance(Validator* v);
+bool validator_check_operands(Validator* v, AstNode* expr);
 bool validator_is_float(Validator* v, AstNode* expr);
 bool validator_check_no_float_to_int(Validator* v, oc_string target, AstNode* value, oc_string place);
 bool int_converts_exactly(oc_string int_t, oc_string float_t);
@@ -644,9 +682,33 @@ void validator_save_invalidated(Validator* v, bool* out);
 void validator_restore_invalidated(Validator* v, bool* saved);
 bool block_always_returns(AstNode* block);
 bool validate_stmt(Validator* v, AstNode* stmt);
-bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m);
-bool validate_program(AstNode* root, SourceMap* m);
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m, Generics* g);
+bool validate_program(AstNode* root, SourceMap* m, Generics* g);
 AstNode* parse_program(Parser* p);
+oc_string gx_done(StrBuf sb);
+void gx_err(Generics* g, Token tok, oc_string msg, oc_string name);
+bool gx_is_ident_char(uint8_t c);
+oc_string gx_canon(Generics* g, oc_string t);
+GArgs gx_split(Generics* g, oc_string text);
+void gx_mangle_into(StrBuf* sb, oc_string t);
+oc_string gx_mangled(Generics* g, oc_string name, GArgs args);
+oc_string gx_join(Generics* g, GArgs args);
+AstNode* gx_template(Generics* g, oc_string name);
+size_t gx_count(AstNode* list);
+oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args);
+AstNode* gx_clone(Generics* g, AstNode* n);
+void gx_fill(Generics* g, AstNode* n, AstNode* params, GArgs args);
+void gx_append(Generics* g, AstNode* d);
+oc_string gx_instantiate(Generics* g, AstNode* t, GArgs args, Token site);
+oc_string gx_resolve(Generics* g, oc_string t, Token site);
+int32_t gx_param_index(AstNode* params, oc_string word);
+bool gx_bind(GBind* b, oc_string name, oc_string val);
+bool gx_unify(Generics* g, AstNode* params, oc_string pat, oc_string con, GBind* b);
+oc_string gx_arg_type(Generics* g, Validator* v, AstNode* arg);
+GArgs gx_infer(Generics* g, Validator* v, AstNode* t, AstNode* call);
+void gx_add_var(Validator* v, oc_string name, oc_string t);
+void gx_walk(Generics* g, Validator* v, AstNode* n);
+bool expand_generics(AstNode* root, Arena* arena, SourceMap* m, Generics* g);
 CodeBuffer buf_init(size_t capacity);
 void buf_append_u8(CodeBuffer* buf, uint8_t byte);
 void buf_append(CodeBuffer* buf, oc_string text);
@@ -2295,8 +2357,161 @@ oc_string parse_type(Parser* p) {
     end_ptr = (((((((p)->current)).slice)).ptr) + ((((((p)->current)).slice)).len));
     parser_advance(p);
     }
+    if ((((((p)->current)).tag) == TOK_LT)) {
+    int32_t depth = 0;
+    bool scanning = true;
+    while (scanning) {
+    uint32_t t = ((((p)->current)).tag);
+    if ((t == TOK_LT)) {
+    depth = __OC_ADD(depth, 1);
+    }
+    if ((t == TOK_GT)) {
+    depth = __OC_SUB(depth, 1);
+    }
+    if ((t == TOK_SHR)) {
+    depth = __OC_SUB(depth, 2);
+    }
+    if ((t == TOK_EOF)) {
+    scanning = false;
+    }
+    if (scanning) {
+    end_ptr = (((((((p)->current)).slice)).ptr) + ((((((p)->current)).slice)).len));
+    parser_advance(p);
+    if ((depth <= 0)) {
+    scanning = false;
+    }
+    }
+    }
+    }
     size_t len = __OC_SUB(((size_t)(end_ptr)), ((size_t)(start_ptr)));
     return (oc_string){ .ptr = start_ptr, .len = len };
+}
+
+AstNode* parse_generic_params(Parser* p) {
+    parser_expect(p, TOK_LT);
+    AstNode* first = ((AstNode*)(0));
+    AstNode* last = ((AstNode*)(0));
+    while ((((((p)->current)).tag) != TOK_GT)) {
+    if ((((((p)->current)).tag) == TOK_EOF)) {
+    break;
+    }
+    bool is_const = false;
+    if ((((((p)->current)).tag) == TOK_IDENT)) {
+    if (str_eq(((((p)->current)).slice), (oc_string){ .ptr = (const uint8_t*)("const"), .len = sizeof("const") - 1 })) {
+    is_const = true;
+    parser_advance(p);
+    }
+    }
+    Token name = parser_expect(p, TOK_IDENT);
+    AstNode* node = ast_alloc_node(((p)->arena), NODE_PARAM, name);
+    if (is_const) {
+    parser_expect(p, TOK_COLON);
+    ((node)->type_name) = parse_type(p);
+    }
+    if ((first == ((AstNode*)(0)))) {
+    first = node;
+    }
+    else {
+    ((last)->next) = node;
+    }
+    last = node;
+    if ((((((p)->current)).tag) == TOK_COMMA)) {
+    parser_advance(p);
+    }
+    else {
+    break;
+    }
+    }
+    parser_expect(p, TOK_GT);
+    return first;
+}
+
+oc_string parser_try_type_args(Parser* p) {
+    Lexer saved_lex = ((p)->lex);
+    Token saved_cur = ((p)->current);
+    uint8_t* start = (((((((p)->current)).slice)).ptr) + 1);
+    uint8_t* end = start;
+    int32_t depth = 0;
+    bool ok = true;
+    bool scanning = true;
+    while (scanning) {
+    uint32_t t = ((((p)->current)).tag);
+    bool allowed = false;
+    if ((t == TOK_LT)) {
+    depth = __OC_ADD(depth, 1);
+    allowed = true;
+    }
+    if ((t == TOK_GT)) {
+    depth = __OC_SUB(depth, 1);
+    allowed = true;
+    if ((depth == 0)) {
+    end = ((((((p)->current)).slice)).ptr);
+    }
+    }
+    if ((t == TOK_SHR)) {
+    depth = __OC_SUB(depth, 2);
+    allowed = true;
+    if ((depth == 0)) {
+    end = (((((((p)->current)).slice)).ptr) + 1);
+    }
+    }
+    if ((t == TOK_IDENT)) {
+    allowed = true;
+    }
+    if ((t == TOK_INT)) {
+    allowed = true;
+    }
+    if ((t == TOK_STAR)) {
+    allowed = true;
+    }
+    if ((t == TOK_AMP)) {
+    allowed = true;
+    }
+    if ((t == TOK_MUT)) {
+    allowed = true;
+    }
+    if ((t == TOK_LBRACKET)) {
+    allowed = true;
+    }
+    if ((t == TOK_RBRACKET)) {
+    allowed = true;
+    }
+    if ((t == TOK_COMMA)) {
+    allowed = true;
+    }
+    if ((!allowed)) {
+    ok = false;
+    }
+    if ((depth < 0)) {
+    ok = false;
+    }
+    if ((!ok)) {
+    scanning = false;
+    }
+    if (scanning) {
+    ((p)->current) = lexer_next((&(((p)->lex))));
+    if ((depth == 0)) {
+    scanning = false;
+    }
+    }
+    }
+    if (ok) {
+    ok = (((((p)->current)).tag) == TOK_LPAREN);
+    if ((((((p)->current)).tag) == TOK_LBRACE)) {
+    ok = ((p)->allow_struct_init);
+    }
+    }
+    if (ok) {
+    if ((((size_t)(end)) <= ((size_t)(start)))) {
+    ok = false;
+    }
+    }
+    if ((!ok)) {
+    ((p)->lex) = saved_lex;
+    ((p)->current) = saved_cur;
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    return (oc_string){ .ptr = start, .len = __OC_SUB(((size_t)(end)), ((size_t)(start))) };
 }
 
 AstNode* parse_primary(Parser* p) {
@@ -2352,10 +2567,15 @@ AstNode* parse_primary(Parser* p) {
     }
     if ((((tok).tag) == TOK_IDENT)) {
     parser_advance(p);
+    oc_string type_args = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if ((((((p)->current)).tag) == TOK_LT)) {
+    type_args = parser_try_type_args(p);
+    }
     if (((p)->allow_struct_init)) {
     if ((((((p)->current)).tag) == TOK_LBRACE)) {
     parser_advance(p);
     AstNode* s_node = ast_alloc_node(((p)->arena), NODE_STRUCT_INIT, tok);
+    ((s_node)->type_name) = type_args;
     AstNode* first_f = ((AstNode*)(0));
     AstNode* last_f = ((AstNode*)(0));
     while ((((((p)->current)).tag) != TOK_RBRACE)) {
@@ -2390,7 +2610,9 @@ AstNode* parse_primary(Parser* p) {
     return s_node;
     }
     }
-    return ast_alloc_node(((p)->arena), NODE_IDENT, tok);
+    AstNode* id_node = ast_alloc_node(((p)->arena), NODE_IDENT, tok);
+    ((id_node)->type_name) = type_args;
+    return id_node;
     }
     if ((((tok).tag) == TOK_LPAREN)) {
     parser_advance(p);
@@ -2415,6 +2637,11 @@ AstNode* parse_postfix(Parser* p) {
     }
     parser_advance(p);
     AstNode* call_node = ast_alloc_node(((p)->arena), NODE_CALL, call_tok);
+    if ((expr != ((AstNode*)(0)))) {
+    if ((((expr)->tag) == NODE_IDENT)) {
+    ((call_node)->type_name) = ((expr)->type_name);
+    }
+    }
     AstNode* first_arg = ((AstNode*)(0));
     AstNode* last_arg = ((AstNode*)(0));
     while ((((((p)->current)).tag) != TOK_RPAREN)) {
@@ -2812,6 +3039,10 @@ AstNode* parse_stmt(Parser* p) {
 
 AstNode* parse_struct_decl(Parser* p, bool is_packed) {
     Token name_tok = parser_expect(p, TOK_IDENT);
+    AstNode* gparams = ((AstNode*)(0));
+    if ((((((p)->current)).tag) == TOK_LT)) {
+    gparams = parse_generic_params(p);
+    }
     parser_expect(p, TOK_LBRACE);
     AstNode* node = ast_alloc_node(((p)->arena), NODE_STRUCT_DECL, name_tok);
     if (is_packed) {
@@ -2842,6 +3073,12 @@ AstNode* parse_struct_decl(Parser* p, bool is_packed) {
     }
     parser_expect(p, TOK_RBRACE);
     ((node)->left) = first_f;
+    if ((gparams != ((AstNode*)(0)))) {
+    AstNode* g = ast_alloc_node(((p)->arena), NODE_GENERIC, name_tok);
+    ((g)->left) = gparams;
+    ((g)->right) = node;
+    return g;
+    }
     return node;
 }
 
@@ -2849,6 +3086,10 @@ AstNode* parse_fn_decl(Parser* p) {
     Token fn_tok = parser_expect(p, TOK_FN);
     Token name_tok = parser_expect(p, TOK_IDENT);
     AstNode* fn_node = ast_alloc_node(((p)->arena), NODE_FN, name_tok);
+    AstNode* gparams = ((AstNode*)(0));
+    if ((((((p)->current)).tag) == TOK_LT)) {
+    gparams = parse_generic_params(p);
+    }
     parser_expect(p, TOK_LPAREN);
     AstNode* first_param = ((AstNode*)(0));
     AstNode* last_param = ((AstNode*)(0));
@@ -2891,6 +3132,12 @@ AstNode* parse_fn_decl(Parser* p) {
     AstNode* body = parse_block(p);
     ((fn_node)->left) = first_param;
     ((fn_node)->right) = body;
+    if ((gparams != ((AstNode*)(0)))) {
+    AstNode* g = ast_alloc_node(((p)->arena), NODE_GENERIC, name_tok);
+    ((g)->left) = gparams;
+    ((g)->right) = fn_node;
+    return g;
+    }
     return fn_node;
 }
 
@@ -3897,6 +4144,75 @@ bool is_scalar_load(Validator* v, AstNode* expr) {
     return is_scalar_value_type(validator_expr_type(v, expr));
 }
 
+bool validator_is_struct_type(Validator* v, oc_string t) {
+    if ((((t).len) == 0)) {
+    return false;
+    }
+    AstNode* decl = ((((v)->program))->left);
+    while ((decl != ((AstNode*)(0)))) {
+    if ((((decl)->tag) == NODE_STRUCT_DECL)) {
+    if (str_eq(((((decl)->tok)).slice), t)) {
+    return true;
+    }
+    }
+    decl = ((decl)->next);
+    }
+    return false;
+}
+
+void validator_print_instance(Validator* v) {
+    if ((((v)->gen) == ((Generics*)(0)))) {
+    return;
+    }
+    size_t i = 0;
+    while ((i < ((((v)->gen))->inst_count))) {
+    if (str_eq(__OC_AT((((((v)->gen))->inst_name)), (i)), ((v)->fn_name))) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" (in "), .len = sizeof(" (in ") - 1 });
+    print_str_raw(__OC_AT((((((v)->gen))->inst_tmpl)), (i)));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("<"), .len = sizeof("<") - 1 });
+    print_str_raw(__OC_AT((((((v)->gen))->inst_args)), (i)));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(">, instantiated at "), .len = sizeof(">, instantiated at ") - 1 });
+    print_src_pos(((v)->srcmap), __OC_AT((((((v)->gen))->inst_site)), (i)));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
+    return;
+    }
+    i = __OC_ADD(i, 1);
+    }
+}
+
+bool validator_check_operands(Validator* v, AstNode* expr) {
+    oc_string lt = validator_expr_type(v, ((expr)->left));
+    oc_string rt = validator_expr_type(v, ((expr)->right));
+    oc_string bad = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if (str_eq(rt, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    bad = rt;
+    }
+    if (validator_is_struct_type(v, rt)) {
+    bad = rt;
+    }
+    if (str_eq(lt, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    bad = lt;
+    }
+    if (validator_is_struct_type(v, lt)) {
+    bad = lt;
+    }
+    if ((((bad).len) == 0)) {
+    return true;
+    }
+    print_src_loc(((v)->srcmap), ((expr)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: '"), .len = sizeof("error: '") - 1 });
+    print_str_raw(((((expr)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' is not defined for "), .len = sizeof("' is not defined for ") - 1 });
+    print_str_raw(bad);
+    if (str_eq(bad, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" (compare strings with str_eq from std/str.oc)"), .len = sizeof(" (compare strings with str_eq from std/str.oc)") - 1 });
+    }
+    validator_print_instance(v);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ((v)->has_error) = true;
+    return false;
+}
+
 bool validator_is_float(Validator* v, AstNode* expr) {
     return is_float_type_name(validator_expr_type(v, expr));
 }
@@ -4434,6 +4750,9 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     return check_expr_use(v, ((expr)->right));
     }
     if ((((expr)->tag) == NODE_BINARY)) {
+    if ((!validator_check_operands(v, expr))) {
+    return false;
+    }
     bool float_operand = validator_is_float(v, ((expr)->left));
     if (validator_is_float(v, ((expr)->right))) {
     float_operand = true;
@@ -4974,11 +5293,11 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return check_expr_use(v, stmt);
 }
 
-bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m) {
+bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m, Generics* g) {
     if ((((f)->right) == ((AstNode*)(0)))) {
     return true;
     }
-    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m };
+    Validator v = (Validator){ .fx = fx, .program = program, .ret_type = ((f)->type_name), .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = ((((f)->tok)).slice), .gen = g };
     AstNode* p = ((f)->left);
     while ((p != ((AstNode*)(0)))) {
     if ((((v).vars_count) >= 512)) {
@@ -5024,7 +5343,7 @@ bool validate_function(AstNode* f, FnEffects* fx, AstNode* program, SourceMap* m
     return true;
 }
 
-bool validate_program(AstNode* root, SourceMap* m) {
+bool validate_program(AstNode* root, SourceMap* m, Generics* g) {
     if ((!check_unique_names(root, m))) {
     return false;
     }
@@ -5080,7 +5399,7 @@ bool validate_program(AstNode* root, SourceMap* m) {
     decl = ((root)->left);
     while ((decl != ((AstNode*)(0)))) {
     if ((((decl)->tag) == NODE_FN)) {
-    if ((!validate_function(decl, (&(fx)), root, m))) {
+    if ((!validate_function(decl, (&(fx)), root, m, g))) {
     return false;
     }
     }
@@ -5163,6 +5482,806 @@ AstNode* parse_program(Parser* p) {
     }
     ((prog_node)->left) = first_decl;
     return prog_node;
+}
+
+oc_string gx_done(StrBuf sb) {
+    return (oc_string){ .ptr = ((uint8_t*)(((sb).buf))), .len = ((sb).len) };
+}
+
+void gx_err(Generics* g, Token tok, oc_string msg, oc_string name) {
+    print_src_loc(((g)->m), tok);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: "), .len = sizeof("error: ") - 1 });
+    print_str_raw(msg);
+    print_str_raw(name);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ((g)->ok) = false;
+}
+
+bool gx_is_ident_char(uint8_t c) {
+    if (is_alpha(c)) {
+    return true;
+    }
+    if (is_digit(c)) {
+    return true;
+    }
+    return (c == 95);
+}
+
+oc_string gx_canon(Generics* g, oc_string t) {
+    StrBuf sb = strbuf_init(((g)->arena), __OC_ADD(((t).len), 1));
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    uint8_t c = __oc_index_str(t, i);
+    if (is_space(c)) {
+    bool keep = (((sb).len) > 0);
+    if (keep) {
+    uint8_t prev = __OC_AT((((sb).buf)), (__OC_SUB(((sb).len), 1)));
+    if ((!gx_is_ident_char(prev))) {
+    keep = false;
+    }
+    }
+    size_t j = i;
+    while ((j < ((t).len))) {
+    if ((!is_space(__oc_index_str(t, j)))) {
+    break;
+    }
+    j = __OC_ADD(j, 1);
+    }
+    if ((j >= ((t).len))) {
+    keep = false;
+    }
+    else {
+    if ((!gx_is_ident_char(__oc_index_str(t, j)))) {
+    keep = false;
+    }
+    }
+    if (keep) {
+    strbuf_push((&(sb)), 32);
+    }
+    i = j;
+    }
+    else {
+    strbuf_push((&(sb)), c);
+    i = __OC_ADD(i, 1);
+    }
+    }
+    return gx_done(sb);
+}
+
+GArgs gx_split(Generics* g, oc_string text) {
+    GArgs r = (GArgs){ .n = 0, .items = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } };
+    int32_t depth = 0;
+    size_t start = 0;
+    size_t i = 0;
+    while ((i <= ((text).len))) {
+    bool cut = (i == ((text).len));
+    if ((!cut)) {
+    uint8_t c = __oc_index_str(text, i);
+    if ((c == 60)) {
+    depth = __OC_ADD(depth, 1);
+    }
+    if ((c == 91)) {
+    depth = __OC_ADD(depth, 1);
+    }
+    if ((c == 62)) {
+    depth = __OC_SUB(depth, 1);
+    }
+    if ((c == 93)) {
+    depth = __OC_SUB(depth, 1);
+    }
+    if ((c == 44)) {
+    if ((depth == 0)) {
+    cut = true;
+    }
+    }
+    }
+    if (cut) {
+    if ((((r).n) < 8)) {
+    __OC_AT((((r).items)), (((r).n))) = gx_canon(g, trim(__oc_slice_str(text, start, i)));
+    ((r).n) = __OC_ADD(((r).n), 1);
+    }
+    start = __OC_ADD(i, 1);
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return r;
+}
+
+void gx_mangle_into(StrBuf* sb, oc_string t) {
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    uint8_t c = __oc_index_str(t, i);
+    if (gx_is_ident_char(c)) {
+    strbuf_push(sb, c);
+    }
+    else {
+    if ((c == 42)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("P"), .len = sizeof("P") - 1 });
+    }
+    else {
+    if ((c == 38)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("R"), .len = sizeof("R") - 1 });
+    }
+    else {
+    if ((c == 91)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("A"), .len = sizeof("A") - 1 });
+    }
+    else {
+    if ((c == 93)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("_"), .len = sizeof("_") - 1 });
+    }
+    else {
+    if ((c == 60)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("_L_"), .len = sizeof("_L_") - 1 });
+    }
+    else {
+    if ((c == 62)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("_G_"), .len = sizeof("_G_") - 1 });
+    }
+    else {
+    if ((c == 44)) {
+    strbuf_push_str(sb, (oc_string){ .ptr = (const uint8_t*)("_C_"), .len = sizeof("_C_") - 1 });
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    }
+    i = __OC_ADD(i, 1);
+    }
+}
+
+oc_string gx_mangled(Generics* g, oc_string name, GArgs args) {
+    StrBuf sb = strbuf_init(((g)->arena), 32);
+    strbuf_push_str((&(sb)), name);
+    size_t i = 0;
+    while ((i < ((args).n))) {
+    strbuf_push_str((&(sb)), (oc_string){ .ptr = (const uint8_t*)("__"), .len = sizeof("__") - 1 });
+    gx_mangle_into((&(sb)), __OC_AT((((args).items)), (i)));
+    i = __OC_ADD(i, 1);
+    }
+    return gx_done(sb);
+}
+
+oc_string gx_join(Generics* g, GArgs args) {
+    StrBuf sb = strbuf_init(((g)->arena), 32);
+    size_t i = 0;
+    while ((i < ((args).n))) {
+    if ((i > 0)) {
+    strbuf_push_str((&(sb)), (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
+    }
+    strbuf_push_str((&(sb)), __OC_AT((((args).items)), (i)));
+    i = __OC_ADD(i, 1);
+    }
+    return gx_done(sb);
+}
+
+AstNode* gx_template(Generics* g, oc_string name) {
+    size_t i = 0;
+    while ((i < ((g)->tmpl_count))) {
+    AstNode* t = __OC_AT((((g)->tmpl)), (i));
+    if (str_eq(((((t)->tok)).slice), name)) {
+    return t;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return ((AstNode*)(0));
+}
+
+size_t gx_count(AstNode* list) {
+    size_t n = 0;
+    AstNode* p = list;
+    while ((p != ((AstNode*)(0)))) {
+    n = __OC_ADD(n, 1);
+    p = ((p)->next);
+    }
+    return n;
+}
+
+oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args) {
+    if ((((t).len) == 0)) {
+    return t;
+    }
+    StrBuf sb = strbuf_init(((g)->arena), __OC_ADD(((t).len), 16));
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    if (gx_is_ident_char(__oc_index_str(t, i))) {
+    size_t j = i;
+    while ((j < ((t).len))) {
+    if ((!gx_is_ident_char(__oc_index_str(t, j)))) {
+    break;
+    }
+    j = __OC_ADD(j, 1);
+    }
+    oc_string word = __oc_slice_str(t, i, j);
+    bool replaced = false;
+    AstNode* p = params;
+    size_t k = 0;
+    while ((p != ((AstNode*)(0)))) {
+    if ((k < ((args).n))) {
+    if (str_eq(((((p)->tok)).slice), word)) {
+    strbuf_push_str((&(sb)), __OC_AT((((args).items)), (k)));
+    replaced = true;
+    break;
+    }
+    }
+    p = ((p)->next);
+    k = __OC_ADD(k, 1);
+    }
+    if ((!replaced)) {
+    strbuf_push_str((&(sb)), __oc_slice_str(t, i, j));
+    }
+    i = j;
+    }
+    else {
+    strbuf_push((&(sb)), __oc_index_str(t, i));
+    i = __OC_ADD(i, 1);
+    }
+    }
+    return gx_done(sb);
+}
+
+AstNode* gx_clone(Generics* g, AstNode* n) {
+    if ((n == ((AstNode*)(0)))) {
+    return n;
+    }
+    AstNode* c = ast_alloc_node(((g)->arena), ((n)->tag), ((n)->tok));
+    ((c)->type_name) = ((n)->type_name);
+    ((c)->left) = gx_clone(g, ((n)->left));
+    ((c)->right) = gx_clone(g, ((n)->right));
+    ((c)->next) = gx_clone(g, ((n)->next));
+    return c;
+}
+
+void gx_fill(Generics* g, AstNode* n, AstNode* params, GArgs args) {
+    AstNode* cur = n;
+    while ((cur != ((AstNode*)(0)))) {
+    if ((((((cur)->type_name)).len) > 0)) {
+    if ((((cur)->tag) != NODE_ADDRESS_OF)) {
+    ((cur)->type_name) = gx_subst(g, ((cur)->type_name), params, args);
+    }
+    }
+    if ((((cur)->tag) == NODE_IDENT)) {
+    AstNode* p = params;
+    size_t k = 0;
+    while ((p != ((AstNode*)(0)))) {
+    if ((k < ((args).n))) {
+    if ((((((p)->type_name)).len) > 0)) {
+    if (str_eq(((((p)->tok)).slice), ((((cur)->tok)).slice))) {
+    ((cur)->tag) = NODE_INT;
+    ((((cur)->tok)).slice) = __OC_AT((((args).items)), (k));
+    ((cur)->type_name) = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    }
+    p = ((p)->next);
+    k = __OC_ADD(k, 1);
+    }
+    }
+    gx_fill(g, ((cur)->left), params, args);
+    gx_fill(g, ((cur)->right), params, args);
+    cur = ((cur)->next);
+    }
+}
+
+void gx_append(Generics* g, AstNode* d) {
+    ((d)->next) = ((AstNode*)(0));
+    if ((((g)->last) == ((AstNode*)(0)))) {
+    ((((g)->root))->left) = d;
+    }
+    else {
+    ((((g)->last))->next) = d;
+    }
+    ((g)->last) = d;
+}
+
+oc_string gx_instantiate(Generics* g, AstNode* t, GArgs args, Token site) {
+    size_t want = gx_count(((t)->left));
+    if ((((args).n) != want)) {
+    print_src_loc(((g)->m), site);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: '"), .len = sizeof("error: '") - 1 });
+    print_str_raw(((((t)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' takes "), .len = sizeof("' takes ") - 1 });
+    print_u32_raw(({ __auto_type _v = (want); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" type argument(s), not "), .len = sizeof(" type argument(s), not ") - 1 });
+    print_u32_raw(({ __auto_type _v = (((args).n)); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ((g)->ok) = false;
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    oc_string name = gx_mangled(g, ((((t)->tok)).slice), args);
+    size_t i = 0;
+    while ((i < ((g)->inst_count))) {
+    if (str_eq(__OC_AT((((g)->inst_name)), (i)), name)) {
+    return name;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    if ((((g)->inst_count) >= 1024)) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("too many generic instantiations (1024); is a generic instantiating itself with ever larger types\077 "), .len = sizeof("too many generic instantiations (1024); is a generic instantiating itself with ever larger types\077 ") - 1 }, ((((t)->tok)).slice));
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    AstNode* p = ((t)->left);
+    size_t k = 0;
+    while ((p != ((AstNode*)(0)))) {
+    oc_string a = __OC_AT((((args).items)), (k));
+    bool numeric = (((a).len) > 0);
+    size_t q = 0;
+    while ((q < ((a).len))) {
+    if ((!is_digit(__oc_index_str(a, q)))) {
+    numeric = false;
+    }
+    q = __OC_ADD(q, 1);
+    }
+    if ((((((p)->type_name)).len) > 0)) {
+    if ((!numeric)) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("const parameter needs an integer argument: "), .len = sizeof("const parameter needs an integer argument: ") - 1 }, ((((p)->tok)).slice));
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    else {
+    if (numeric) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("type parameter needs a type, not a number: "), .len = sizeof("type parameter needs a type, not a number: ") - 1 }, ((((p)->tok)).slice));
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    p = ((p)->next);
+    k = __OC_ADD(k, 1);
+    }
+    __OC_AT((((g)->inst_name)), (((g)->inst_count))) = name;
+    __OC_AT((((g)->inst_tmpl)), (((g)->inst_count))) = ((((t)->tok)).slice);
+    __OC_AT((((g)->inst_args)), (((g)->inst_count))) = gx_join(g, args);
+    __OC_AT((((g)->inst_site)), (((g)->inst_count))) = site;
+    ((g)->inst_count) = __OC_ADD(((g)->inst_count), 1);
+    AstNode* copy = gx_clone(g, ((t)->right));
+    ((copy)->next) = ((AstNode*)(0));
+    ((((copy)->tok)).slice) = name;
+    oc_string struct_kind = ((copy)->type_name);
+    gx_fill(g, copy, ((t)->left), args);
+    if ((((copy)->tag) == NODE_STRUCT_DECL)) {
+    ((copy)->type_name) = struct_kind;
+    }
+    gx_append(g, copy);
+    return name;
+}
+
+oc_string gx_resolve(Generics* g, oc_string t, Token site) {
+    bool has_lt = false;
+    size_t i = 0;
+    while ((i < ((t).len))) {
+    if ((__oc_index_str(t, i) == 60)) {
+    has_lt = true;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    if ((!has_lt)) {
+    return t;
+    }
+    oc_string ct = gx_canon(g, t);
+    StrBuf sb = strbuf_init(((g)->arena), __OC_ADD(((ct).len), 16));
+    i = 0;
+    while ((i < ((ct).len))) {
+    if (gx_is_ident_char(__oc_index_str(ct, i))) {
+    size_t j = i;
+    while ((j < ((ct).len))) {
+    if ((!gx_is_ident_char(__oc_index_str(ct, j)))) {
+    break;
+    }
+    j = __OC_ADD(j, 1);
+    }
+    oc_string word = __oc_slice_str(ct, i, j);
+    bool done = false;
+    if ((j < ((ct).len))) {
+    if ((__oc_index_str(ct, j) == 60)) {
+    int32_t depth = 0;
+    size_t k = j;
+    while ((k < ((ct).len))) {
+    if ((__oc_index_str(ct, k) == 60)) {
+    depth = __OC_ADD(depth, 1);
+    }
+    if ((__oc_index_str(ct, k) == 62)) {
+    depth = __OC_SUB(depth, 1);
+    if ((depth == 0)) {
+    break;
+    }
+    }
+    k = __OC_ADD(k, 1);
+    }
+    oc_string inner = gx_resolve(g, __oc_slice_str(ct, __OC_ADD(j, 1), k), site);
+    AstNode* tmpl = gx_template(g, word);
+    if ((tmpl == ((AstNode*)(0)))) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("not a generic struct: "), .len = sizeof("not a generic struct: ") - 1 }, word);
+    }
+    else {
+    if ((((((tmpl)->right))->tag) != NODE_STRUCT_DECL)) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("a generic function is not a type: "), .len = sizeof("a generic function is not a type: ") - 1 }, word);
+    }
+    else {
+    strbuf_push_str((&(sb)), gx_instantiate(g, tmpl, gx_split(g, inner), site));
+    }
+    }
+    i = __OC_ADD(k, 1);
+    done = true;
+    }
+    }
+    if ((!done)) {
+    strbuf_push_str((&(sb)), __oc_slice_str(ct, i, j));
+    i = j;
+    }
+    }
+    else {
+    strbuf_push((&(sb)), __oc_index_str(ct, i));
+    i = __OC_ADD(i, 1);
+    }
+    }
+    return gx_done(sb);
+}
+
+int32_t gx_param_index(AstNode* params, oc_string word) {
+    AstNode* p = params;
+    int32_t k = 0;
+    while ((p != ((AstNode*)(0)))) {
+    if (str_eq(((((p)->tok)).slice), word)) {
+    return k;
+    }
+    p = ((p)->next);
+    k = __OC_ADD(k, 1);
+    }
+    return (-1);
+}
+
+bool gx_bind(GBind* b, oc_string name, oc_string val) {
+    size_t i = 0;
+    while ((i < ((b)->n))) {
+    if (str_eq(__OC_AT((((b)->b_name)), (i)), name)) {
+    if (str_eq(__OC_AT((((b)->b_val)), (i)), val)) {
+    return true;
+    }
+    ((b)->conflict) = name;
+    return false;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    if ((((b)->n) < 8)) {
+    __OC_AT((((b)->b_name)), (((b)->n))) = name;
+    __OC_AT((((b)->b_val)), (((b)->n))) = val;
+    ((b)->n) = __OC_ADD(((b)->n), 1);
+    }
+    return true;
+}
+
+bool gx_unify(Generics* g, AstNode* params, oc_string pat, oc_string con, GBind* b) {
+    if ((gx_param_index(params, pat) >= 0)) {
+    return gx_bind(b, pat, con);
+    }
+    oc_string prefixes[4] = { (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 }, (oc_string){ .ptr = (const uint8_t*)("&mut "), .len = sizeof("&mut ") - 1 }, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 }, (oc_string){ .ptr = (const uint8_t*)("&"), .len = sizeof("&") - 1 } };
+    size_t k = 0;
+    while ((k < 4)) {
+    if (starts_with(pat, __OC_AT((prefixes), (k)))) {
+    if ((!starts_with(con, __OC_AT((prefixes), (k))))) {
+    return false;
+    }
+    return gx_unify(g, params, __oc_slice_str(pat, ((__OC_AT((prefixes), (k))).len), ((pat).len)), __oc_slice_str(con, ((__OC_AT((prefixes), (k))).len), ((con).len)), b);
+    }
+    k = __OC_ADD(k, 1);
+    }
+    if (starts_with(pat, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 })) {
+    if ((!starts_with(con, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 }))) {
+    return false;
+    }
+    int64_t pe = find(pat, (oc_string){ .ptr = (const uint8_t*)("]"), .len = sizeof("]") - 1 });
+    int64_t ce = find(con, (oc_string){ .ptr = (const uint8_t*)("]"), .len = sizeof("]") - 1 });
+    if ((pe < 0)) {
+    return false;
+    }
+    if ((ce < 0)) {
+    return false;
+    }
+    oc_string plen = __oc_slice_str(pat, 1, ({ __auto_type _v = (pe); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    oc_string clen = __oc_slice_str(con, 1, ({ __auto_type _v = (ce); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    if ((gx_param_index(params, plen) >= 0)) {
+    if ((!gx_bind(b, plen, clen))) {
+    return false;
+    }
+    }
+    else {
+    if ((!str_eq(plen, clen))) {
+    return false;
+    }
+    }
+    return gx_unify(g, params, __oc_slice_str(pat, __OC_ADD(({ __auto_type _v = (pe); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), 1), ((pat).len)), __oc_slice_str(con, __OC_ADD(({ __auto_type _v = (ce); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), 1), ((con).len)), b);
+    }
+    int64_t lt = find(pat, (oc_string){ .ptr = (const uint8_t*)("<"), .len = sizeof("<") - 1 });
+    if ((lt > 0)) {
+    size_t i = 0;
+    while ((i < ((g)->inst_count))) {
+    if (str_eq(__OC_AT((((g)->inst_name)), (i)), con)) {
+    if ((!str_eq(__OC_AT((((g)->inst_tmpl)), (i)), __oc_slice_str(pat, 0, ({ __auto_type _v = (lt); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }))))) {
+    return false;
+    }
+    GArgs pa = gx_split(g, __oc_slice_str(pat, __OC_ADD(({ __auto_type _v = (lt); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), 1), __OC_SUB(((pat).len), 1)));
+    GArgs ca = gx_split(g, __OC_AT((((g)->inst_args)), (i)));
+    if ((((pa).n) != ((ca).n))) {
+    return false;
+    }
+    size_t j = 0;
+    while ((j < ((pa).n))) {
+    if ((!gx_unify(g, params, __OC_AT((((pa).items)), (j)), __OC_AT((((ca).items)), (j)), b))) {
+    return false;
+    }
+    j = __OC_ADD(j, 1);
+    }
+    return true;
+    }
+    i = __OC_ADD(i, 1);
+    }
+    return false;
+    }
+    return str_eq(pat, con);
+}
+
+oc_string gx_arg_type(Generics* g, Validator* v, AstNode* arg) {
+    if ((((arg)->tag) == NODE_ADDRESS_OF)) {
+    oc_string inner = validator_expr_type(v, ((arg)->left));
+    if ((((inner).len) == 0)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (str_eq(((arg)->type_name), (oc_string){ .ptr = (const uint8_t*)("mut"), .len = sizeof("mut") - 1 })) {
+    return str_concat(((g)->arena), (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 }, inner);
+    }
+    return str_concat(((g)->arena), (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 }, inner);
+    }
+    return validator_expr_type(v, arg);
+}
+
+GArgs gx_infer(Generics* g, Validator* v, AstNode* t, AstNode* call) {
+    GArgs fail = (GArgs){ .n = 0, .items = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } };
+    GBind b = (GBind){ .n = 0, .b_name = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .b_val = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .conflict = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    GBind defaults = (GBind){ .n = 0, .b_name = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .b_val = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .conflict = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    AstNode* prm = ((((t)->right))->left);
+    AstNode* arg = ((call)->left);
+    oc_string pat = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    oc_string con = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    while ((prm != ((AstNode*)(0)))) {
+    if ((arg == ((AstNode*)(0)))) {
+    break;
+    }
+    pat = gx_canon(g, ((prm)->type_name));
+    con = gx_canon(g, gx_arg_type(g, v, arg));
+    if ((((con).len) == 0)) {
+    if (is_int_literal(arg)) {
+    if ((gx_param_index(((t)->left), pat) >= 0)) {
+    gx_bind((&(defaults)), pat, (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 });
+    }
+    }
+    }
+    else {
+    if ((!gx_unify(g, ((t)->left), pat, con, (&(b))))) {
+    print_src_loc(((g)->m), ((arg)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: argument of type "), .len = sizeof("error: argument of type ") - 1 });
+    print_str_raw(con);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" does not fit parameter type "), .len = sizeof(" does not fit parameter type ") - 1 });
+    print_str_raw(pat);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" of '"), .len = sizeof(" of '") - 1 });
+    print_str_raw(((((t)->tok)).slice));
+    if ((((((b).conflict)).len) > 0)) {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("' ("), .len = sizeof("' (") - 1 });
+    print_str_raw(((b).conflict));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" would have two types)"), .len = sizeof(" would have two types)") - 1 });
+    }
+    else {
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'"), .len = sizeof("'") - 1 });
+    }
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("; write the type arguments: "), .len = sizeof("; write the type arguments: ") - 1 });
+    print_str_raw(((((t)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("<...>(...)\012"), .len = sizeof("<...>(...)\012") - 1 });
+    ((g)->ok) = false;
+    return fail;
+    }
+    }
+    prm = ((prm)->next);
+    arg = ((arg)->next);
+    }
+    GArgs r = (GArgs){ .n = 0, .items = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } };
+    AstNode* p = ((t)->left);
+    while ((p != ((AstNode*)(0)))) {
+    oc_string found = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    size_t i = 0;
+    while ((i < ((b).n))) {
+    if (str_eq(__OC_AT((((b).b_name)), (i)), ((((p)->tok)).slice))) {
+    found = __OC_AT((((b).b_val)), (i));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    if ((((found).len) == 0)) {
+    i = 0;
+    while ((i < ((defaults).n))) {
+    if (str_eq(__OC_AT((((defaults).b_name)), (i)), ((((p)->tok)).slice))) {
+    found = __OC_AT((((defaults).b_val)), (i));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    }
+    if ((((found).len) == 0)) {
+    print_src_loc(((g)->m), ((call)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: cannot infer "), .len = sizeof("error: cannot infer ") - 1 });
+    print_str_raw(((((p)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" for '"), .len = sizeof(" for '") - 1 });
+    print_str_raw(((((t)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'; write the type arguments: "), .len = sizeof("'; write the type arguments: ") - 1 });
+    print_str_raw(((((t)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("<...>(...)\012"), .len = sizeof("<...>(...)\012") - 1 });
+    ((g)->ok) = false;
+    return fail;
+    }
+    if ((((r).n) < 8)) {
+    __OC_AT((((r).items)), (((r).n))) = found;
+    ((r).n) = __OC_ADD(((r).n), 1);
+    }
+    p = ((p)->next);
+    }
+    return r;
+}
+
+void gx_add_var(Validator* v, oc_string name, oc_string t) {
+    if ((((v)->vars_count) >= 512)) {
+    return;
+    }
+    __OC_AT((((v)->vars)), (((v)->vars_count))) = (VarInfo){ .name = name, .type_name = t, .scope_depth = 1, .is_stack_local = true, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = true };
+    ((v)->vars_count) = __OC_ADD(((v)->vars_count), 1);
+}
+
+void gx_walk(Generics* g, Validator* v, AstNode* n) {
+    AstNode* cur = n;
+    while ((cur != ((AstNode*)(0)))) {
+    gx_walk(g, v, ((cur)->left));
+    gx_walk(g, v, ((cur)->right));
+    if ((((((cur)->type_name)).len) > 0)) {
+    bool is_type = (((cur)->tag) != NODE_ADDRESS_OF);
+    if ((((cur)->tag) == NODE_FLOAT)) {
+    is_type = false;
+    }
+    if (is_type) {
+    ((cur)->type_name) = gx_resolve(g, ((cur)->type_name), ((cur)->tok));
+    }
+    }
+    if ((((cur)->tag) == NODE_CALL)) {
+    AstNode* t = gx_template(g, ((((cur)->tok)).slice));
+    if ((t != ((AstNode*)(0)))) {
+    if ((((((t)->right))->tag) != NODE_FN)) {
+    gx_err(g, ((cur)->tok), (oc_string){ .ptr = (const uint8_t*)("a generic struct is not a function: "), .len = sizeof("a generic struct is not a function: ") - 1 }, ((((cur)->tok)).slice));
+    }
+    else {
+    GArgs args = (GArgs){ .n = 0, .items = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } };
+    if ((((((cur)->type_name)).len) > 0)) {
+    args = gx_split(g, ((cur)->type_name));
+    }
+    else {
+    args = gx_infer(g, v, t, cur);
+    }
+    if (((g)->ok)) {
+    oc_string name = gx_instantiate(g, t, args, ((cur)->tok));
+    if ((((name).len) > 0)) {
+    ((((cur)->tok)).slice) = name;
+    }
+    }
+    }
+    ((cur)->type_name) = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    else {
+    if ((((((cur)->type_name)).len) > 0)) {
+    gx_err(g, ((cur)->tok), (oc_string){ .ptr = (const uint8_t*)("type arguments given to a function that is not generic: "), .len = sizeof("type arguments given to a function that is not generic: ") - 1 }, ((((cur)->tok)).slice));
+    ((cur)->type_name) = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    }
+    if ((((cur)->tag) == NODE_STRUCT_INIT)) {
+    AstNode* t = gx_template(g, ((((cur)->tok)).slice));
+    if ((t != ((AstNode*)(0)))) {
+    if ((((((cur)->type_name)).len) == 0)) {
+    gx_err(g, ((cur)->tok), (oc_string){ .ptr = (const uint8_t*)("a generic struct needs its type arguments: "), .len = sizeof("a generic struct needs its type arguments: ") - 1 }, ((((cur)->tok)).slice));
+    }
+    else {
+    if ((((((t)->right))->tag) != NODE_STRUCT_DECL)) {
+    gx_err(g, ((cur)->tok), (oc_string){ .ptr = (const uint8_t*)("a generic function is not a struct: "), .len = sizeof("a generic function is not a struct: ") - 1 }, ((((cur)->tok)).slice));
+    }
+    else {
+    oc_string name = gx_instantiate(g, t, gx_split(g, ((cur)->type_name)), ((cur)->tok));
+    if ((((name).len) > 0)) {
+    ((((cur)->tok)).slice) = name;
+    }
+    }
+    }
+    ((cur)->type_name) = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    if ((((cur)->tag) == NODE_LET)) {
+    oc_string var_t = ((cur)->type_name);
+    if ((((var_t).len) == 0)) {
+    var_t = validator_expr_type(v, ((cur)->left));
+    }
+    gx_add_var(v, ((((cur)->tok)).slice), var_t);
+    }
+    cur = ((cur)->next);
+    }
+}
+
+bool expand_generics(AstNode* root, Arena* arena, SourceMap* m, Generics* g) {
+    ((g)->arena) = arena;
+    ((g)->m) = m;
+    ((g)->root) = root;
+    ((g)->ok) = true;
+    AstNode* prev = ((AstNode*)(0));
+    AstNode* d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    AstNode* nxt = ((d)->next);
+    if ((((d)->tag) == NODE_GENERIC)) {
+    if ((gx_template(g, ((((d)->tok)).slice)) != ((AstNode*)(0)))) {
+    gx_err(g, ((d)->tok), (oc_string){ .ptr = (const uint8_t*)("generic defined twice: "), .len = sizeof("generic defined twice: ") - 1 }, ((((d)->tok)).slice));
+    }
+    else {
+    if ((((g)->tmpl_count) < 256)) {
+    __OC_AT((((g)->tmpl)), (((g)->tmpl_count))) = d;
+    ((g)->tmpl_count) = __OC_ADD(((g)->tmpl_count), 1);
+    }
+    }
+    if ((prev == ((AstNode*)(0)))) {
+    ((root)->left) = nxt;
+    }
+    else {
+    ((prev)->next) = nxt;
+    }
+    }
+    else {
+    prev = d;
+    }
+    d = nxt;
+    }
+    ((g)->last) = prev;
+    size_t i = 0;
+    while ((i < ((g)->tmpl_count))) {
+    AstNode* t = __OC_AT((((g)->tmpl)), (i));
+    if ((program_find_fn(root, ((((t)->tok)).slice)) != ((AstNode*)(0)))) {
+    gx_err(g, ((t)->tok), (oc_string){ .ptr = (const uint8_t*)("a generic and an ordinary function share the name "), .len = sizeof("a generic and an ordinary function share the name ") - 1 }, ((((t)->tok)).slice));
+    }
+    i = __OC_ADD(i, 1);
+    }
+    Validator v = (Validator){ .fx = ((FnEffects*)(0)), .program = root, .ret_type = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .vars = { (VarInfo){ .name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .type_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .scope_depth = 0, .is_stack_local = false, .points_to_stack_local = false, .borrowed_from_arena = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .borrowed_from_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .is_invalidated = false, .is_mut = false } }, .vars_count = 0, .deinit_arenas = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .deinit_count = 0, .scope_depth = 1, .has_error = false, .initializing_var = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .srcmap = m, .fn_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .gen = g };
+    d = ((root)->left);
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_STRUCT_DECL)) {
+    AstNode* f = ((d)->left);
+    while ((f != ((AstNode*)(0)))) {
+    ((f)->type_name) = gx_resolve(g, ((f)->type_name), ((f)->tok));
+    f = ((f)->next);
+    }
+    }
+    else {
+    if ((((d)->tag) == NODE_LET)) {
+    ((d)->type_name) = gx_resolve(g, ((d)->type_name), ((d)->tok));
+    gx_walk(g, (&(v)), ((d)->left));
+    }
+    else {
+    if ((((d)->tag) == NODE_FN)) {
+    ((d)->type_name) = gx_resolve(g, ((d)->type_name), ((d)->tok));
+    ((v).vars_count) = 0;
+    AstNode* prm = ((d)->left);
+    while ((prm != ((AstNode*)(0)))) {
+    ((prm)->type_name) = gx_resolve(g, ((prm)->type_name), ((prm)->tok));
+    gx_add_var((&(v)), ((((prm)->tok)).slice), ((prm)->type_name));
+    prm = ((prm)->next);
+    }
+    if ((((d)->right) != ((AstNode*)(0)))) {
+    gx_walk(g, (&(v)), ((((d)->right))->left));
+    }
+    }
+    }
+    }
+    d = ((d)->next);
+    }
+    return ((g)->ok);
 }
 
 CodeBuffer buf_init(size_t capacity) {
@@ -12686,7 +13805,13 @@ int main(int argc, char** argv) {
     arena_deinit((&(arena)));
     return 1;
     }
-    bool valid = validate_program(prog, (&(((loader).map))));
+    Generics gen = (Generics){ .tmpl = { ((AstNode*)(0)) }, .tmpl_count = 0, .inst_name = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_tmpl = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_args = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .inst_site = { (Token){ .tag = 0, .slice = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, .line = 0, .col = 0 } }, .inst_count = 0, .arena = (&(arena)), .m = (&(((loader).map))), .root = prog, .last = ((AstNode*)(0)), .ok = true };
+    if ((!expand_generics(prog, (&(arena)), (&(((loader).map))), (&(gen))))) {
+    buf_deinit((&(combined_buf)));
+    arena_deinit((&(arena)));
+    return 1;
+    }
+    bool valid = validate_program(prog, (&(((loader).map))), (&(gen)));
     if ((!valid)) {
     buf_deinit((&(combined_buf)));
     arena_deinit((&(arena)));

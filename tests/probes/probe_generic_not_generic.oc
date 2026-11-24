@@ -1,0 +1,8 @@
+// Type arguments for a function that has no type parameters.
+fn twice(x: i32) -> i32 {
+    return x * 2;
+}
+
+fn main() {
+    print(twice<i32>(4));
+}

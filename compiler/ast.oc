@@ -28,6 +28,10 @@ let NODE_ARRAY_INIT: u32 = 24;
 let NODE_STRUCT_DECL: u32 = 25;
 let NODE_UNARY: u32 = 26;
 let NODE_FLOAT: u32 = 29; // 27 and 28 are NODE_BREAK / NODE_CONTINUE (parser.oc)
+// A generic fn or struct template: left = its type parameters (NODE_PARAM; type_name is ""
+// for a type parameter, the declared type for `const N: usize`), right = the NODE_FN or
+// NODE_STRUCT_DECL. expand_generics replaces templates by their instantiations.
+let NODE_GENERIC: u32 = 30;
 
 struct AstNode {
     tag: u32,

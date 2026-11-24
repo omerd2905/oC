@@ -1,0 +1,100 @@
+// Generic functions and structs (issue #69): explicit and inferred type arguments, generic
+// structs (nested too), const parameters, a generic calling a generic, recursion, and
+// several instantiations of one template side by side. Both backends must print
+// generics.expected exactly.
+import "std/mem.oc";
+
+fn min<T>(a: T, b: T) -> T {
+    if a < b { return a; }
+    return b;
+}
+
+fn max<T>(a: T, b: T) -> T {
+    if a > b { return a; }
+    return b;
+}
+
+fn clamp<T>(x: T, lo: T, hi: T) -> T {
+    return min<T>(max<T>(x, lo), hi); // a generic calling generics
+}
+
+struct Pair<A, B> {
+    first: A,
+    second: B,
+}
+
+fn first_of<A, B>(p: Pair<A, B>) -> A {
+    return p.first;
+}
+
+fn swap<T>(a: *mut T, b: *mut T) {
+    let t: T = *a;
+    *a = *b;
+    *b = t;
+}
+
+fn pow<T>(base: T, n: u32) -> T { // recursion inside a generic
+    if n == 0 { return base / base; }
+    return base * pow<T>(base, n - 1);
+}
+
+struct Ring<T, const N: usize> {
+    data: [N]T,
+    head: usize,
+}
+
+fn ring_sum<T, const N: usize>(r: *Ring<T, N>) -> T {
+    let mut s: T = r.data[0];
+    let mut i: usize = 1;
+    while i < N {
+        s = s + r.data[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn alloc_one<T>(a: *mut Arena) -> *mut T {
+    return arena_alloc(a, 8).as(*mut T);
+}
+
+struct Point {
+    x: i32,
+    y: i32,
+}
+
+fn main() {
+    print(min<i32>(3, 4));                  // 3
+    print(min<u8>(200, 100));               // 100
+    print(min(3.5, 2.0));                   // 2.000000
+    let big: i64 = 7;
+    print(min(big, 9));                     // 7
+    print(min(10, 4));                      // 4
+    print(clamp<i32>(15, 0, 10));           // 10
+    print(clamp(-5, 0, 10));                // 0
+    print(max<u64>(18446744073709551615, 1)); // 18446744073709551615
+    let p: Pair<i32, u8> = Pair<i32, u8> { first: 1, second: 2 };
+    print(p.first);                         // 1
+    print(p.second);                        // 2
+    print(first_of(p));                     // 1
+    let q: Pair<Pair<i32, u8>, bool> = Pair<Pair<i32, u8>, bool> { first: p, second: true };
+    print(q.first.second);                  // 2
+    print(q.second);                        // true
+    let pts: Pair<Point, Point> = Pair<Point, Point> { first: Point { x: 1, y: 2 }, second: Point { x: 3, y: 4 } };
+    print(pts.second.x);                    // 3
+    let mut x: i32 = 1;
+    let mut z: i32 = 2;
+    swap(&mut x, &mut z);
+    print(x);                               // 2
+    print(z);                               // 1
+    print(pow<i64>(3, 4));                  // 81
+    print(pow(2.0, 10));                    // 1024.000000
+    let r: Ring<i32, 4> = Ring<i32, 4> { data: [1, 2, 3, 4], head: 0 };
+    print(ring_sum(&r));                    // 10
+    let r2: Ring<u8, 2> = Ring<u8, 2> { data: [5, 6], head: 0 };
+    print(ring_sum<u8, 2>(&r2));            // 11
+    let mut a: Arena = arena_init(64);
+    let cell: *mut i64 = alloc_one<i64>(&mut a);
+    *cell = 42;
+    print(*cell);                           // 42
+    arena_deinit(&mut a);
+}
