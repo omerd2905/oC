@@ -1146,7 +1146,25 @@ fn ng_fn_param_type(ng: *mut NativeGen, fn_name: string, idx: usize) -> string {
     return "";
 }
 
-extern fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode);
+extern // True when `e` names memory (a variable, an element, a field of one, or a dereference),
+// false for a struct value that only exists in registers, such as a call's result.
+fn ng_is_place(ng: *mut NativeGen, e: *mut AstNode) -> bool {
+    if e == (0).as(*mut AstNode) { return false; }
+    if e.tag == NODE_IDENT { return true; }
+    if e.tag == NODE_DEREF { return true; }
+    if e.tag == NODE_INDEX { return true; }
+    if e.tag == NODE_FIELD_ACCESS {
+        let t: string = ng_expr_type(ng, e.left);
+        if t.len > 0 {
+            if t[0] == 42 { return true; }
+            if t[0] == 38 { return true; }
+        }
+        return ng_is_place(ng, e.left);
+    }
+    return false;
+}
+
+fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode);
 
 // Evaluates `expr` and converts it to `to_t` when that is a float type (see ng_emit_convert).
 fn ng_emit_expr_as(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, expr: *mut AstNode, to_t: string) {
@@ -1450,9 +1468,45 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             return;
         }
-        let bt: string = ng_strip_ptr_type(ng_expr_type(ng, expr.left));
+        let raw_bt: string = ng_expr_type(ng, expr.left);
+        let bt: string = ng_strip_ptr_type(raw_bt);
         let ft: string = ng_find_field_type(ng, bt, expr.tok.slice);
-        ng_emit_lvalue_addr(ng, code, data, expr);
+        let mut by_ptr: bool = false;
+        if raw_bt.len > 0 {
+            if raw_bt[0] == 42 { by_ptr = true; }
+            if raw_bt[0] == 38 { by_ptr = true; }
+        }
+        let mut spilled: bool = false;
+        if !by_ptr {
+            if !ng_is_place(ng, expr.left) {
+                // A struct value with no address (`make().x`): it is in rax, rdx, rcx, r8;
+                // put it on the stack in that order and read the field there.
+                ng_emit_expr(ng, code, data, expr.left);
+                buf_append_u8(code, 65); buf_append_u8(code, 80); // push %r8 (+24)
+                buf_append_u8(code, 81); // push %rcx (+16)
+                buf_append_u8(code, 82); // push %rdx (+8)
+                buf_append_u8(code, 80); // push %rax (+0)
+                buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 224); // mov %rsp, %rax
+                let f_off: i32 = ng_find_field_offset(ng, bt, expr.tok.slice);
+                if f_off != 0 {
+                    buf_append_u8(code, 72); buf_append_u8(code, 129); buf_append_u8(code, 192); // add $f_off, %rax
+                    elf_append_i32(code, f_off);
+                }
+                spilled = true;
+            }
+        }
+        if !spilled { ng_emit_lvalue_addr(ng, code, data, expr); }
+        if spilled {
+            // Load the field, then drop the 32 spilled bytes (add does not touch the result).
+            if str_eq(ft, "string") {
+                buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 80); buf_append_u8(code, 8);
+                buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0);
+            } else if !ng_emit_load_struct_at_rax(ng, code, ft) {
+                ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, expr.tok.slice));
+            }
+            buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 196); buf_append_u8(code, 32); // add $32, %rsp
+            return;
+        }
         if str_eq(ft, "string") {
             buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 80); buf_append_u8(code, 8);
             buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0);

@@ -31,6 +31,7 @@ struct CodeBuffer {
     flt_count: usize,
     fp_trap: bool, // --fp-trap: panic when a float operation produces NaN or infinity
     srcmap: *SourceMap, // source locations for --fp-trap panics (null: line:col only)
+    program: *mut AstNode, // for struct field types
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
@@ -59,6 +60,7 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         flt_count: 0,
         fp_trap: false,
         srcmap: (0).as(*SourceMap),
+        program: (0).as(*mut AstNode),
     };
 }
 
@@ -338,6 +340,56 @@ fn is_type_str(t: string) -> bool {
     return str_eq(t, "string");
 }
 
+extern fn cg_var_type(out: *mut CodeBuffer, name: string) -> string;
+
+// Declared type of `expr` when it is a local, a call or a field reached through them
+// ("" if unknown). Field types depend on the struct: two structs may give the same field
+// name different types, so the name alone (the *_fields tables) is only a fallback.
+fn cg_expr_type(expr: *mut AstNode, out: *mut CodeBuffer) -> string {
+    if expr == (0).as(*mut AstNode) { return ""; }
+    if expr.tag == NODE_IDENT { return cg_var_type(out, expr.tok.slice); }
+    if expr.tag == NODE_CAST { return expr.type_name; }
+    let mut d: *mut AstNode = (0).as(*mut AstNode);
+    if out.program != (0).as(*mut AstNode) { d = out.program.left; }
+    if expr.tag == NODE_CALL {
+        while d != (0).as(*mut AstNode) {
+            if d.tag == NODE_FN {
+                if str_eq(d.tok.slice, expr.tok.slice) { return d.type_name; }
+            }
+            d = d.next;
+        }
+        return "";
+    }
+    if expr.tag == NODE_FIELD_ACCESS {
+        let mut st: string = cg_expr_type(expr.left, out);
+        if st.len > 5 {
+            if str_eq(st[0..5], "*mut ") { st = st[5..st.len]; }
+        }
+        if st.len > 1 {
+            if st[0] == 42 { st = st[1..st.len]; } // '*'
+        }
+        if str_eq(st, "string") {
+            if str_eq(expr.tok.slice, "len") { return "usize"; }
+            if str_eq(expr.tok.slice, "ptr") { return "*u8"; }
+            return "";
+        }
+        while d != (0).as(*mut AstNode) {
+            if d.tag == NODE_STRUCT_DECL {
+                if str_eq(d.tok.slice, st) {
+                    let mut f: *mut AstNode = d.left;
+                    while f != (0).as(*mut AstNode) {
+                        if str_eq(f.tok.slice, expr.tok.slice) { return f.type_name; }
+                        f = f.next;
+                    }
+                    return "";
+                }
+            }
+            d = d.next;
+        }
+    }
+    return "";
+}
+
 fn is_expr_string(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
     if expr == (0).as(*mut AstNode) { return false; }
     if expr.tag == NODE_STRING { return true; }
@@ -352,6 +404,8 @@ fn is_expr_string(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
         return false;
     }
     if expr.tag == NODE_FIELD_ACCESS {
+        let ft: string = cg_expr_type(expr, out);
+        if ft.len > 0 { return is_type_str(ft); }
         let f: string = expr.tok.slice;
         let mut i: usize = 0;
         while i < out.str_fields_count {
@@ -380,6 +434,8 @@ fn is_expr_pointer(expr: *mut AstNode, out: *mut CodeBuffer) -> bool {
         return is_type_ptr(expr.type_name);
     }
     if expr.tag == NODE_FIELD_ACCESS {
+        let ft: string = cg_expr_type(expr, out);
+        if ft.len > 0 { return is_type_ptr(ft); }
         let f: string = expr.tok.slice;
         let mut i: usize = 0;
         while i < out.ptr_fields_count {
@@ -457,8 +513,6 @@ fn cg_elem_type(t: string) -> string {
     return "";
 }
 
-extern fn cg_var_type(out: *mut CodeBuffer, name: string) -> string;
-
 // "f64" or "f32" if `expr` is a floating-point value, "" if it is not. Floats take plain C
 // arithmetic (IEEE 754: no overflow trap), so the checked integer macros must not see them.
 fn cg_float_type(expr: *mut AstNode, out: *mut CodeBuffer) -> string {
@@ -501,7 +555,14 @@ fn cg_float_type(expr: *mut AstNode, out: *mut CodeBuffer) -> string {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
         return cg_flt_lookup(out, expr.tok.slice);
     }
-    if expr.tag == NODE_FIELD_ACCESS { return cg_flt_lookup(out, expr.tok.slice); }
+    if expr.tag == NODE_FIELD_ACCESS {
+        let ft: string = cg_expr_type(expr, out);
+        if ft.len > 0 {
+            if is_float_type(ft) { return ft; }
+            return "";
+        }
+        return cg_flt_lookup(out, expr.tok.slice);
+    }
     let mut via_elem: bool = expr.tag == NODE_INDEX;
     if expr.tag == NODE_DEREF { via_elem = true; }
     if via_elem {
@@ -1262,6 +1323,7 @@ fn is_builtin_c_fn(fn_name: string) -> bool {
 }
 
 fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
+    out.program = root;
     // 1. Emit C preamble
     buf_append(out, "#pragma GCC diagnostic ignored \"-Wmain\"\n");
     buf_append(out, "#pragma GCC diagnostic ignored \"-Wdiscarded-qualifiers\"\n");
