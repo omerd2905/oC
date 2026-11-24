@@ -5,3 +5,5 @@ occ_self
 bin/occ
 bin/occ.exe
 bin/occ.exe.old
+__pycache__/
+fuzz-findings/
