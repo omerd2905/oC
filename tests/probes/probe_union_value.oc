@@ -1,0 +1,12 @@
+// The payload of an error union is reachable only through match, try and catch.
+enum E { Bad }
+
+fn f(n: i64) -> i64!E {
+    if n < 0 { return Err(E.Bad); }
+    return Ok(n);
+}
+
+fn main() {
+    let r = f(-1);
+    print(r.value);
+}

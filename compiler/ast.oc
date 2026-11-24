@@ -32,6 +32,13 @@ let NODE_FLOAT: u32 = 29; // 27 and 28 are NODE_BREAK / NODE_CONTINUE (parser.oc
 // for a type parameter, the declared type for `const N: usize`), right = the NODE_FN or
 // NODE_STRUCT_DECL. expand_generics replaces templates by their instantiations.
 let NODE_GENERIC: u32 = 30;
+// Error handling (issue #70); lowered to ordinary code by desugar_errors before generics.
+let NODE_ENUM: u32 = 31;   // enum Name { A, B }: left = variants (NODE_PARAM)
+let NODE_MATCH: u32 = 32;  // match x { arms }: left = scrutinee, right = arms (NODE_ARM)
+let NODE_ARM: u32 = 33;    // pattern => body: tok = pattern (Ok, Err, _, Variant), type_name =
+                           // binding name, left = body; right = qualifier (Enum in Enum.Variant)
+let NODE_TRY: u32 = 34;    // try expr: left = expr
+let NODE_CATCH: u32 = 35;  // expr catch default: left = expr, right = default
 
 struct AstNode {
     tag: u32,

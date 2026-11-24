@@ -1,0 +1,11 @@
+// Dropping a returned error union is an error.
+enum E { Bad }
+
+fn f(n: i64) -> i64!E {
+    if n < 0 { return Err(E.Bad); }
+    return Ok(n);
+}
+
+fn main() {
+    f(-1);
+}

@@ -1,0 +1,182 @@
+// Enums, exhaustive match, error unions (T!E), try and catch (issue #70), on both backends.
+import "std/io.oc";
+import "std/str.oc";
+
+enum Color { Red, Green, Blue }
+
+fn color_name(c: Color) -> string {
+    match c {
+        Color.Red => { return "red"; }
+        Color.Green => { return "green"; }
+        Blue => { return "blue"; }
+    }
+    return "?";
+}
+
+enum ParseError { Empty, BadDigit, Overflow }
+
+fn parse(s: string) -> i64!ParseError {
+    if s.len == 0 { return Err(ParseError.Empty); }
+    let mut v: i64 = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        let c: u8 = s[i];
+        if c < 48 { return Err(ParseError.BadDigit); }
+        if c > 57 { return Err(ParseError.BadDigit); }
+        if v > 100000000000 { return Err(ParseError.Overflow); }
+        v = v * 10 + (c - 48).as(i64);
+        i = i + 1;
+    }
+    return Ok(v);
+}
+
+// try through three call levels: sum3 -> sum2 -> parse
+fn sum2(a: string, b: string) -> i64!ParseError {
+    let x = try parse(a);
+    let y: i64 = try parse(b);
+    return Ok(x + y);
+}
+
+fn sum3(a: string, b: string, c: string) -> i64!ParseError {
+    let s = try sum2(a, b);
+    let t = try parse(c);
+    return Ok(s + t);
+}
+
+fn show(r: i64!ParseError) {
+    match r {
+        Ok(v) => { print(v); }
+        Err(e) => {
+            match e {
+                ParseError.Empty => print("empty"),
+                ParseError.BadDigit => print("bad digit"),
+                ParseError.Overflow => print("overflow"),
+            }
+        }
+    }
+}
+
+// A 24-byte payload: the union is 32 bytes, returned by value.
+enum IoError { NotFound, Denied }
+
+struct Triple { a: u64, b: u64, c: u64 }
+
+fn load(n: u64) -> Triple!IoError {
+    if n == 0 { return Err(IoError.NotFound); }
+    if n == 1 { return Err(IoError.Denied); }
+    return Ok(Triple { a: n, b: n * 2, c: n * 3 });
+}
+
+fn total(n: u64) -> u64!IoError {
+    let t = try load(n);
+    return Ok(t.a + t.b + t.c);
+}
+
+// try as a statement, in an assignment and in a return
+fn check(n: u64) -> u64!IoError {
+    try total(n);
+    let mut x: u64 = 0;
+    x = try total(n);
+    return try total(x);
+}
+
+fn fallback() -> u64 { return 99; }
+
+// An arena string inside Ok.
+fn join(a: *mut Arena, x: string, y: string) -> string!ParseError {
+    if x.len == 0 { return Err(ParseError.Empty); }
+    return Ok(str_concat(a, x, y));
+}
+
+struct Tok { kind: Color, n: i32 }
+
+// try and catch inside other expressions: arguments, print, if / else-if conditions.
+fn add(a: i64, b: i64) -> i64 { return a + b; }
+
+fn nested(n: i64) -> i64!ParseError {
+    if n < 0 { return Err(ParseError.BadDigit); }
+    if n > 100 { return Err(ParseError.Overflow); }
+    return Ok(n);
+}
+
+fn uses(n: i64) -> i64!ParseError {
+    print(try nested(n));
+    let s: i64 = add(try nested(n), try nested(n + 1));
+    if (try nested(s)) > 10 {
+        print("big");
+    } else if (nested(s) catch 0) == 3 {
+        print("three");
+    }
+    return Ok(s * 2);
+}
+
+fn noisy_default() -> i64 {
+    print("default evaluated");
+    return 5;
+}
+
+fn main() -> i32 {
+    print(color_name(Color.Red));
+    print(color_name(Color.Green));
+    print(color_name(Color.Blue));
+    show(parse("123"));
+    show(parse(""));
+    show(parse("12x"));
+    show(sum3("1", "2", "3"));
+    show(sum3("1", "", "3"));
+    show(sum3("1", "2", "99999999999999"));
+    let d = parse("zz") catch 7;
+    print(d);
+    let e2: i64 = parse("40") catch 7;
+    print(e2);
+
+    match load(5) {
+        Ok(t) => { print(t.a); print(t.b); print(t.c); }
+        Err(e) => print(e),
+    }
+    match total(0) {
+        Ok(v) => print(v),
+        Err(e) => {
+            match e {
+                IoError.NotFound => print("not found"),
+                IoError.Denied => print("denied"),
+            }
+        }
+    }
+    match total(1) {
+        Ok(_) => print("ok"),
+        _ => print("other"),
+    }
+    let mut y: u64 = 0;
+    y = total(1) catch fallback();
+    print(y);
+    match check(2) {
+        Ok(v) => print(v),
+        _ => print("err"),
+    }
+
+    let mut ar: Arena = arena_init(4096);
+    match join(&mut ar, "ab", "cd") {
+        Ok(s) => print(s),
+        Err(_) => print("join failed"),
+    }
+    let j: string = join(&mut ar, "", "cd") catch "default";
+    print(j);
+    arena_deinit(&mut ar);
+
+    let t: Tok = Tok { kind: Color.Green, n: 1 };
+    let p: *Tok = &t;
+    match p.kind {
+        Color.Green => print("field green"),
+        _ => print("field other"),
+    }
+
+    print(nested(-1) catch 0);
+    print(add(nested(3) catch 0, nested(-3) catch 1));
+    print(nested(4) catch noisy_default());          // the default is not evaluated
+    print(nested(-4) catch (nested(200) catch noisy_default()));
+    match uses(1) { Ok(v) => print(v), Err(e) => print(e) }
+    match uses(5) { Ok(v) => print(v), Err(e) => print(e) }
+    match uses(100) { Ok(v) => print(v), Err(e) => print(e) }
+    return 0;
+}

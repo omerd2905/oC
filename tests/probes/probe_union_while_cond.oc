@@ -1,0 +1,12 @@
+// A while condition runs on every iteration, so try/catch cannot be hoisted out of it.
+enum E { Bad }
+
+fn f(n: i64) -> i64!E {
+    if n < 0 { return Err(E.Bad); }
+    return Ok(n);
+}
+
+fn main() {
+    let mut i: i64 = 0;
+    while (f(i) catch 0) < 3 { i = i + 1; }
+}

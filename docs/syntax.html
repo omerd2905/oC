@@ -161,7 +161,7 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
 
         <h3>Reserved Keywords Table</h3>
         <p>
-          The <code>oC</code> language defines exactly <strong>15 reserved keywords</strong>. They cannot be used as identifier names:
+          The <code>oC</code> language defines exactly <strong>21 reserved keywords</strong>. They cannot be used as identifier names:
         </p>
         <table>
           <thead>
@@ -246,6 +246,36 @@ let x: i32 = 10; // Inline comments are also supported</code></pre>
               <td><span class="keyword-pill">as</span></td>
               <td>Operator</td>
               <td>Performs an explicit, checked type conversion or pointer cast. <code>val.as(u16)</code> or <code>ptr.as(*u8)</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">break</span></td>
+              <td>Control Flow</td>
+              <td>Leaves the innermost <code>while</code> loop. <code>if done { break; }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">continue</span></td>
+              <td>Control Flow</td>
+              <td>Jumps to the next test of the innermost <code>while</code> loop. <code>if skip { continue; }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">enum</span></td>
+              <td>Type</td>
+              <td>Declares named constants with their own type (<a href="#errors">Enums &amp; error unions</a>). <code>enum Color { Red, Green }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">match</span></td>
+              <td>Control Flow</td>
+              <td>Runs the arm for an enum value or an error union; must handle every case. <code>match c { Color.Red =&gt; ..., _ =&gt; ... }</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">try</span></td>
+              <td>Control Flow</td>
+              <td>Unwraps an error union, or returns its error to the caller. <code>let n: i64 = try parse(s);</code></td>
+            </tr>
+            <tr>
+              <td><span class="keyword-pill">catch</span></td>
+              <td>Control Flow</td>
+              <td>Unwraps an error union, or uses a fallback value. <code>let n: i64 = parse(s) catch 0;</code></td>
             </tr>
           </tbody>
         </table>
@@ -528,6 +558,73 @@ fn main() {
           <li><strong>Everything else is unchanged:</strong> arithmetic in <code>T</code> code traps on overflow for the instantiated type, <code>==</code> on floats is still an error when <code>T</code> is <code>f64</code>, and a pointer a generic returns from an arena is tracked like any other.</li>
           <li><strong>Not supported:</strong> traits or interfaces, specialization, and generic types at run time.</li>
         </ul>
+      </section>
+
+      <section id="errors">
+        <h2>Enums &amp; Error Unions</h2>
+        <p>
+          An <code>enum</code> is a set of named constants with their own type: <code>Color.Red</code>, <code>Color.Green</code>, … (numbered from 0, stored as a <code>u32</code>). A value of one enum cannot be passed where another is expected, and a plain number cannot be used as one. <code>match</code> runs one arm per variant and must handle all of them, or end with <code>_ =&gt;</code>; a missing variant is a compile error.
+        </p>
+        <p>
+          A function that can fail in an <em>expected</em> way (bad input, a missing file) returns an <strong>error union</strong> <code>T!E</code>: either a <code>T</code>, built with <code>Ok(value)</code>, or an error of enum type <code>E</code>, built with <code>Err(E.Variant)</code>. The value inside can only be reached in one of three ways, so a caller cannot forget the error case:
+        </p>
+        <pre><code>import "std/io.oc";
+
+enum ParseError { Empty, BadDigit, Overflow }
+
+fn parse_u32(s: string) -&gt; u32!ParseError {
+    if s.len == 0 { return Err(ParseError.Empty); }
+    let mut v: u64 = 0;
+    let mut i: usize = 0;
+    while i &lt; s.len {
+        if s[i] &lt; 48 { return Err(ParseError.BadDigit); }
+        if s[i] &gt; 57 { return Err(ParseError.BadDigit); }
+        v = v * 10 + (s[i] - 48).as(u64);
+        if v &gt; 4294967295 { return Err(ParseError.Overflow); }
+        i = i + 1;
+    }
+    return Ok(v.as(u32));
+}
+
+fn sum(a: string, b: string) -&gt; u32!ParseError {
+    let x: u32 = try parse_u32(a);    // 2. on Err, return that error to the caller
+    let y: u32 = try parse_u32(b);
+    return Ok(x + y);
+}
+
+fn main() {
+    match sum("40", "2") {            // 1. handle both cases
+        Ok(v) =&gt; print(v),            // 42
+        Err(e) =&gt; {
+            match e {
+                ParseError.Empty =&gt; print("empty"),
+                ParseError.BadDigit =&gt; print("not a number"),
+                ParseError.Overflow =&gt; print("too big"),
+            }
+        }
+    }
+    let n: u32 = parse_u32("x1") catch 0;   // 3. a fallback value on Err
+    print(n);                               // 0
+}</code></pre>
+        <ul>
+          <li><strong>Reading the value directly is an error</strong> (<code>r.value</code>), and so is ignoring a returned error union: <code>parse_u32(s);</code> as a statement does not compile.</li>
+          <li><strong><code>try</code></strong> works only in a function that itself returns an error union with the same error type. It is an early <code>return</code>; there is no unwinding.</li>
+          <li><strong><code>try</code> and <code>catch</code> are expressions:</strong> <code>print(f(x) catch 0)</code> and <code>add(try f(a), try f(b))</code> work. The default after <code>catch</code> is evaluated only on an error. They cannot appear in a <code>while</code> condition (it runs again on every iteration); compute the value in the loop body instead.</li>
+          <li><strong>Arms</strong> are a block or one statement, separated by commas. <code>Ok(v)</code> / <code>Err(e)</code> bind the value; write <code>Ok(_)</code> to ignore it.</li>
+          <li><strong>Representation:</strong> a <code>T!E</code> is the struct <code>{ code: u64, value: T }</code> (code 0 is <code>Ok</code>), returned by value like any struct, so with a 24-byte <code>T</code> it is 32 bytes, the native backend's limit for struct values. A pointer or string from an arena inside <code>Ok</code> is still tracked: using it after <code>arena_reset</code> is rejected.</li>
+          <li><strong>Panics stay for bugs.</strong> Overflow, out-of-bounds indexing and failed casts are programmer errors and still stop the program; error unions are for failures a correct program must expect and handle.</li>
+          <li><strong>Not supported yet:</strong> data inside enum variants, nested patterns such as <code>Err(ParseError.Empty)</code> in one arm, <code>match</code>, <code>try</code> or <code>catch</code> on an array element, or on a call of a generic function that returns an error union, and converting between error types (each module uses one error enum).</li>
+        </ul>
+        <pre data-occ-rejects="the error union returned by parse_u32 is ignored"><code>enum ParseError { Empty }
+
+fn parse_u32(s: string) -&gt; u32!ParseError {
+    if s.len == 0 { return Err(ParseError.Empty); }
+    return Ok(1);
+}
+
+fn main() {
+    parse_u32("7");
+}</code></pre>
       </section>
 
       <section id="floats">
@@ -1012,7 +1109,7 @@ Squared: 49 | 5! = 120</code></pre>
       <section id="control-flow">
         <h2>9. Control Flow Statements</h2>
         <p>
-          <code>oC</code> provides three primary control flow statements: <code>if / else if / else</code> conditional branching, <code>while</code> loops, and <code>return</code> statements.
+          <code>oC</code> provides three primary control flow statements: <code>if / else if / else</code> conditional branching, <code>while</code> loops, and <code>return</code> statements, plus <code>match</code>, <code>try</code> and <code>catch</code> for enums and error unions (see <a href="#errors">Enums &amp; error unions</a>).
         </p>
 
         <h3>Conditional: <code>if / else</code></h3>
