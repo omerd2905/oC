@@ -1,0 +1,91 @@
+// std functions that return error unions (issue #70, phase 4): str_to_*, file_read and
+// file_write, and the deprecated wrappers kept next to them.
+import "std/io.oc";
+import "std/fs.oc";
+import "std/fmt.oc";
+
+fn why(e: NumError) -> string {
+    match e {
+        NumError.Empty => { return "empty"; }
+        NumError.BadDigit => { return "bad digit"; }
+        NumError.Overflow => { return "overflow"; }
+    }
+    return "?";
+}
+
+fn show_u(r: u64!NumError) {
+    match r {
+        Ok(v) => print(v),
+        Err(e) => print(why(e)),
+    }
+}
+
+fn show_i(r: i64!NumError) {
+    match r {
+        Ok(v) => print(v),
+        Err(e) => print(why(e)),
+    }
+}
+
+fn show_f(r: f64!NumError) {
+    match r {
+        Ok(v) => print(v),
+        Err(e) => print(why(e)),
+    }
+}
+
+// try passes a NumError on unchanged.
+fn sum_hex(a: string, b: string) -> u64!NumError {
+    return Ok((try str_to_u64_radix(a, 16)) + (try str_to_u64_radix(b, 16)));
+}
+
+fn main() {
+    show_u(str_to_u64("18446744073709551615"));
+    show_u(str_to_u64("18446744073709551616"));
+    show_u(str_to_u64("+7"));
+    show_u(str_to_u64("-7"));
+    show_i(str_to_i64("-9223372036854775808"));
+    show_i(str_to_i64("9223372036854775808"));
+    show_i(str_to_i64(""));
+    show_i(str_to_i64("-"));
+    show_i(str_to_i64(" 1"));
+    show_i(str_to_i64_radix("-ff", 16));
+    show_u(str_to_u64_radix("777", 8));
+    show_u(sum_hex("ff", "1"));
+    show_u(sum_hex("ff", "g"));
+    show_f(str_to_f64("2.5"));
+    show_f(str_to_f64("1e999"));
+    show_f(str_to_f64("inf"));
+    show_f(str_to_f64(""));
+    print((str_to_f64_ieee("-1e999") catch 0.0) < 0.0);   // true: -infinity
+
+    // The deprecated versions still work as before.
+    let old: ParsedI64 = parse_i64("12");
+    print(old.ok);
+    print(old.value);
+    let bad: ParsedU64 = parse_u64_radix("1", 99);       // ok = false, no panic
+    print(bad.ok);
+    let of: ParsedF64 = parse_f64("1e999");
+    print(of.ok);
+
+    let path: string = "/tmp/oc_std_error_unions.txt";
+    match file_write(path, "error unions") {
+        Ok(n) => print(n),                                // 12
+        Err(_) => print("write failed"),
+    }
+    let mut buf: [64]u8 = [0];
+    let n: usize = file_read(path, (&mut buf).as(*mut u8), 64) catch 0;
+    let text: string = string { ptr: (&buf).as(*u8), len: n };
+    print(text);
+    unlink_file(path);
+    match file_read("/nonexistent/oc/file", (&mut buf).as(*mut u8), 64) {
+        Ok(_) => print("read?"),
+        Err(e) => {
+            match e {
+                FsError.OpenFailed => print("open failed"),
+                _ => print("other error"),
+            }
+        }
+    }
+    print(read_file("/nonexistent/oc/file", (&mut buf).as(*mut u8), 64));   // -1
+}

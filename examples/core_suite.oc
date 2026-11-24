@@ -29,14 +29,18 @@ fn main() {
 
     // 3. Filesystem write & read
     let test_path: string = "/tmp/oc_test.txt"
-    let ok: bool = write_file(test_path, "Hello from oC stdlib!")
-    print("File written successfully:")
-    print(ok)
+    match file_write(test_path, "Hello from oC stdlib!") {
+        Ok(written) => {
+            print("Bytes written:")
+            print(written)
+        }
+        Err(_) => print("File write failed")
+    }
 
     let mut read_buf: [64]u8 = [0]
-    let bytes_read: i64 = read_file(test_path, (&mut read_buf).as(*mut u8), 63)
+    let bytes_read: usize = file_read(test_path, (&mut read_buf).as(*mut u8), 63) catch 0
     if bytes_read > 0 {
-        read_buf[bytes_read.as(usize)] = 0
+        read_buf[bytes_read] = 0
         print("Read from file:")
         print(read_buf)
     }

@@ -88,6 +88,7 @@ RUNTIME_TRAP=(
   "probe_float_cast_nan.oc"
   "probe_float_cast_huge.oc"
   "probe_float_cast_neg_u32.oc"
+  "probe_str_bad_radix.oc"
 )
 
 PASS=0
@@ -259,7 +260,7 @@ for t in "$ROOT"/tests/parity/*.oc; do
   rm -f /tmp/oc_parity_c /tmp/oc_parity_native /tmp/oc_parity_c.out /tmp/oc_parity_native.out
 done
 
-echo "=== Standard input: read_line, read_i64, read_int, read_all ==="
+echo "=== Standard input: stdin_line, stdin_i64, stdin_all (and the deprecated read_*) ==="
 WORK="$(mktemp -d)"
 { printf '  Ada \r\n-42\n7x\n-2147483649\nabc\r\n\n'; head -c 100000 /dev/zero | tr '\0' x; printf '\ntail1\ntail2'; } > "$WORK/input"
 head -c 2000 /dev/zero | tr '\0' y > "$WORK/long"
@@ -272,6 +273,16 @@ for backend in c native; do
   else
     echo "  [FAIL] read_input.oc (--backend $backend) printed:"
     "$WORK/read_input" < "$WORK/input" | head -20
+    exit 1
+  fi
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/stdin/stdin_union.oc" -o "$WORK/stdin_union" --backend "$backend" >/dev/null
+  if [ "$("$WORK/stdin_union" < "$WORK/input")" = "$(cat "$ROOT/tests/stdin/stdin_union.expected")" ]; then
+    echo "  [PASS] stdin_union.oc (--backend $backend): stdin_line, stdin_i64, stdin_all and each StdinError"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] stdin_union.oc (--backend $backend) printed:"
+    "$WORK/stdin_union" < "$WORK/input" | head -20
     exit 1
   fi
   TOTAL=$((TOTAL + 1))

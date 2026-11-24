@@ -1,4 +1,4 @@
-// Floating-point text: print_f64, f64_to_str and parse_f64.
+// Floating-point text: print_f64, f64_to_str and str_to_f64 (parse_f64 is deprecated).
 //
 // print_f64(x, digits) prints an f64 with up to 40 significant digits, in the format of C's
 // printf("%.<digits>g\n", x); f64_to_str gives the same text as a string. parse_f64 reads
@@ -457,6 +457,26 @@ fn fmt_word_is(s: string, word: string) -> bool {
     return true;
 }
 
+// str_to_f64 is parse_f64 as an error union: Err(NumError.Empty) for "", Overflow for a
+// value too large for f64, BadDigit for anything else it rejects (inf and nan included).
+// str_to_f64_ieee is parse_f64_ieee as an error union (it never gives Overflow).
+fn str_to_f64(s: string) -> f64!NumError {
+    if s.len == 0 { return Err(NumError.Empty); }
+    let r: ParsedF64 = parse_f64_text(s, false);
+    if !r.ok { return Err(NumError.BadDigit); }
+    if r.value > 1.7976931348623157e308 { return Err(NumError.Overflow); }
+    if r.value < -1.7976931348623157e308 { return Err(NumError.Overflow); }
+    return Ok(r.value);
+}
+
+fn str_to_f64_ieee(s: string) -> f64!NumError {
+    if s.len == 0 { return Err(NumError.Empty); }
+    let r: ParsedF64 = parse_f64_text(s, true);
+    if !r.ok { return Err(NumError.BadDigit); }
+    return Ok(r.value);
+}
+
+// Deprecated (kept for one release): use str_to_f64 / str_to_f64_ieee.
 fn parse_f64(s: string) -> ParsedF64 {
     let r: ParsedF64 = parse_f64_text(s, false);
     if !r.ok { return r; }

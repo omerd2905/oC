@@ -4,9 +4,9 @@ import "std/fs.oc"
 fn main() {
     print("=== oC Standard Library Foundation ===")
     let mut buf: [128]u8 = [0]
-    let bytes: i64 = read_file("/proc/version", (&mut buf).as(*mut u8), 127)
+    let bytes: usize = file_read("/proc/version", (&mut buf).as(*mut u8), 127) catch 0
     if bytes > 0 {
-        buf[bytes.as(usize)] = 0
+        buf[bytes] = 0
         print(buf)
     }
 }

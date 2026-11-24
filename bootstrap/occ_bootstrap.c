@@ -310,6 +310,10 @@ typedef struct CodeBuffer CodeBuffer;
 typedef struct LitByte LitByte;
 typedef struct NativeGen NativeGen;
 typedef struct ModuleLoader ModuleLoader;
+typedef struct __ErrorUnion__u64__u32 __ErrorUnion__u64__u32;
+typedef struct __ErrorUnion__i64__u32 __ErrorUnion__i64__u32;
+typedef struct __ErrorUnion__string__u32 __ErrorUnion__string__u32;
+typedef struct __ErrorUnion__usize__u32 __ErrorUnion__usize__u32;
 
 struct Arena {
     size_t offset;
@@ -555,6 +559,26 @@ struct ModuleLoader {
     uint32_t lines;
 };
 
+struct __ErrorUnion__u64__u32 {
+    uint64_t code;
+    uint64_t value;
+};
+
+struct __ErrorUnion__i64__u32 {
+    uint64_t code;
+    int64_t value;
+};
+
+struct __ErrorUnion__string__u32 {
+    uint64_t code;
+    oc_string value;
+};
+
+struct __ErrorUnion__usize__u32 {
+    uint64_t code;
+    size_t value;
+};
+
 Arena arena_init(size_t capacity);
 uint8_t* arena_alloc(Arena* arena, size_t size);
 void arena_reset(Arena* arena);
@@ -590,6 +614,15 @@ void strbuf_push(StrBuf* b, uint8_t c);
 void strbuf_push_str(StrBuf* b, oc_string s);
 oc_string strbuf_to_string(StrBuf* b);
 uint64_t digit_value(uint8_t c);
+void num_check_radix(uint32_t radix);
+__ErrorUnion__u64__u32 num_digits(oc_string s, uint64_t radix);
+__ErrorUnion__u64__u32 str_to_u64_radix(oc_string s, uint32_t radix);
+__ErrorUnion__i64__u32 str_to_i64_radix(oc_string s, uint32_t radix);
+__ErrorUnion__u64__u32 str_to_u64(oc_string s);
+__ErrorUnion__i64__u32 str_to_i64(oc_string s);
+ParsedU64 parsed_u64(__ErrorUnion__u64__u32 r);
+ParsedI64 parsed_i64(__ErrorUnion__i64__u32 r);
+bool radix_ok(uint64_t radix);
 ParsedU64 parse_digits_u64(oc_string s, uint64_t radix);
 ParsedU64 parse_u64_radix(oc_string s, uint32_t radix);
 ParsedI64 parse_i64_radix(oc_string s, uint32_t radix);
@@ -606,11 +639,16 @@ void print_int_text(bool neg, uint64_t mag, uint64_t radix);
 void print_u64(uint64_t n);
 void print_i64(int64_t n);
 void print_hex(uint64_t n);
+__ErrorUnion__string__u32 stdin_line(Arena* arena);
 ReadLine read_line(Arena* arena);
+__ErrorUnion__string__u32 stdin_all(Arena* arena);
 ReadAll read_all(Arena* arena);
+__ErrorUnion__i64__u32 stdin_i64(void);
 ParsedI64 read_i64(void);
 int32_t read_int(void);
 uint8_t* cstr_path(oc_string path, uint8_t* out_buf);
+__ErrorUnion__usize__u32 file_read(oc_string path, uint8_t* out_buf, size_t max_len);
+__ErrorUnion__usize__u32 file_write(oc_string path, oc_string content);
 int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len);
 bool write_file(oc_string path, oc_string content);
 bool chmod_exec(oc_string path);
@@ -1353,48 +1391,56 @@ uint64_t digit_value(uint8_t c) {
     return 99;
 }
 
-ParsedU64 parse_digits_u64(oc_string s, uint64_t radix) {
-    ParsedU64 fail = (ParsedU64){ .ok = false, .value = 0 };
-    if ((((s).len) == 0)) {
-    return fail;
-    }
-    if ((radix < 2)) {
-    return fail;
-    }
+void num_check_radix(uint32_t radix) {
+    bool bad = (radix < 2);
     if ((radix > 16)) {
-    return fail;
+    bad = true;
+    }
+    if (bad) {
+    sys_write(2, (((oc_string){ .ptr = (const uint8_t*)("panic: radix must be 2 to 16\012"), .len = sizeof("panic: radix must be 2 to 16\012") - 1 }).ptr), 29);
+    sys_exit(1);
+    }
+}
+
+__ErrorUnion__u64__u32 num_digits(oc_string s, uint64_t radix) {
+    if ((((s).len) == 0)) {
+    return (__ErrorUnion__u64__u32){ .code = __OC_ADD(({ __auto_type _v = (1); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     uint64_t v = 0;
     size_t i = 0;
     while ((i < ((s).len))) {
     uint64_t d = digit_value(__oc_index_str(s, i));
     if ((d >= radix)) {
-    return fail;
+    return (__ErrorUnion__u64__u32){ .code = __OC_ADD(({ __auto_type _v = (1); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     if ((v > __OC_DIV(__OC_SUB(18446744073709551615ULL, d), radix))) {
-    return fail;
+    return (__ErrorUnion__u64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     v = __OC_ADD(__OC_MUL(v, radix), d);
     i = __OC_ADD(i, 1);
     }
-    return (ParsedU64){ .ok = true, .value = v };
+    return (__ErrorUnion__u64__u32){ .code = 0, .value = v };
 }
 
-ParsedU64 parse_u64_radix(oc_string s, uint32_t radix) {
+__ErrorUnion__u64__u32 str_to_u64_radix(oc_string s, uint32_t radix) {
+    num_check_radix(radix);
+    if ((((s).len) == 0)) {
+    return (__ErrorUnion__u64__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
     oc_string digits = s;
-    if ((((s).len) > 0)) {
     if ((__oc_index_str(s, 0) == 43)) {
     digits = __oc_slice_str(s, 1, ((s).len));
     }
-    }
-    return parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    return num_digits(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
 }
 
-ParsedI64 parse_i64_radix(oc_string s, uint32_t radix) {
-    ParsedI64 fail = (ParsedI64){ .ok = false, .value = 0 };
+__ErrorUnion__i64__u32 str_to_i64_radix(oc_string s, uint32_t radix) {
+    num_check_radix(radix);
+    if ((((s).len) == 0)) {
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
     bool neg = false;
     oc_string digits = s;
-    if ((((s).len) > 0)) {
     if ((__oc_index_str(s, 0) == 45)) {
     neg = true;
     digits = __oc_slice_str(s, 1, ((s).len));
@@ -1404,24 +1450,86 @@ ParsedI64 parse_i64_radix(oc_string s, uint32_t radix) {
     digits = __oc_slice_str(s, 1, ((s).len));
     }
     }
+    __ErrorUnion__u64__u32 __err1 = num_digits(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    if ((((__err1).code) != 0)) {
+    return (__ErrorUnion__i64__u32){ .code = ((__err1).code) };
     }
-    ParsedU64 mag = parse_digits_u64(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
-    if ((!((mag).ok))) {
-    return fail;
-    }
+    uint64_t mag = ((__err1).value);
     if (neg) {
-    if ((((mag).value) > 9223372036854775808ULL)) {
+    if ((mag > 9223372036854775808ULL)) {
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
+    if ((mag == 9223372036854775808ULL)) {
+    return (__ErrorUnion__i64__u32){ .code = 0, .value = (-9223372036854775807LL - 1) };
+    }
+    return (__ErrorUnion__i64__u32){ .code = 0, .value = __OC_SUB(0, ({ __auto_type _v = (mag); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; })) };
+    }
+    if ((mag > 9223372036854775807)) {
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
+    return (__ErrorUnion__i64__u32){ .code = 0, .value = ({ __auto_type _v = (mag); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }) };
+}
+
+__ErrorUnion__u64__u32 str_to_u64(oc_string s) {
+    return str_to_u64_radix(s, 10);
+}
+
+__ErrorUnion__i64__u32 str_to_i64(oc_string s) {
+    return str_to_i64_radix(s, 10);
+}
+
+ParsedU64 parsed_u64(__ErrorUnion__u64__u32 r) {
+    ParsedU64 fail = (ParsedU64){ .ok = false, .value = 0 };
+    __ErrorUnion__u64__u32 __err2 = r;
+    if ((((__err2).code) == 0)) {
+    uint64_t v = ((__err2).value);
+    return (ParsedU64){ .ok = true, .value = v };
+    }
+    else {
     return fail;
     }
-    if ((((mag).value) == 9223372036854775808ULL)) {
-    return (ParsedI64){ .ok = true, .value = (-9223372036854775807LL - 1) };
+    return fail;
+}
+
+ParsedI64 parsed_i64(__ErrorUnion__i64__u32 r) {
+    ParsedI64 fail = (ParsedI64){ .ok = false, .value = 0 };
+    __ErrorUnion__i64__u32 __err3 = r;
+    if ((((__err3).code) == 0)) {
+    int64_t v = ((__err3).value);
+    return (ParsedI64){ .ok = true, .value = v };
     }
-    return (ParsedI64){ .ok = true, .value = __OC_SUB(0, ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; })) };
-    }
-    if ((((mag).value) > 9223372036854775807)) {
+    else {
     return fail;
     }
-    return (ParsedI64){ .ok = true, .value = ({ __auto_type _v = (((mag).value)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }) };
+    return fail;
+}
+
+bool radix_ok(uint64_t radix) {
+    if ((radix < 2)) {
+    return false;
+    }
+    return (radix <= 16);
+}
+
+ParsedU64 parse_digits_u64(oc_string s, uint64_t radix) {
+    if ((!radix_ok(radix))) {
+    return (ParsedU64){ .ok = false, .value = 0 };
+    }
+    return parsed_u64(num_digits(s, radix));
+}
+
+ParsedU64 parse_u64_radix(oc_string s, uint32_t radix) {
+    if ((!radix_ok(({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; })))) {
+    return (ParsedU64){ .ok = false, .value = 0 };
+    }
+    return parsed_u64(str_to_u64_radix(s, radix));
+}
+
+ParsedI64 parse_i64_radix(oc_string s, uint32_t radix) {
+    if ((!radix_ok(({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; })))) {
+    return (ParsedI64){ .ok = false, .value = 0 };
+    }
+    return parsed_i64(str_to_i64_radix(s, radix));
 }
 
 ParsedU64 parse_u64(oc_string s) {
@@ -1519,7 +1627,7 @@ void print_hex(uint64_t n) {
     print_int_text(false, n, 16);
 }
 
-ReadLine read_line(Arena* arena) {
+__ErrorUnion__string__u32 stdin_line(Arena* arena) {
     size_t cap = 128;
     uint8_t* buf = str_alloc(arena, cap);
     size_t len = 0;
@@ -1547,17 +1655,29 @@ ReadLine read_line(Arena* arena) {
     }
     }
     if ((!got)) {
-    return (ReadLine){ .ok = false, .line = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    return (__ErrorUnion__string__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     if ((len > 0)) {
     if ((__OC_AT((buf), (__OC_SUB(len, 1))) == 13)) {
     len = __OC_SUB(len, 1);
     }
     }
-    return (ReadLine){ .ok = true, .line = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+    return (__ErrorUnion__string__u32){ .code = 0, .value = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
 }
 
-ReadAll read_all(Arena* arena) {
+ReadLine read_line(Arena* arena) {
+    __ErrorUnion__string__u32 __err4 = stdin_line(arena);
+    if ((((__err4).code) == 0)) {
+    oc_string line = ((__err4).value);
+    return (ReadLine){ .ok = true, .line = line };
+    }
+    else {
+    return (ReadLine){ .ok = false, .line = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    return (ReadLine){ .ok = false, .line = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+}
+
+__ErrorUnion__string__u32 stdin_all(Arena* arena) {
     size_t cap = 4096;
     uint8_t* buf = str_alloc(arena, cap);
     size_t len = 0;
@@ -1569,7 +1689,7 @@ ReadAll read_all(Arena* arena) {
     }
     int64_t n = sys_read(0, ((uint8_t*)((buf + len))), __OC_SUB(cap, len));
     if ((n < 0)) {
-    return (ReadAll){ .ok = false, .data = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    return (__ErrorUnion__string__u32){ .code = __OC_ADD(({ __auto_type _v = (1); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     if ((n == 0)) {
     reading = false;
@@ -1578,10 +1698,22 @@ ReadAll read_all(Arena* arena) {
     len = __OC_ADD(len, ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
     }
     }
-    return (ReadAll){ .ok = true, .data = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
+    return (__ErrorUnion__string__u32){ .code = 0, .value = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = len } };
 }
 
-ParsedI64 read_i64(void) {
+ReadAll read_all(Arena* arena) {
+    __ErrorUnion__string__u32 __err5 = stdin_all(arena);
+    if ((((__err5).code) == 0)) {
+    oc_string data = ((__err5).value);
+    return (ReadAll){ .ok = true, .data = data };
+    }
+    else {
+    return (ReadAll){ .ok = false, .data = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    return (ReadAll){ .ok = false, .data = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+}
+
+__ErrorUnion__i64__u32 stdin_i64(void) {
     uint8_t buf[64] = {0};
     size_t len = 0;
     bool got = false;
@@ -1609,18 +1741,34 @@ ParsedI64 read_i64(void) {
     }
     }
     }
-    bool ok = got;
+    if ((!got)) {
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
     if (too_long) {
-    ok = false;
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
-    int64_t value = 0;
-    if (ok) {
     oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(buf)))), .len = 64 };
-    ParsedI64 r = parse_i64(trim(__oc_slice_str(all, 0, len)));
-    ok = ((r).ok);
-    value = ((r).value);
+    __ErrorUnion__i64__u32 __err6 = str_to_i64(trim(__oc_slice_str(all, 0, len)));
+    if ((((__err6).code) == 0)) {
+    int64_t v = ((__err6).value);
+    return (__ErrorUnion__i64__u32){ .code = 0, .value = v };
     }
-    return (ParsedI64){ .ok = ok, .value = value };
+    else {
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (3); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
+    return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (3); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+}
+
+ParsedI64 read_i64(void) {
+    __ErrorUnion__i64__u32 __err7 = stdin_i64();
+    if ((((__err7).code) == 0)) {
+    int64_t v = ((__err7).value);
+    return (ParsedI64){ .ok = true, .value = v };
+    }
+    else {
+    return (ParsedI64){ .ok = false, .value = 0 };
+    }
+    return (ParsedI64){ .ok = false, .value = 0 };
 }
 
 int32_t read_int(void) {
@@ -1651,28 +1799,57 @@ uint8_t* cstr_path(oc_string path, uint8_t* out_buf) {
     return ((uint8_t*)(out_buf));
 }
 
-int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
+__ErrorUnion__usize__u32 file_read(oc_string path, uint8_t* out_buf, size_t max_len) {
     uint8_t pbuf[4096] = {0};
     uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
     int32_t fd = sys_open(p, OC_O_SAFE_READ, 0);
     if ((fd < 0)) {
-    return (-1);
+    return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     int64_t n = sys_read(fd, out_buf, max_len);
     sys_close(fd);
-    return n;
+    if ((n < 0)) {
+    return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (1); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
+    return (__ErrorUnion__usize__u32){ .code = 0, .value = ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }) };
 }
 
-bool write_file(oc_string path, oc_string content) {
+__ErrorUnion__usize__u32 file_write(oc_string path, oc_string content) {
     uint8_t pbuf[4096] = {0};
     uint8_t* p = cstr_path(path, ((uint8_t*)((&(pbuf)))));
     int32_t fd = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE);
     if ((fd < 0)) {
-    return false;
+    return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
     }
     int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
     sys_close(fd);
-    return (n >= 0);
+    if ((n != ({ __auto_type _v = (((content).len)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))) {
+    return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), 1) };
+    }
+    return (__ErrorUnion__usize__u32){ .code = 0, .value = ((content).len) };
+}
+
+int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
+    __ErrorUnion__usize__u32 __err8 = file_read(path, out_buf, max_len);
+    if ((((__err8).code) == 0)) {
+    size_t n = ((__err8).value);
+    return ({ __auto_type _v = (n); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; });
+    }
+    else {
+    return (-1);
+    }
+    return (-1);
+}
+
+bool write_file(oc_string path, oc_string content) {
+    __ErrorUnion__usize__u32 __err9 = file_write(path, content);
+    if ((((__err9).code) == 0)) {
+    return true;
+    }
+    else {
+    return false;
+    }
+    return false;
 }
 
 bool chmod_exec(oc_string path) {

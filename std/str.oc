@@ -374,18 +374,16 @@ fn strbuf_to_string(b: *StrBuf) -> string {
 // Parsing and formatting integers
 //
 // Parsers take the whole string: an optional sign ('+', or '-' for signed types) and at
-// least one digit, nothing else (no spaces, prefixes or separators; trim first). Empty
-// input, any other character and a value that does not fit all give ok = false.
+// least one digit, nothing else (no spaces, prefixes or separators; trim first). They
+// return an error union: Err(NumError.Empty), Err(NumError.BadDigit) for any other
+// character, Err(NumError.Overflow) for a value that does not fit.
 // ---------------------------------------------------------------------------------------
 
-struct ParsedU64 {
-    ok: bool,
-    value: u64,
-}
-
-struct ParsedI64 {
-    ok: bool,
-    value: i64,
+// Why a number could not be parsed.
+enum NumError {
+    Empty,    // the string is empty
+    BadDigit, // a character that is not a digit of the radix (a sign alone, a space, ...)
+    Overflow, // the value does not fit the type
 }
 
 // Value of an ASCII digit in bases up to 16 ('a'-'f' and 'A'-'F' are 10-15), or 99.
@@ -396,53 +394,112 @@ fn digit_value(c: u8) -> u64 {
     return 99;
 }
 
+// A radix outside 2..16 is a bug in the caller, not bad input: it panics.
+fn num_check_radix(radix: u32) {
+    let mut bad: bool = radix < 2;
+    if radix > 16 { bad = true; }
+    if bad {
+        sys_write(2, "panic: radix must be 2 to 16\n".ptr, 29);
+        sys_exit(1);
+    }
+}
+
 // Digits only (no sign), base 2 to 16.
-fn parse_digits_u64(s: string, radix: u64) -> ParsedU64 {
-    let fail: ParsedU64 = ParsedU64 { ok: false, value: 0 };
-    if s.len == 0 { return fail; }
-    if radix < 2 { return fail; }
-    if radix > 16 { return fail; }
+fn num_digits(s: string, radix: u64) -> u64!NumError {
+    if s.len == 0 { return Err(NumError.BadDigit); } // a sign without digits
     let mut v: u64 = 0;
     let mut i: usize = 0;
     while i < s.len {
         let d: u64 = digit_value(s[i]);
-        if d >= radix { return fail; }
-        if v > (18446744073709551615 - d) / radix { return fail; } // would not fit
+        if d >= radix { return Err(NumError.BadDigit); }
+        if v > (18446744073709551615 - d) / radix { return Err(NumError.Overflow); }
         v = (v * radix) + d;
         i = i + 1;
     }
-    return ParsedU64 { ok: true, value: v };
+    return Ok(v);
+}
+
+fn str_to_u64_radix(s: string, radix: u32) -> u64!NumError {
+    num_check_radix(radix);
+    if s.len == 0 { return Err(NumError.Empty); }
+    let mut digits: string = s;
+    if s[0] == 43 { digits = s[1..s.len]; } // '+'
+    return num_digits(digits, radix.as(u64));
+}
+
+fn str_to_i64_radix(s: string, radix: u32) -> i64!NumError {
+    num_check_radix(radix);
+    if s.len == 0 { return Err(NumError.Empty); }
+    let mut neg: bool = false;
+    let mut digits: string = s;
+    if s[0] == 45 { // '-'
+        neg = true;
+        digits = s[1..s.len];
+    } else if s[0] == 43 {
+        digits = s[1..s.len];
+    }
+    let mag: u64 = try num_digits(digits, radix.as(u64));
+    if neg {
+        if mag > 9223372036854775808 { return Err(NumError.Overflow); }
+        if mag == 9223372036854775808 { return Ok(-9223372036854775808); }
+        return Ok(-(mag.as(i64)));
+    }
+    if mag > 9223372036854775807 { return Err(NumError.Overflow); }
+    return Ok(mag.as(i64));
+}
+
+fn str_to_u64(s: string) -> u64!NumError { return str_to_u64_radix(s, 10); }
+fn str_to_i64(s: string) -> i64!NumError { return str_to_i64_radix(s, 10); }
+
+// Deprecated (kept for one release): the same parsers with an `ok` flag that nothing forces
+// the caller to check. Use str_to_u64 / str_to_i64 (and the _radix versions) instead. A
+// radix outside 2..16 gives ok = false here instead of a panic.
+struct ParsedU64 {
+    ok: bool,
+    value: u64,
+}
+
+struct ParsedI64 {
+    ok: bool,
+    value: i64,
+}
+
+fn parsed_u64(r: u64!NumError) -> ParsedU64 {
+    let fail: ParsedU64 = ParsedU64 { ok: false, value: 0 };
+    match r {
+        Ok(v) => { return ParsedU64 { ok: true, value: v }; }
+        Err(_) => { return fail; }
+    }
+    return fail;
+}
+
+fn parsed_i64(r: i64!NumError) -> ParsedI64 {
+    let fail: ParsedI64 = ParsedI64 { ok: false, value: 0 };
+    match r {
+        Ok(v) => { return ParsedI64 { ok: true, value: v }; }
+        Err(_) => { return fail; }
+    }
+    return fail;
+}
+
+fn radix_ok(radix: u64) -> bool {
+    if radix < 2 { return false; }
+    return radix <= 16;
+}
+
+fn parse_digits_u64(s: string, radix: u64) -> ParsedU64 {
+    if !radix_ok(radix) { return ParsedU64 { ok: false, value: 0 }; }
+    return parsed_u64(num_digits(s, radix));
 }
 
 fn parse_u64_radix(s: string, radix: u32) -> ParsedU64 {
-    let mut digits: string = s;
-    if s.len > 0 {
-        if s[0] == 43 { digits = s[1..s.len]; } // '+'
-    }
-    return parse_digits_u64(digits, radix.as(u64));
+    if !radix_ok(radix.as(u64)) { return ParsedU64 { ok: false, value: 0 }; }
+    return parsed_u64(str_to_u64_radix(s, radix));
 }
 
 fn parse_i64_radix(s: string, radix: u32) -> ParsedI64 {
-    let fail: ParsedI64 = ParsedI64 { ok: false, value: 0 };
-    let mut neg: bool = false;
-    let mut digits: string = s;
-    if s.len > 0 {
-        if s[0] == 45 { // '-'
-            neg = true;
-            digits = s[1..s.len];
-        } else if s[0] == 43 {
-            digits = s[1..s.len];
-        }
-    }
-    let mag: ParsedU64 = parse_digits_u64(digits, radix.as(u64));
-    if !mag.ok { return fail; }
-    if neg {
-        if mag.value > 9223372036854775808 { return fail; }
-        if mag.value == 9223372036854775808 { return ParsedI64 { ok: true, value: -9223372036854775808 }; }
-        return ParsedI64 { ok: true, value: -(mag.value.as(i64)) };
-    }
-    if mag.value > 9223372036854775807 { return fail; }
-    return ParsedI64 { ok: true, value: mag.value.as(i64) };
+    if !radix_ok(radix.as(u64)) { return ParsedI64 { ok: false, value: 0 }; }
+    return parsed_i64(str_to_i64_radix(s, radix));
 }
 
 fn parse_u64(s: string) -> ParsedU64 { return parse_u64_radix(s, 10); }
