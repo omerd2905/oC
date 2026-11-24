@@ -1,0 +1,4 @@
+// An undeclared variable: the native backend used to read it as 0.
+fn main() {
+    print(nope + 1);
+}

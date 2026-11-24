@@ -62,6 +62,7 @@ COMPILE_REJECT=(
   "probe_union_ok_untyped.oc|probe_union_ok_untyped.oc:3:13: error: Ok(...) needs an error-union type (T!E) here"
   "probe_enum_mismatch.oc|probe_enum_mismatch.oc:8:18: error: expected E, found F"
   "probe_enum_number.oc|probe_enum_number.oc:5:16: error: values of E are written as E.Variant, not as numbers"
+  "probe_undefined_variable.oc|probe_undefined_variable.oc:3:11: error: undefined variable 'nope'"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"

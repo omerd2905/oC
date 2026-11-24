@@ -739,6 +739,7 @@ oc_string validator_stack_place_type(Validator* v, AstNode* expr);
 bool is_float_type_name(oc_string t);
 bool is_int_type_name(oc_string t);
 oc_string strip_ptr_type(oc_string t);
+AstNode* program_find_global(AstNode* program, oc_string name);
 AstNode* program_find_fn(AstNode* program, oc_string name);
 AstNode* validator_find_fn(Validator* v, oc_string name);
 bool is_builtin_fn(oc_string name);
@@ -4160,6 +4161,19 @@ oc_string strip_ptr_type(oc_string t) {
     return __oc_slice_str(t, 1, ((t).len));
 }
 
+AstNode* program_find_global(AstNode* program, oc_string name) {
+    AstNode* d = ((program)->left);
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_LET)) {
+    if (str_eq(((((d)->tok)).slice), name)) {
+    return d;
+    }
+    }
+    d = ((d)->next);
+    }
+    return ((AstNode*)(0));
+}
+
 AstNode* program_find_fn(AstNode* program, oc_string name) {
     AstNode* decl = ((program)->left);
     while ((decl != ((AstNode*)(0)))) {
@@ -5055,6 +5069,16 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     }
     }
     int32_t idx = validator_find_var(v, ((((expr)->tok)).slice));
+    if ((idx < 0)) {
+    if ((program_find_global(((v)->program), ((((expr)->tok)).slice)) == ((AstNode*)(0)))) {
+    print_src_loc(((v)->srcmap), ((expr)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: undefined variable '"), .len = sizeof("error: undefined variable '") - 1 });
+    print_str_raw(((((expr)->tok)).slice));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("'\012"), .len = sizeof("'\012") - 1 });
+    ((v)->has_error) = true;
+    return false;
+    }
+    }
     if ((idx >= 0)) {
     size_t i = ({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; });
     if (((__OC_AT((((v)->vars)), (i))).is_invalidated)) {
@@ -5727,6 +5751,14 @@ bool validate_stmt(Validator* v, AstNode* stmt) {
     return false;
     }
     oc_string src_name = contains_stack_ref(v, ((stmt)->left));
+    if ((((((stmt)->left))->tag) == NODE_CALL)) {
+    AstNode* callee = program_find_fn(((v)->program), ((((((stmt)->left))->tok)).slice));
+    if ((callee != ((AstNode*)(0)))) {
+    if (is_scalar_value_type(((callee)->type_name))) {
+    src_name = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    }
     if ((((src_name).len) > 0)) {
     print_err_ret_local(src_name);
     ((v)->has_error) = true;
