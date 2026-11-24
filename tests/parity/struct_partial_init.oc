@@ -1,0 +1,42 @@
+// Fields a struct literal leaves out are 0 on both backends, as in C. The native backend
+// used to leave whatever the stack held there (here, values from junk()).
+struct S {
+    a: i64,
+    b: i64,
+    c: i64,
+}
+
+struct Small {
+    flag: bool,
+    tag: u8,
+    n: u32,
+}
+
+fn junk() -> i64 {
+    let x: i64 = 123456;
+    let y: i64 = 654321;
+    let z: i64 = 999;
+    return x + y + z;
+}
+
+fn made() -> S {
+    return S { a: 1 };
+}
+
+fn main() {
+    print(junk());          // 778776
+    let s: S = S { b: 5 };
+    print(s.a);             // 0
+    print(s.c);             // 0
+    print(junk());          // 778776
+    let t: S = made();
+    print(t.b);             // 0
+    print(t.c);             // 0
+    let mut u: S = S { a: 7, b: 8, c: 9 };
+    u = S { c: 3 };
+    print(u.a);             // 0
+    print(u.c);             // 3
+    let m: Small = Small { n: 4 };
+    print(m.flag);          // false
+    print(m.tag);           // 0
+}

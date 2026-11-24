@@ -1388,6 +1388,13 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             ng_fail(ng, "native codegen error: a struct literal larger than 32 bytes can only initialize a variable directly");
         }
         buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 236); buf_append_u8(code, 32); // sub $32, %rsp
+        // Fields the literal leaves out are 0, as in C.
+        buf_append_u8(code, 72); buf_append_u8(code, 49); buf_append_u8(code, 192); // xor %rax, %rax
+        let mut zq: i32 = 0;
+        while zq < 32 {
+            ng_emit_store_disp(code, 0, 8, zq, true);
+            zq = zq + 8;
+        }
         let mut f: *mut AstNode = expr.left;
         while f != (0).as(*mut AstNode) {
             let f_off: i32 = ng_find_field_offset(ng, expr.tok.slice, f.tok.slice);
@@ -2490,6 +2497,17 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
             if stmt.left != (0).as(*mut AstNode) {
                 if stmt.left.tag == NODE_STRUCT_INIT {
+                    // Fields the literal leaves out are 0, as in C.
+                    buf_append_u8(code, 72); buf_append_u8(code, 49); buf_append_u8(code, 192); // xor %rax, %rax
+                    let mut zb: i32 = 0;
+                    while zb + 8 <= struct_sz {
+                        ng_emit_store_disp(code, 0, 8, base_off + zb, false);
+                        zb = zb + 8;
+                    }
+                    while zb < struct_sz {
+                        ng_emit_store_disp(code, 0, 1, base_off + zb, false);
+                        zb = zb + 1;
+                    }
                     let mut f: *mut AstNode = stmt.left.left;
                     while f != (0).as(*mut AstNode) {
                         let f_off: i32 = ng_find_field_offset(ng, t_name, f.tok.slice);

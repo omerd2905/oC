@@ -9999,6 +9999,14 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, 131);
     buf_append_u8(code, 236);
     buf_append_u8(code, 32);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 49);
+    buf_append_u8(code, 192);
+    int32_t zq = 0;
+    while ((zq < 32)) {
+    ng_emit_store_disp(code, 0, 8, zq, true);
+    zq = __OC_ADD(zq, 8);
+    }
     AstNode* f = ((expr)->left);
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, ((((expr)->tok)).slice), ((((f)->tok)).slice));
@@ -11328,6 +11336,18 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     }
     if ((((stmt)->left) != ((AstNode*)(0)))) {
     if ((((((stmt)->left))->tag) == NODE_STRUCT_INIT)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 49);
+    buf_append_u8(code, 192);
+    int32_t zb = 0;
+    while ((__OC_ADD(zb, 8) <= struct_sz)) {
+    ng_emit_store_disp(code, 0, 8, __OC_ADD(base_off, zb), false);
+    zb = __OC_ADD(zb, 8);
+    }
+    while ((zb < struct_sz)) {
+    ng_emit_store_disp(code, 0, 1, __OC_ADD(base_off, zb), false);
+    zb = __OC_ADD(zb, 1);
+    }
     AstNode* f = ((((stmt)->left))->left);
     while ((f != ((AstNode*)(0)))) {
     int32_t f_off = ng_find_field_offset(ng, t_name, ((((f)->tok)).slice));
