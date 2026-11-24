@@ -380,8 +380,9 @@ fn source_uses_floats(src: string) -> bool {
 }
 
 fn print_usage() {
-    print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap]");
+    print("Usage: occ [run|build] <input.oc> [-o <output>] [--backend c|native] [--target <target>] [-O1|-O2|-O3] [--emit-c <file.c>] [--fp-trap] [--arena-poison]");
     print("       --fp-trap: panic at the first float operation whose result is NaN or infinite (debugging aid; off by default)");
+    print("       --arena-poison: freed and reset arena memory becomes inaccessible, so a dangling access faults (testing aid)");
     print("       occ install | update | version | help   (also: --version, -v, --help, -h)");
     print("install: make 'occ' runnable by name (symlink in ~/.local/bin; user PATH on Windows). update: git pull + rebuild this install.");
     print("Environment: OC_HOME = directory containing std/ (default: next to the occ binary's bin/ directory)");
@@ -537,6 +538,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     let mut is_run: bool = false;
     let mut is_native: bool = false;
     let mut fp_trap: bool = false;
+    let mut arena_poison: bool = false;
     let mut target_name: string = "";
     let mut target_explicit: bool = false;
 
@@ -604,6 +606,8 @@ fn main(argc: i32, argv: **u8) -> i32 {
             opt_flag = " -O3";
         } else if str_eq(arg, "--fp-trap") {
             fp_trap = true;
+        } else if str_eq(arg, "--arena-poison") {
+            arena_poison = true;
         } else if str_eq(arg, "--help") {
             print_usage();
             return 0;
@@ -827,9 +831,9 @@ fn main(argc: i32, argv: **u8) -> i32 {
     if is_native {
         let mut ok_native: bool = false;
         if out_target == OC_TARGET_WINDOWS_X86_64 {
-            ok_native = emit_native_pe(prog, out_file_str, fp_trap, &loader.map);
+            ok_native = emit_native_pe(prog, out_file_str, fp_trap, arena_poison, &loader.map);
         } else {
-            ok_native = emit_native_elf(prog, out_file_str, fp_trap, &loader.map);
+            ok_native = emit_native_elf(prog, out_file_str, fp_trap, arena_poison, &loader.map);
         }
         buf_deinit(&mut combined_buf);
         if !ok_native {
@@ -841,6 +845,7 @@ fn main(argc: i32, argv: **u8) -> i32 {
     } else {
         let mut out: CodeBuffer = buf_init(4194304);
         out.fp_trap = fp_trap;
+        out.arena_poison = arena_poison;
         out.srcmap = &loader.map;
         codegen_program(prog, &mut out);
         buf_deinit(&mut combined_buf);

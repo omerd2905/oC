@@ -193,6 +193,27 @@ for backend in c native; do
   fi
 done
 
+echo "=== --arena-poison: memory given up by arena_reset faults when used ==="
+for backend in c native; do
+  TOTAL=$((TOTAL + 1))
+  "$OCC" build "$ROOT/tests/probes/probe_arena_poison.oc" -o /tmp/oc_probe_bin --backend "$backend" >/dev/null
+  plain="$(/tmp/oc_probe_bin 2>&1 | tr '\n' ' ')"
+  "$OCC" build "$ROOT/tests/probes/probe_arena_poison.oc" -o /tmp/oc_probe_bin --backend "$backend" --arena-poison >/dev/null
+  set +e
+  poisoned="$(/tmp/oc_probe_bin 2>/dev/null | tr '\n' ' ')"
+  RC=${PIPESTATUS[0]}
+  set -e
+  rm -f /tmp/oc_probe_bin
+  # 139 = killed by SIGSEGV: the dangling read hit the protected pages.
+  if [ "$plain" = "42 7 7 " ] && [ "$RC" -eq 139 ] && [ "$poisoned" = "42 7 " ]; then
+    echo "  [PASS] probe_arena_poison.oc (--backend $backend): reads reused memory by default, faults with --arena-poison"
+    PASS=$((PASS + 1))
+  else
+    echo "  [FAIL] probe_arena_poison.oc (--backend $backend): default printed '$plain'; --arena-poison exit $RC, printed '$poisoned'"
+    exit 1
+  fi
+done
+
 echo "=== Native backend limits: exceeding one is an error, not a wrong result ==="
 WORK="$(mktemp -d)"
 cp "$ROOT/tests/probes/probe_native_big_struct_return.oc" "$ROOT/tests/probes/probe_native_big_struct_copy.oc" "$WORK/"
