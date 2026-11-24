@@ -1660,6 +1660,7 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_STRING { return "string"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
+    if expr.tag == NODE_INT { return expr.type_name; } // "" until its context gives it one
     if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
     if expr.tag == NODE_IDENT {
         let idx: i32 = validator_find_var(v, expr.tok.slice);
@@ -1677,7 +1678,14 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; } // built-in
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; } // built-in
         let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
-        if callee == (0).as(*mut AstNode) { return ""; }
+        if callee == (0).as(*mut AstNode) {
+            if wrapping_op(expr.tok.slice).len > 0 {
+                if expr.left != (0).as(*mut AstNode) {
+                    return wrapping_result_type(validator_expr_type(v, expr.left), validator_expr_type(v, expr.left.next));
+                }
+            }
+            return "";
+        }
         return callee.type_name;
     }
     if expr.tag == NODE_UNARY {
@@ -1724,6 +1732,10 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         if str_eq(rt, "f64") { return rt; }
         if is_float_type_name(lt) { return lt; }
         if is_float_type_name(rt) { return rt; }
+        if is_shift_tok(op) { return lt; }
+        if is_int_type_name(lt) {
+            if is_int_type_name(rt) { return int_rank_type(lt, rt); }
+        }
         if lt.len > 0 { return lt; }
         return rt;
     }
@@ -1999,7 +2011,234 @@ fn validator_check_conversion(v: *mut Validator, target: string, value: *mut Ast
         return true;
     }
     if !validator_check_no_float_to_int(v, target, value, place) { return false; }
+    if !validator_check_int_narrowing(v, target, value, place) { return false; }
     return validator_check_lossless_to_float(v, target, value, place);
+}
+
+// Bits and signedness of an integer type: every value of `from` fits `to`.
+fn int_type_fits(from: string, to: string) -> bool {
+    if str_eq(from, to) { return true; }
+    let fb: i32 = int_type_bits(from);
+    let tb: i32 = int_type_bits(to);
+    let fu: bool = from[0] == 117;
+    let tu: bool = to[0] == 117;
+    if fu == tu { return fb <= tb; }
+    if fu { return fb < tb; } // unsigned into a wider signed type
+    return false;             // a signed value can be negative
+}
+
+fn int_type_bits(t: string) -> i32 {
+    if str_eq(t, "i8") { return 8; }
+    if str_eq(t, "u8") { return 8; }
+    if str_eq(t, "i16") { return 16; }
+    if str_eq(t, "u16") { return 16; }
+    if str_eq(t, "i32") { return 32; }
+    if str_eq(t, "u32") { return 32; }
+    return 64;
+}
+
+// An integer converts implicitly only into a type that holds every value of its type;
+// anything else is written .as(T), which panics when the value does not fit.
+fn validator_check_int_narrowing(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if !is_int_type_name(target) { return true; }
+    if value == (0).as(*mut AstNode) { return true; }
+    if is_untyped_int(value) { return bind_int_literals(v, value, target, place); }
+    let from: string = validator_expr_type(v, value);
+    if !is_int_type_name(from) { return true; }
+    if int_type_fits(from, target) { return true; }
+    print_src_loc(v.srcmap, value.tok);
+    print_str_raw("error: implicit conversion from ");
+    print_str_raw(from);
+    print_str_raw(" to ");
+    print_str_raw(target);
+    print_str_raw(" in ");
+    print_str_raw(place);
+    print_str_raw(" can lose information; write .as(");
+    print_str_raw(target);
+    print_str_raw("), which panics if the value does not fit\n");
+    v.has_error = true;
+    return false;
+}
+
+// The value of an integer literal ("1_000", "0xff", "0b101"); false if it exceeds u64.
+fn int_literal_mag(text: string, out: *mut u64) -> bool {
+    let mut base: u64 = 10;
+    let mut i: usize = 0;
+    if text.len > 1 {
+        if text[0] == 48 {
+            if text[1] == 120 { base = 16; i = 2; }  // 0x
+            if text[1] == 88 { base = 16; i = 2; }   // 0X
+            if text[1] == 98 { base = 2; i = 2; }    // 0b
+            if text[1] == 66 { base = 2; i = 2; }    // 0B
+        }
+    }
+    let mut val: u64 = 0;
+    while i < text.len {
+        let c: u8 = text[i];
+        if c != 95 { // '_'
+            let d: u64 = digit_value(c);
+            if val > (18446744073709551615 - d) / base { return false; }
+            val = val * base + d;
+        }
+        i = i + 1;
+    }
+    out[0] = val;
+    return true;
+}
+
+// Whether the literal `text` (negated when `negative`) is a value of integer type t.
+fn int_literal_fits(text: string, negative: bool, t: string) -> bool {
+    let mut mag: u64 = 0;
+    if !int_literal_mag(text, &mut mag) { return false; }
+    let bits: i32 = int_type_bits(t);
+    if t[0] == 117 { // unsigned
+        if negative { return mag == 0; }
+        if bits == 64 { return true; }
+        return mag < (1).as(u64) << bits.as(u64);
+    }
+    let half: u64 = (1).as(u64) << (bits - 1).as(u64);
+    if negative { return mag <= half; }
+    return mag < half;
+}
+
+// Gives the literals of an untyped integer expression type t (both backends compute it in
+// t), and the type of each ~, - and shift in it. Each literal must be a value of t.
+fn bind_int_literals(v: *mut Validator, expr: *mut AstNode, t: string, place: string) -> bool {
+    if expr == (0).as(*mut AstNode) { return true; }
+    let mut lit: *mut AstNode = (0).as(*mut AstNode);
+    let mut negative: bool = false;
+    if expr.tag == NODE_INT { lit = expr; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS {
+            if expr.left != (0).as(*mut AstNode) {
+                if expr.left.tag == NODE_INT {
+                    lit = expr.left;
+                    negative = true;
+                }
+            }
+        }
+    }
+    if lit != (0).as(*mut AstNode) {
+        if !int_literal_fits(lit.tok.slice, negative, t) {
+            print_src_loc(v.srcmap, lit.tok);
+            print_str_raw("error: integer literal ");
+            if negative { print_str_raw("-"); }
+            print_str_raw(lit.tok.slice);
+            print_str_raw(" in ");
+            print_str_raw(place);
+            print_str_raw(" does not fit ");
+            print_str_raw(t);
+            print_str_raw("\n");
+            v.has_error = true;
+            return false;
+        }
+    }
+    if expr.tag == NODE_INT {
+        expr.type_name = t;
+        return true;
+    }
+    if expr.tag == NODE_UNARY {
+        expr.type_name = t;
+        if negative { // -<literal>: checked above as a negative value
+            lit.type_name = t;
+            return true;
+        }
+        return bind_int_literals(v, expr.left, t, place);
+    }
+    if expr.tag == NODE_BINARY {
+        if !bind_int_literals(v, expr.left, t, place) { return false; }
+        if is_shift_tok(expr.tok.tag) {
+            expr.type_name = t; // the count keeps its own (i64) type
+            return true;
+        }
+        return bind_int_literals(v, expr.right, t, place);
+    }
+    return true;
+}
+
+fn is_shift_tok(tag: u32) -> bool {
+    if tag == TOK_SHL { return true; }
+    return tag == TOK_SHR;
+}
+
+// Result type of an operation on integer types a and b: the wider one; at equal width the
+// unsigned one. Both backends compute in it and check overflow at its width. A side with no
+// type yet (a literal) takes the other side's.
+fn int_rank_type(a: string, b: string) -> string {
+    if !is_int_type_name(a) { return b; }
+    if !is_int_type_name(b) { return a; }
+    let ab: i32 = int_type_bits(a);
+    let bb: i32 = int_type_bits(b);
+    if ab > bb { return a; }
+    if bb > ab { return b; }
+    if a[0] == 117 { return a; }
+    if b[0] == 117 { return b; }
+    return a;
+}
+
+// Type of wrapping_add/sub/mul(a, b) on operand types lt, rt (both backends use this): a
+// narrow (< 32-bit) operand decides the width, then 64-bit beats 32-bit and unsigned beats
+// signed. A side with no type (a literal) does not decide; with none at all it is i64.
+fn wrapping_result_type(lt: string, rt: string) -> string {
+    if is_int_type_name(lt) { if int_type_bits(lt) < 32 { return lt; } }
+    if is_int_type_name(rt) { if int_type_bits(rt) < 32 { return rt; } }
+    if !is_int_type_name(lt) {
+        if !is_int_type_name(rt) { return "i64"; }
+        return rt;
+    }
+    if !is_int_type_name(rt) { return lt; }
+    if int_type_bits(lt) == 64 {
+        if lt[0] == 117 { return lt; }
+        if int_type_bits(rt) == 64 { return rt; }
+        return lt;
+    }
+    if int_type_bits(rt) == 64 { return rt; }
+    if lt[0] == 117 { return lt; }
+    return rt;
+}
+
+// Type of an integer literal no context has typed: i64, or u64 above the i64 maximum.
+fn int_literal_default_type(text: string) -> string {
+    let mut mag: u64 = 0;
+    if !int_literal_mag(text, &mut mag) { return "u64"; }
+    if mag > 9223372036854775807 { return "u64"; }
+    return "i64";
+}
+
+// The type arithmetic on untyped literals has when no context types it.
+fn untyped_int_type(expr: *mut AstNode) -> string {
+    if expr == (0).as(*mut AstNode) { return "i64"; }
+    if expr.tag == NODE_INT { return int_literal_default_type(expr.tok.slice); }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_MINUS {
+            if expr.left != (0).as(*mut AstNode) {
+                if expr.left.tag == NODE_INT { return "i64"; } // -9223372036854775808 is i64 (a larger one fits nothing)
+            }
+        }
+        return untyped_int_type(expr.left);
+    }
+    if expr.tag == NODE_BINARY {
+        if is_shift_tok(expr.tok.tag) { return untyped_int_type(expr.left); }
+        return int_rank_type(untyped_int_type(expr.left), untyped_int_type(expr.right));
+    }
+    return "i64";
+}
+
+// An integer literal, or arithmetic on literals only: it takes the type of its place.
+fn is_untyped_int(expr: *mut AstNode) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_INT { return expr.type_name.len == 0; }
+    if expr.tag == NODE_UNARY {
+        if expr.tok.tag == TOK_BANG { return false; }
+        if expr.type_name.len > 0 { return false; } // already bound
+        return is_untyped_int(expr.left);
+    }
+    if expr.tag != NODE_BINARY { return false; }
+    if is_comparison_tok(expr.tok.tag) { return false; }
+    if expr.type_name.len > 0 { return false; }
+    if !is_untyped_int(expr.left) { return false; }
+    if is_shift_tok(expr.tok.tag) { return true; } // the count does not decide the type
+    return is_untyped_int(expr.right);
 }
 
 // `buf[a..b]` on a fixed-size array stored in a local variable (directly, or as a field or
@@ -2146,6 +2385,23 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
 
     if expr.tag == NODE_CALL {
+        if wrapping_op(expr.tok.slice).len > 0 {
+            // wrapping_add(x, 1): a literal argument takes the other argument's type.
+            if expr.left != (0).as(*mut AstNode) {
+                if expr.left.next != (0).as(*mut AstNode) {
+                    let a: *mut AstNode = expr.left;
+                    let b: *mut AstNode = expr.left.next;
+                    if is_untyped_int(a) {
+                        let bt: string = validator_expr_type(v, b);
+                        if is_int_type_name(bt) { if !bind_int_literals(v, a, bt, "a wrapping operation") { return false; } }
+                    }
+                    if is_untyped_int(b) {
+                        let at: string = validator_expr_type(v, a);
+                        if is_int_type_name(at) { if !bind_int_literals(v, b, at, "a wrapping operation") { return false; } }
+                    }
+                }
+            }
+        }
         let mut mut_arg: *mut AstNode = expr.left;
         while mut_arg != (0).as(*mut AstNode) {
             if mut_arg.tag == NODE_ADDRESS_OF {
@@ -2268,6 +2524,7 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
     }
     if expr.tag == NODE_BINARY {
         if !validator_check_operands(v, expr) { return false; }
+        if !validator_type_int_operands(v, expr) { return false; }
         let mut float_operand: bool = validator_is_float(v, expr.left);
         if validator_is_float(v, expr.right) { float_operand = true; }
         if float_operand {
@@ -2313,7 +2570,18 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
         if !check_expr_use(v, expr.left) { return false; }
         return check_expr_use(v, expr.right);
     }
-    if expr.tag == NODE_UNARY { return check_expr_use(v, expr.left); }
+    if expr.tag == NODE_UNARY {
+        if !check_expr_use(v, expr.left) { return false; }
+        let mut typed_op: bool = expr.tok.tag == TOK_TILDE;
+        if expr.tok.tag == TOK_MINUS { typed_op = is_int_type_name(validator_expr_type(v, expr.left)); }
+        if typed_op {
+            if expr.type_name.len == 0 { // ~x and -x keep the type of x (i64 for a literal)
+                expr.type_name = validator_expr_type(v, expr.left);
+                if expr.type_name.len == 0 { expr.type_name = untyped_int_type(expr.left); }
+            }
+        }
+        return true;
+    }
     if expr.tag == NODE_DEREF { return check_expr_use(v, expr.left); }
     if expr.tag == NODE_CAST {
         bind_to_target(expr.type_name, expr.left); // (0.1).as(f32) is the f32 nearest to 0.1
@@ -2337,6 +2605,28 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
             el = el.next;
         }
         return true;
+    }
+    return true;
+}
+
+// Integer operands of `left op right`: an untyped literal side takes the type of the typed
+// side (and must fit it), and a shift records the type of its left operand, which both
+// backends shift in (literals alone: i64).
+fn validator_type_int_operands(v: *mut Validator, expr: *mut AstNode) -> bool {
+    if is_shift_tok(expr.tok.tag) {
+        if expr.type_name.len == 0 {
+            expr.type_name = validator_expr_type(v, expr.left);
+            if !is_int_type_name(expr.type_name) { expr.type_name = untyped_int_type(expr.left); }
+        }
+        return true;
+    }
+    let lt: string = validator_expr_type(v, expr.left);
+    let rt: string = validator_expr_type(v, expr.right);
+    if is_untyped_int(expr.left) {
+        if is_int_type_name(rt) { return bind_int_literals(v, expr.left, rt, "an operation"); }
+    }
+    if is_untyped_int(expr.right) {
+        if is_int_type_name(lt) { return bind_int_literals(v, expr.right, lt, "an operation"); }
     }
     return true;
 }
@@ -2885,6 +3175,28 @@ fn validate_function(f: *mut AstNode, fx: *mut FnEffects, program: *mut AstNode,
     }
     if v.has_error {
         return false;
+    }
+    let typed: bool = bind_free_ints(&mut v, body_block.left);
+    return typed;
+}
+
+// Arithmetic on literals that no place or operand gave a type (print(3 * 4), a cast's
+// source, a condition) gets one type as a whole: u64 if a literal exceeds the i64 maximum,
+// else i64. Run after the function is checked, so every context has bound what it could.
+fn bind_free_ints(v: *mut Validator, n: *mut AstNode) -> bool {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        let mut ops: bool = cur.tag == NODE_BINARY;
+        if cur.tag == NODE_UNARY { ops = true; }
+        let mut free: bool = false;
+        if ops { free = is_untyped_int(cur); }
+        if free {
+            if !bind_int_literals(v, cur, untyped_int_type(cur), "an expression") { return false; }
+        } else {
+            if !bind_free_ints(v, cur.left) { return false; }
+            if !bind_free_ints(v, cur.right) { return false; }
+        }
+        cur = cur.next;
     }
     return true;
 }

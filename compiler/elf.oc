@@ -68,9 +68,9 @@ struct NativeGen {
     fn_ret_types: [1024]string,
     fn_count: usize,
 
-    fixup_offsets: [1024]usize,
-    fixup_names: [1024]string,
-    fixup_is_6byte: [1024]bool,
+    fixup_offsets: [4096]usize,
+    fixup_names: [4096]string,
+    fixup_is_6byte: [4096]bool,
     fixup_count: usize,
 
     data_reloc_code: [4096]usize,
@@ -161,13 +161,13 @@ fn ng_fail(ng: *mut NativeGen, msg: string) {
 }
 
 fn ng_add_fixup(ng: *mut NativeGen, code_off: usize, fn_name: string, is_6byte: bool) {
-    if ng.fixup_count < 1024 {
+    if ng.fixup_count < 4096 {
         ng.fixup_offsets[ng.fixup_count] = code_off;
         ng.fixup_names[ng.fixup_count] = fn_name;
         ng.fixup_is_6byte[ng.fixup_count] = is_6byte;
         ng.fixup_count = ng.fixup_count + 1;
     } else {
-        ng_fail(ng, "native codegen error: call fixup table full (1024)");
+        ng_fail(ng, "native codegen error: call fixup table full (4096)");
     }
 }
 
@@ -494,6 +494,11 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr.tag == NODE_SLICE { return "string"; }
     if expr.tag == NODE_BOOL { return "bool"; }
     if expr.tag == NODE_CAST { return expr.type_name; }
+    if expr.tag == NODE_INT {
+        if expr.type_name.len > 0 { return expr.type_name; } // its context's type
+        if str_eq(int_literal_default_type(expr.tok.slice), "u64") { return "u64"; }
+        return ""; // i64
+    }
     if expr.tag == NODE_STRUCT_INIT { return expr.tok.slice; }
     if expr.tag == NODE_FLOAT {
         if expr.type_name.len > 0 { return expr.type_name; } // f32 when the validator bound it
@@ -514,26 +519,13 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; }
         if wrapping_op(expr.tok.slice).len > 0 {
-            // Same rule as the C backend: a narrow (< 32-bit) operand decides the width, then
-            // 64-bit beats 32-bit and unsigned beats signed. Untyped literals do not decide.
             let mut lt: string = "";
             let mut rt: string = "";
             if expr.left != (0).as(*mut AstNode) {
                 lt = ng_expr_type(ng, expr.left);
                 rt = ng_expr_type(ng, expr.left.next);
             }
-            if ng_scalar_width(lt) < 4 { return lt; }
-            if ng_scalar_width(rt) < 4 { return rt; }
-            if lt.len == 0 { return rt; }
-            if rt.len == 0 { return lt; }
-            if ng_scalar_width(lt) == 8 {
-                if is_unsigned_type_name(lt) { return lt; }
-                if ng_scalar_width(rt) == 8 { return rt; }
-                return lt;
-            }
-            if ng_scalar_width(rt) == 8 { return rt; }
-            if is_unsigned_type_name(lt) { return lt; }
-            return rt;
+            return wrapping_result_type(lt, rt); // same rule as the validator and C backend
         }
         return ng_find_fn_ret_type(ng, expr.tok.slice);
     }
@@ -568,6 +560,9 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         return "i64";
     }
     if expr.tag == NODE_UNARY {
+        if expr.tok.tag != TOK_BANG {
+            if expr.type_name.len > 0 { return expr.type_name; } // the validator's (~x, -x)
+        }
         if expr.tok.tag == TOK_MINUS {
             let neg_t: string = ng_expr_type(ng, expr.left);
             if neg_t.len > 0 { return neg_t; }
@@ -584,6 +579,14 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         if float_t.len > 0 { return float_t; }
         let mut is_shift: bool = expr.tok.tag == TOK_SHL;
         if expr.tok.tag == TOK_SHR { is_shift = true; }
+        if is_shift {
+            if expr.type_name.len > 0 { return expr.type_name; } // the validator's: left operand
+            if lt.len > 0 { return lt; }
+            return "i64";
+        }
+        if is_int_type_name(lt) {
+            if is_int_type_name(rt) { return int_rank_type(lt, rt); } // same rule as the C backend
+        }
         if !is_shift {
             // The wider operand decides, as in C: 64-bit unsigned, then i64, then u32.
             let cl: i32 = ng_int_class(lt);
@@ -1930,6 +1933,52 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         buf_append_u8(code, 195); // mov %rax, %rbx
         buf_append_u8(code, 88); // pop %rax
 
+        // A 64-bit unsigned result with one signed operand (u64 - i64): the carry alone is
+        // wrong for a negative operand. Exactly as C's __builtin_*_overflow, the result must
+        // be the true value: overflow = CF xor sign(signed operand), and for signed - unsigned
+        // CF or sign(left).
+        let mut mixed: bool = false;
+        let mut left_signed: bool = false;
+        if !is_ptr_arith {
+            if is_uns {
+                if ng_scalar_width(res_type) == 8 {
+                    let rt0: string = ng_expr_type(ng, expr.right);
+                    if is_int_type_name(lt) { if lt[0] == 105 { mixed = true; left_signed = true; } } // 'i'
+                    if is_int_type_name(rt0) { if rt0[0] == 105 { mixed = true; } }
+                }
+            }
+        }
+        let mut is_addsub: bool = expr.tok.tag == TOK_PLUS;
+        if expr.tok.tag == TOK_MINUS { is_addsub = true; }
+        if mixed {
+            if is_addsub {
+                // %rdx = sign bit of the signed operand (before %rax is overwritten)
+                if left_signed {
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 194); // mov %rax, %rdx
+                } else {
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 218); // mov %rbx, %rdx
+                }
+                buf_append_u8(code, 72); buf_append_u8(code, 193); buf_append_u8(code, 234); buf_append_u8(code, 63); // shr $63, %rdx
+                if expr.tok.tag == TOK_PLUS {
+                    buf_append_u8(code, 72); buf_append_u8(code, 1); buf_append_u8(code, 216); // add %rbx, %rax
+                } else {
+                    buf_append_u8(code, 72); buf_append_u8(code, 41); buf_append_u8(code, 216); // sub %rbx, %rax
+                }
+                buf_append_u8(code, 15); buf_append_u8(code, 146); buf_append_u8(code, 193); // setc %cl
+                let mut or_sign: bool = false;
+                if expr.tok.tag == TOK_MINUS { or_sign = left_signed; }
+                if or_sign {
+                    buf_append_u8(code, 8); buf_append_u8(code, 209); // or %dl, %cl
+                } else {
+                    buf_append_u8(code, 48); buf_append_u8(code, 209); // xor %dl, %cl
+                }
+                ng_add_fixup(ng, code.len, "__trap_overflow", true);
+                buf_append_u8(code, 15); buf_append_u8(code, 133); // jnz
+                elf_append_u32(code, 0);
+                return;
+            }
+        }
+
         if expr.tok.tag == TOK_PLUS {
             buf_append_u8(code, 72);
             buf_append_u8(code, 1);
@@ -2137,12 +2186,24 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 216);
             return;
         }
+        let mut is_shift: bool = expr.tok.tag == TOK_SHL;
+        if expr.tok.tag == TOK_SHR { is_shift = true; }
+        if is_shift {
+            // A count of the type's width or more (or negative) panics, as on the C backend.
+            let mut width: i32 = 64;
+            if is_int_type_name(res_type) { width = int_type_bits(res_type); }
+            buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 251); buf_append_u8(code, width.as(u8)); // cmp $width, %rbx
+            ng_add_fixup(ng, code.len, "__trap_shift", true);
+            buf_append_u8(code, 15); buf_append_u8(code, 131); // jae (unsigned: also a negative count)
+            elf_append_u32(code, 0);
+        }
         if expr.tok.tag == TOK_SHL {
             buf_append_u8(code, 136);
             buf_append_u8(code, 217);
             buf_append_u8(code, 72);
             buf_append_u8(code, 211);
             buf_append_u8(code, 224);
+            ng_emit_truncate(code, res_type); // bits shifted out of a narrow type are dropped
             return;
         }
         if expr.tok.tag == TOK_SHR {
@@ -3775,7 +3836,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
 
     // Trap functions
     // Same panic texts as the C backend, so a trap reads the same whichever backend built it.
-    let mut traps: [7]string = [""];
+    let mut traps: [8]string = [""];
     traps[0] = "__trap_null_deref";
     traps[1] = "__trap_slice_bounds";
     traps[2] = "__trap_overflow";
@@ -3783,7 +3844,8 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     traps[4] = "__trap_cast_signed";
     traps[5] = "__trap_cast_unsigned";
     traps[6] = "__trap_fp";
-    let mut trap_msgs: [7]string = [""];
+    traps[7] = "__trap_shift";
+    let mut trap_msgs: [8]string = [""];
     trap_msgs[0] = "panic: null pointer dereference\n";
     trap_msgs[1] = "panic: slice index out of bounds\n";
     trap_msgs[2] = "panic: integer overflow\n";
@@ -3791,8 +3853,9 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     trap_msgs[4] = "panic: invalid signed cast\n";
     trap_msgs[5] = "panic: invalid unsigned cast\n";
     trap_msgs[6] = "panic: floating-point result is NaN or infinite at "; // + location from %rsi / %rdx
+    trap_msgs[7] = "panic: shift count out of range\n";
     let mut ti: usize = 0;
-    while ti < 7 {
+    while ti < 8 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;

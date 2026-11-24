@@ -1,0 +1,8 @@
+// The same for an argument: the C backend used to truncate, the native one to pass 300
+// into a u8.
+fn take(x: u8) -> u8 { return x; }
+
+fn main() {
+    let n: i32 = 300;
+    print(take(n));
+}

@@ -1,0 +1,5 @@
+// An integer literal must be a value of the type of its place (it used to wrap to 44).
+fn main() {
+    let x: u8 = 300;
+    print(x);
+}

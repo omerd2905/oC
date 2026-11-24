@@ -33,6 +33,7 @@ struct CodeBuffer {
     arena_poison: bool, // --arena-poison: sys_arena_poison() returns true
     srcmap: *SourceMap, // source locations for --fp-trap panics (null: line:col only)
     program: *mut AstNode, // for struct field types
+    lit64: bool, // inside arithmetic on untyped literals only: they are i64
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
@@ -63,6 +64,7 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         arena_poison: false,
         srcmap: (0).as(*SourceMap),
         program: (0).as(*mut AstNode),
+        lit64: false,
     };
 }
 
@@ -609,12 +611,67 @@ fn wrapping_op(fn_name: string) -> string {
     return "";
 }
 
+// A decimal literal above the i64 maximum (a u64 in oC).
+fn cg_int_literal_too_big(text: string) -> bool {
+    let mut mag: u64 = 0;
+    if !int_literal_mag(text, &mut mag) { return true; }
+    return mag > 9223372036854775807;
+}
+
+// The C type for the integer type the validator recorded on `expr`; "" if none.
+fn cg_int_c_type(expr: *mut AstNode) -> string {
+    if !is_int_type_name(expr.type_name) { return ""; }
+    return to_c_type(expr.type_name);
+}
+
 fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
     if expr == (0).as(*mut AstNode) {
         return;
     }
 
+    if !out.lit64 {
+        // Arithmetic on untyped literals only (print(3 * 2147483646), 1 << 40) is i64, as on
+        // the native backend; C would compute it in int.
+        let mut ops: bool = expr.tag == NODE_BINARY;
+        if expr.tag == NODE_UNARY { ops = true; }
+        if expr.tag == NODE_CALL {
+            if wrapping_op(expr.tok.slice).len > 0 {
+                if expr.left != (0).as(*mut AstNode) {
+                    if is_untyped_int(expr.left) { ops = is_untyped_int(expr.left.next); }
+                }
+            }
+        }
+        if ops {
+            if expr.tag == NODE_CALL {
+                out.lit64 = true;
+                codegen_expr(expr, out);
+                out.lit64 = false;
+                return;
+            }
+            if is_untyped_int(expr) {
+                out.lit64 = true;
+                codegen_expr(expr, out);
+                out.lit64 = false;
+                return;
+            }
+        }
+    }
+
     if expr.tag == NODE_INT {
+        // A literal the validator gave a type (from its place or the other operand) is
+        // computed in that type; C would give it int.
+        let mut lit_type: string = "";
+        if is_int_type_name(expr.type_name) {
+            lit_type = to_c_type(expr.type_name);
+        } else if out.lit64 {
+            lit_type = "int64_t";
+            if cg_int_literal_too_big(expr.tok.slice) { lit_type = "uint64_t"; }
+        }
+        if lit_type.len > 0 {
+            buf_append(out, "((");
+            buf_append(out, lit_type);
+            buf_append(out, ")");
+        }
         // `_` digit separators (1_000, 0b0010_1010) are oC syntax; C does not accept them.
         let lit_start: usize = out.len;
         let mut di: usize = 0;
@@ -648,6 +705,7 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             }
             if too_big { buf_append(out, "ULL"); }
         }
+        if lit_type.len > 0 { buf_append(out, ")"); }
         return;
     }
 
@@ -694,10 +752,31 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                     buf_append(out, "(-9223372036854775807LL - 1)");
                     return;
                 }
+                let neg_lit_t: string = cg_int_c_type(expr.left);
+                if neg_lit_t.len > 0 {
+                    // -2147483648 as i32: negate in 64 bits, then narrow (the value fits).
+                    buf_append(out, "((");
+                    buf_append(out, neg_lit_t);
+                    buf_append(out, ")(-(int64_t)");
+                    expr.left.type_name = ""; // plain digits, separators removed
+                    codegen_expr(expr.left, out);
+                    expr.left.type_name = expr.type_name;
+                    buf_append(out, "))");
+                    return;
+                }
             }
             if !is_literal {
                 // -x is 0 - x with the usual overflow check (-INT_MIN does not fit).
-                buf_append(out, "__OC_SUB(0, ");
+                let neg_t: string = cg_int_c_type(expr);
+                if neg_t.len > 0 {
+                    buf_append(out, "__OC_SUB((");
+                    buf_append(out, neg_t);
+                    buf_append(out, ")0, ");
+                } else {
+                    buf_append(out, "__OC_SUB((__typeof__(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, "))0, ");
+                }
                 codegen_expr(expr.left, out);
                 buf_append(out, ")");
                 return;
@@ -705,6 +784,15 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
         }
         if expr.tok.tag == TOK_TILDE {
             // ~x keeps the type of x (C would promote a u8 or u16 to int).
+            let t: string = cg_int_c_type(expr);
+            if t.len > 0 {
+                buf_append(out, "((");
+                buf_append(out, t);
+                buf_append(out, ")~(");
+                codegen_expr(expr.left, out);
+                buf_append(out, "))");
+                return;
+            }
             buf_append(out, "((__typeof__(");
             codegen_expr(expr.left, out);
             buf_append(out, "))~(");
@@ -1006,7 +1094,44 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
                     buf_append(out, ")");
                     return;
                 }
+                let mut bitwise: bool = expr.tok.tag == TOK_AMP;
+                if expr.tok.tag == TOK_PIPE { bitwise = true; }
+                if expr.tok.tag == TOK_CARET { bitwise = true; }
+                if bitwise {
+                    buf_append(out, "__OC_BIT(");
+                    codegen_expr(expr.left, out);
+                    buf_append(out, ", ");
+                    buf_append(out, expr.tok.slice);
+                    buf_append(out, ", ");
+                    codegen_expr(expr.right, out);
+                    buf_append(out, ")");
+                    return;
+                }
             }
+        }
+        if is_comparison_tok(expr.tok.tag) {
+            // Left operand first, as on the native backend (C leaves the order unspecified,
+            // which matters when both sides can panic).
+            buf_append(out, "__OC_SEQ(");
+            codegen_expr(expr.left, out);
+            buf_append(out, ", ");
+            buf_append(out, expr.tok.slice);
+            buf_append(out, ", ");
+            codegen_expr(expr.right, out);
+            buf_append(out, ")");
+            return;
+        }
+        let shift_t: string = cg_int_c_type(expr);
+        if shift_t.len > 0 {
+            // In the type of the left operand; a count of its width or more panics.
+            if expr.tok.tag == TOK_SHL { buf_append(out, "__OC_SHL("); } else { buf_append(out, "__OC_SHR("); }
+            buf_append(out, shift_t);
+            buf_append(out, ", ");
+            codegen_expr(expr.left, out);
+            buf_append(out, ", ");
+            codegen_expr(expr.right, out);
+            buf_append(out, ")");
+            return;
         }
         buf_append(out, "(");
         codegen_expr(expr.left, out);
@@ -1491,11 +1616,20 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "}\n\n");
 
     buf_append(out, "#define __oc_notnull(p) ({ __auto_type _p = (p); if (!_p) { fprintf(stderr, \"panic: null pointer dereference\\n\"); exit(1); } _p; })\n");
-    buf_append(out, "#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a / _b; })\n");
-    buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } _a % _b; })\n");
-    buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
-    buf_append(out, "#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a - _b))) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
-    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a * _b))) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    // The type of a + b, a - b, a * b: the wider operand's; at equal width the unsigned one.
+    // (The validator gives literals the other operand's type, so C's int never decides.)
+    buf_append(out, "#define __OC_RANK(a, b) __typeof__(__builtin_choose_expr(sizeof(a) > sizeof(b), (a), __builtin_choose_expr(sizeof(b) > sizeof(a), (b), __builtin_choose_expr((__typeof__(a))-1 > 0, (a), (b)))))\n");
+    buf_append(out, "#define __OC_SHL(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \"panic: shift count out of range\\n\"); exit(1); } (T)((uint64_t)_a << _b); })\n");
+    buf_append(out, "#define __OC_SHR(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \"panic: shift count out of range\\n\"); exit(1); } (T)(_a >> _b); })\n");
+    // / % & | ^ give a result of the same type as + - * (C would give a narrow one int).
+    // -128 / -1 in i8 does not fit: an overflow, as on the native backend.
+    buf_append(out, "#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } (__OC_RANK(_a, _b))(_a % _b); })\n");
+    buf_append(out, "#define __OC_SEQ(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); _a op _b; })\n");
+    buf_append(out, "#define __OC_BIT(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); (__OC_RANK(_a, _b))(_a op _b); })\n");
+    buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_SUB(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_sub_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_MUL(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_mul_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
     buf_append(out, "#define __OC_WRAP(op, a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __typeof__(__builtin_choose_expr(sizeof(_a) < 4, _a, __builtin_choose_expr(sizeof(_b) < 4, _b, _a + _b))) _r; (void)__builtin_##op##_overflow(_a, _b, &_r); _r; })\n\n");
 
     // Pre-populate struct field and function return type tables

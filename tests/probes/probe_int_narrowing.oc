@@ -1,0 +1,6 @@
+// An implicit conversion that can lose information is a compile error; .as(T) is checked.
+fn main() {
+    let total: i64 = 300;
+    let small: u8 = total;
+    print(small);
+}
