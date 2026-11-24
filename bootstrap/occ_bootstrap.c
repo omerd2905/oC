@@ -489,6 +489,7 @@ struct CodeBuffer {
     size_t flt_count;
     bool fp_trap;
     SourceMap* srcmap;
+    AstNode* program;
 };
 
 struct LitByte {
@@ -795,13 +796,14 @@ void emit_c_type(oc_string type_name, CodeBuffer* out);
 void buf_append_c_type(CodeBuffer* out, oc_string t);
 bool is_type_ptr(oc_string t);
 bool is_type_str(oc_string t);
+oc_string cg_var_type(CodeBuffer* out, oc_string name);
+oc_string cg_expr_type(AstNode* expr, CodeBuffer* out);
 bool is_expr_string(AstNode* expr, CodeBuffer* out);
 bool is_expr_pointer(AstNode* expr, CodeBuffer* out);
 bool is_float_type(oc_string t);
 void cg_flt_add(CodeBuffer* out, oc_string name, oc_string t);
 oc_string cg_flt_lookup(CodeBuffer* out, oc_string name);
 oc_string cg_elem_type(oc_string t);
-oc_string cg_var_type(CodeBuffer* out, oc_string name);
 oc_string cg_float_type(AstNode* expr, CodeBuffer* out);
 oc_string float_cast_lo(oc_string t);
 oc_string float_cast_hi(oc_string t);
@@ -886,6 +888,7 @@ void ng_emit_stderr_write(NativeGen* ng, CodeBuffer* code, bool is_win);
 void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t disp, bool at_rsp);
 void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp);
 oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx);
+bool ng_is_place(NativeGen* ng, AstNode* e);
 void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
 void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t);
 void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr);
@@ -7391,7 +7394,7 @@ bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m) {
 
 CodeBuffer buf_init(size_t capacity) {
     void* raw = sys_mmap(0, capacity, 3, 34, (-1), 0);
-    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0, .flt_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_count = 0, .fp_trap = false, .srcmap = ((SourceMap*)(0)) };
+    return (CodeBuffer){ .buffer = ((uint8_t*)(raw)), .len = 0, .capacity = capacity, .ptr_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_vars_count = 0, .str_vars = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_vars_count = 0, .ptr_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fields_count = 0, .str_fields = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fields_count = 0, .ptr_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .ptr_fns_count = 0, .str_fns = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .str_fns_count = 0, .var_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .var_types_len = 0, .flt_names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_types = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .flt_count = 0, .fp_trap = false, .srcmap = ((SourceMap*)(0)), .program = ((AstNode*)(0)) };
 }
 
 void buf_append_u8(CodeBuffer* buf, uint8_t byte) {
@@ -7786,6 +7789,71 @@ bool is_type_str(oc_string t) {
     return str_eq(t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 });
 }
 
+oc_string cg_expr_type(AstNode* expr, CodeBuffer* out) {
+    if ((expr == ((AstNode*)(0)))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_IDENT)) {
+    return cg_var_type(out, ((((expr)->tok)).slice));
+    }
+    if ((((expr)->tag) == NODE_CAST)) {
+    return ((expr)->type_name);
+    }
+    AstNode* d = ((AstNode*)(0));
+    if ((((out)->program) != ((AstNode*)(0)))) {
+    d = ((((out)->program))->left);
+    }
+    if ((((expr)->tag) == NODE_CALL)) {
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_FN)) {
+    if (str_eq(((((d)->tok)).slice), ((((expr)->tok)).slice))) {
+    return ((d)->type_name);
+    }
+    }
+    d = ((d)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string st = cg_expr_type(((expr)->left), out);
+    if ((((st).len) > 5)) {
+    if (str_eq(__oc_slice_str(st, 0, 5), (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 })) {
+    st = __oc_slice_str(st, 5, ((st).len));
+    }
+    }
+    if ((((st).len) > 1)) {
+    if ((__oc_index_str(st, 0) == 42)) {
+    st = __oc_slice_str(st, 1, ((st).len));
+    }
+    }
+    if (str_eq(st, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("*u8"), .len = sizeof("*u8") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    while ((d != ((AstNode*)(0)))) {
+    if ((((d)->tag) == NODE_STRUCT_DECL)) {
+    if (str_eq(((((d)->tok)).slice), st)) {
+    AstNode* f = ((d)->left);
+    while ((f != ((AstNode*)(0)))) {
+    if (str_eq(((((f)->tok)).slice), ((((expr)->tok)).slice))) {
+    return ((f)->type_name);
+    }
+    f = ((f)->next);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
+    d = ((d)->next);
+    }
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
 bool is_expr_string(AstNode* expr, CodeBuffer* out) {
     if ((expr == ((AstNode*)(0)))) {
     return false;
@@ -7808,6 +7876,10 @@ bool is_expr_string(AstNode* expr, CodeBuffer* out) {
     return false;
     }
     if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string ft = cg_expr_type(expr, out);
+    if ((((ft).len) > 0)) {
+    return is_type_str(ft);
+    }
     oc_string f = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->str_fields_count))) {
@@ -7846,6 +7918,10 @@ bool is_expr_pointer(AstNode* expr, CodeBuffer* out) {
     return is_type_ptr(((expr)->type_name));
     }
     if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string ft = cg_expr_type(expr, out);
+    if ((((ft).len) > 0)) {
+    return is_type_ptr(ft);
+    }
     oc_string f = ((((expr)->tok)).slice);
     size_t i = 0;
     while ((i < ((out)->ptr_fields_count))) {
@@ -8015,6 +8091,13 @@ oc_string cg_float_type(AstNode* expr, CodeBuffer* out) {
     return cg_flt_lookup(out, ((((expr)->tok)).slice));
     }
     if ((((expr)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string ft = cg_expr_type(expr, out);
+    if ((((ft).len) > 0)) {
+    if (is_float_type(ft)) {
+    return ft;
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
     return cg_flt_lookup(out, ((((expr)->tok)).slice));
     }
     bool via_elem = (((expr)->tag) == NODE_INDEX);
@@ -8949,6 +9032,7 @@ bool is_builtin_c_fn(oc_string fn_name) {
 }
 
 void codegen_program(AstNode* root, CodeBuffer* out) {
+    ((out)->program) = root;
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wmain\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wmain\042\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wdiscarded-qualifiers\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wdiscarded-qualifiers\042\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#pragma GCC diagnostic ignored \042-Wpointer-sign\042\012"), .len = sizeof("#pragma GCC diagnostic ignored \042-Wpointer-sign\042\012") - 1 });
@@ -10840,6 +10924,34 @@ oc_string ng_fn_param_type(NativeGen* ng, oc_string fn_name, size_t idx) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
+bool ng_is_place(NativeGen* ng, AstNode* e) {
+    if ((e == ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((((e)->tag) == NODE_IDENT)) {
+    return true;
+    }
+    if ((((e)->tag) == NODE_DEREF)) {
+    return true;
+    }
+    if ((((e)->tag) == NODE_INDEX)) {
+    return true;
+    }
+    if ((((e)->tag) == NODE_FIELD_ACCESS)) {
+    oc_string t = ng_expr_type(ng, ((e)->left));
+    if ((((t).len) > 0)) {
+    if ((__oc_index_str(t, 0) == 42)) {
+    return true;
+    }
+    if ((__oc_index_str(t, 0) == 38)) {
+    return true;
+    }
+    }
+    return ng_is_place(ng, ((e)->left));
+    }
+    return false;
+}
+
 void ng_emit_expr_as(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* expr, oc_string to_t) {
     ng_emit_expr(ng, code, data, expr);
     ng_emit_convert(ng, code, ng_expr_type(ng, expr), to_t);
@@ -11187,9 +11299,64 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     return;
     }
-    oc_string bt = ng_strip_ptr_type(ng_expr_type(ng, ((expr)->left)));
+    oc_string raw_bt = ng_expr_type(ng, ((expr)->left));
+    oc_string bt = ng_strip_ptr_type(raw_bt);
     oc_string ft = ng_find_field_type(ng, bt, ((((expr)->tok)).slice));
+    bool by_ptr = false;
+    if ((((raw_bt).len) > 0)) {
+    if ((__oc_index_str(raw_bt, 0) == 42)) {
+    by_ptr = true;
+    }
+    if ((__oc_index_str(raw_bt, 0) == 38)) {
+    by_ptr = true;
+    }
+    }
+    bool spilled = false;
+    if ((!by_ptr)) {
+    if ((!ng_is_place(ng, ((expr)->left)))) {
+    ng_emit_expr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, 65);
+    buf_append_u8(code, 80);
+    buf_append_u8(code, 81);
+    buf_append_u8(code, 82);
+    buf_append_u8(code, 80);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 137);
+    buf_append_u8(code, 224);
+    int32_t f_off = ng_find_field_offset(ng, bt, ((((expr)->tok)).slice));
+    if ((f_off != 0)) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 129);
+    buf_append_u8(code, 192);
+    elf_append_i32(code, f_off);
+    }
+    spilled = true;
+    }
+    }
+    if ((!spilled)) {
     ng_emit_lvalue_addr(ng, code, data, expr);
+    }
+    if (spilled) {
+    if (str_eq(ft, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 80);
+    buf_append_u8(code, 8);
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 139);
+    buf_append_u8(code, 0);
+    }
+    else {
+    if ((!ng_emit_load_struct_at_rax(ng, code, ft))) {
+    ng_emit_load_at_rax(code, ft, ng_field_width(ng, bt, ((((expr)->tok)).slice)));
+    }
+    }
+    buf_append_u8(code, 72);
+    buf_append_u8(code, 131);
+    buf_append_u8(code, 196);
+    buf_append_u8(code, 32);
+    return;
+    }
     if (str_eq(ft, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
     buf_append_u8(code, 72);
     buf_append_u8(code, 139);

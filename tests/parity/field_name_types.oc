@@ -1,0 +1,46 @@
+// Field access by the type of the struct actually used:
+// - two structs may give the same field name different types; the C backend took the
+//   first struct declaring the name (12 printed as 12.000000);
+// - a field of a struct returned by value (`make().x`) crashed the native backend, which
+//   asked for the address of a value that only exists in registers.
+struct Measured {
+    value: f64,
+    label: string,
+}
+
+struct Counted {
+    value: i64,
+    label: u64,
+}
+
+struct Inner { a: i32, b: f64 }
+struct Outer { tag: u8, inner: Inner }
+
+fn counted() -> Counted { return Counted { value: 7, label: 8 }; }
+fn make(n: i32) -> Outer { return Outer { tag: 3, inner: Inner { a: n, b: 1.5 } }; }
+fn measured() -> Measured { return Measured { value: 0.25, label: "quarter" }; }
+
+fn main() {
+    let m: Measured = Measured { value: 2.5, label: "two and a half" };
+    let c: Counted = Counted { value: 12, label: 34 };
+    print(m.value);
+    print(c.value);
+    print(m.label);
+    print(c.label);
+    let pc: *Counted = &c;
+    print(pc.value);
+    print(pc.label);
+    print(c.value + 1);
+
+    print(counted().value);
+    print(counted().label);
+    print(make(7).inner.a);
+    print(make(8).inner.b);
+    print(make(9).tag);
+    let i: Inner = make(10).inner;
+    print(i.a);
+    print(make(1).inner.a + make(2).inner.a);
+    print(measured().label);
+    print(measured().value);
+    print(measured().label.len);
+}
