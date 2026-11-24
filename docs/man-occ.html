@@ -259,7 +259,7 @@ All 4 suites completed successfully.</code></pre>
               <td><em>none</em></td>
               <td><em>Disabled</em></td>
               <td>
-                A testing aid for arena lifetimes: memory given up by <code>arena_reset</code> or <code>arena_deinit</code> is made inaccessible (<code>mprotect</code> / <code>VirtualProtect</code>) instead of being reused or unmapped, and a reset arena continues in a fresh mapping. A dangling pointer then faults (SIGSEGV, or an access violation on Windows) at its first use instead of silently reading reused bytes. Each reset costs a new mapping, so keep it out of release builds.
+                A testing aid for arena lifetimes: memory given up by <code>arena_reset</code> or <code>arena_deinit</code> is made inaccessible (<code>mprotect</code> / <code>VirtualProtect</code>) instead of being reused or unmapped, and a reset arena continues in a fresh mapping. A dangling pointer then faults (SIGSEGV, or an access violation on Windows) at its first use instead of silently reading reused bytes. Used by the fuzzer (<code>make fuzz</code>, <code>tools/fuzz</code>). Each reset costs a new mapping, so keep it out of release builds.
               </td>
             </tr>
             <tr>

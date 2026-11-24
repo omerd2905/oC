@@ -144,6 +144,17 @@ This runs:
 3. Standard library functional test suite.
 4. Compile-time exploit rejection suite and dual-backend runtime trap probes.
 
+### Fuzzing
+
+`make fuzz` (`tools/fuzz/run.py`, Python 3) checks the compiler against generated programs whose correct answer is known:
+
+- **Arena lifetimes:** random programs with arenas, helpers that allocate or reset, structs, arrays, branches and loops. Each is also run abstractly, so the fuzzer knows whether it is safe. An accepted unsafe program is a soundness hole; a rejected safe one a false positive. Every accepted program then runs with `--arena-poison` (memory given up by an arena faults when touched) on both backends and must print exactly the predicted output.
+- **Backend differential:** random integer, float, shift, cast, `wrapping_*` and string-escape expressions; the C and native backends must agree on output, panics and exit status.
+
+Findings are minimized to a few lines; fixed ones live in `tests/fuzz_regressions/` and run on every build. A nightly CI job runs 10,000 programs per mode with a fresh seed.
+
+What it found so far: three validator holes (a pointer refreshed in only one branch of an `if`, or in a loop that may not run, counted as valid afterwards; an array holding pointers from two arenas ignored the second), two false positives, and on the differential side integer rules that differed between backends (literal types, mixed widths, shifts, silent truncation on assignment) plus an undefined variable the native backend accepted. All are fixed. On 16,000 programs after the fixes (seed 777000): no holes, no backend differences, no faults; the only false positives are the documented one (an array or struct is tracked as a whole, so after one of its arenas is reset no element can be read): 84 of 3,030 safe programs, 2.8%.
+
 ### Compiling Programs
 
 ```bash
@@ -189,7 +200,8 @@ Timings depend on the machine and the compiler version: run `./benchmarks/run_be
 - `compiler/` - Compiler source code (lexer, parser, escape validator, C codegen, ELF/PE emitter, CLI driver).
 - `std/` - Standard library modules (`mem.oc`, `fs.oc`, `io.oc`, `net.oc`, `math.oc`, `os.oc`, `fmt.oc`, `str.oc`).
 - `examples/` - Example programs demonstrating arenas, slices, network sockets, and file I/O.
-- `tests/` - Probe test suite and exploit rejection cases.
+- `tests/` - Probe test suite, exploit rejection cases and fuzzer regressions.
+- `tools/fuzz/` - Program generators and the fuzzer driver (`make fuzz`).
 - `docs/` - HTML documentation and manual pages hosted on GitHub Pages.
 - `bootstrap/` - Single-file portable C source for bootstrapping on new machines.
 
