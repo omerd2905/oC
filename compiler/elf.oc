@@ -63,9 +63,9 @@ fn elf_patch_i32(buf: *mut CodeBuffer, offset: usize, v: i32) {
 }
 
 struct NativeGen {
-    fn_names: [256]string,
-    fn_offsets: [256]usize,
-    fn_ret_types: [256]string,
+    fn_names: [1024]string,
+    fn_offsets: [1024]usize,
+    fn_ret_types: [1024]string,
     fn_count: usize,
 
     fixup_offsets: [1024]usize,
@@ -88,15 +88,15 @@ struct NativeGen {
     curr_off: i32,
     scope_depth: i32,
 
-    struct_names: [64]string,
-    struct_sizes: [64]i32,
+    struct_names: [256]string,
+    struct_sizes: [256]i32,
     struct_count: usize,
 
-    field_struct: [256]string,
-    field_names: [256]string,
-    field_offsets: [256]i32,
-    field_types: [256]string,
-    field_packed: [256]bool,
+    field_struct: [1024]string,
+    field_names: [1024]string,
+    field_offsets: [1024]i32,
+    field_types: [1024]string,
+    field_packed: [1024]bool,
     field_count: usize,
 
     root: *mut AstNode,
@@ -3012,13 +3012,13 @@ fn ng_emit_store_param(code: *mut CodeBuffer, reg_idx: usize, total: usize, off:
 }
 
 fn ng_define_helper(ng: *mut NativeGen, has_offset: *mut bool, name: string, off: usize) {
-    if ng.fn_count < 256 {
+    if ng.fn_count < 1024 {
         ng.fn_names[ng.fn_count] = name;
         has_offset[ng.fn_count] = true;
         ng.fn_offsets[ng.fn_count] = off;
         ng.fn_count = ng.fn_count + 1;
     } else {
-        ng_fail(ng, "native codegen error: function table full (256)");
+        ng_fail(ng, "native codegen error: too many functions (1024)");
     }
 }
 
@@ -3416,21 +3416,25 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                         if sub_sz > 0 { f_sz = sub_sz; }
                     }
                 }
-                if ng.field_count < 256 {
+                if ng.field_count < 1024 {
                     ng.field_struct[ng.field_count] = s_name;
                     ng.field_names[ng.field_count] = sf.tok.slice;
                     ng.field_offsets[ng.field_count] = f_off;
                     ng.field_types[ng.field_count] = ft;
                     ng.field_packed[ng.field_count] = is_packed;
                     ng.field_count = ng.field_count + 1;
+                } else {
+                    ng_fail(ng, "native codegen error: too many struct fields in the program (1024)");
                 }
                 f_off = f_off + f_sz;
                 sf = sf.next;
             }
-            if ng.struct_count < 64 {
+            if ng.struct_count < 256 {
                 ng.struct_names[ng.struct_count] = s_name;
                 ng.struct_sizes[ng.struct_count] = f_off;
                 ng.struct_count = ng.struct_count + 1;
+            } else {
+                ng_fail(ng, "native codegen error: too many structs in the program (256)");
             }
         } else if scan.tag == NODE_LET {
             if scan.left != (0).as(*mut AstNode) {
@@ -3469,17 +3473,19 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                 }
             }
         } else if scan.tag == NODE_FN {
-            if ng.fn_count < 256 {
+            if ng.fn_count < 1024 {
                 ng.fn_names[ng.fn_count] = scan.tok.slice;
                 ng.fn_offsets[ng.fn_count] = 0;
                 ng.fn_ret_types[ng.fn_count] = scan.type_name;
                 ng.fn_count = ng.fn_count + 1;
+            } else {
+                ng_fail(ng, "native codegen error: too many functions (1024)");
             }
         }
         scan = scan.next;
     }
 
-    let mut fn_has_offset: [256]bool = [false];
+    let mut fn_has_offset: [1024]bool = [false];
 
     // 1. Emit _start (ELF entry 0x401000, PE entry RVA 0x1000)
     if is_win {
@@ -3523,7 +3529,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                     fi_idx = fi_idx + 1;
                 }
                 if !found_fn {
-                    if ng.fn_count < 256 {
+                    if ng.fn_count < 1024 {
                         ng.fn_names[ng.fn_count] = decl.tok.slice;
                         ng.fn_offsets[ng.fn_count] = code.len;
                         ng.fn_ret_types[ng.fn_count] = decl.type_name;

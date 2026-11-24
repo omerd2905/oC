@@ -198,7 +198,9 @@ WORK="$(mktemp -d)"
 cp "$ROOT/tests/probes/probe_native_big_struct_return.oc" "$ROOT/tests/probes/probe_native_big_struct_copy.oc" "$WORK/"
 { echo 'fn main() {'; for i in $(seq 0 299); do echo "    let v$i: i64 = $i;"; done; echo '    print(v256);'; echo '}'; } > "$WORK/vars.oc"
 { for i in $(seq 0 139); do echo "let C$i: i64 = $i;"; done; echo 'fn main() { print(C139); }'; } > "$WORK/consts.oc"
+{ for i in $(seq 0 256); do echo "struct S$i { x: i64 }"; done; echo 'fn main() { let s: S256 = S256 { x: 256 }; print(s.x); }'; } > "$WORK/structs.oc"
 for entry in "vars.oc|256|too many variables in one function (256)" "consts.oc|139|too many top-level constants (128)" \
+             "structs.oc|256|too many structs in the program (256)" \
              "probe_native_big_struct_return.oc|5|cannot return a struct larger than 32 bytes" \
              "probe_native_big_struct_copy.oc|5|struct larger than 32 bytes cannot be copied by value"; do
   IFS='|' read -r f want_c want_err <<<"$entry"
