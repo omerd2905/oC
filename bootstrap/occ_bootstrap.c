@@ -772,6 +772,9 @@ bool int_literal_converts_exactly(oc_string text, uint64_t bits);
 bool validator_check_lossless_to_float(Validator* v, oc_string target, AstNode* value, oc_string place);
 oc_string array_elem_type(oc_string t);
 bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, oc_string place);
+oc_string type_kind(oc_string t);
+oc_string validator_value_type(Validator* v, AstNode* value);
+bool validator_check_kind(Validator* v, oc_string target, AstNode* value, oc_string place);
 bool int_type_fits(oc_string from, oc_string to);
 int32_t int_type_bits(oc_string t);
 bool validator_check_int_narrowing(Validator* v, oc_string target, AstNode* value, oc_string place);
@@ -847,6 +850,7 @@ AstNode* dz_stmts(Errs* e, AstNode* first);
 AstNode* dz_stmt(Errs* e, AstNode* s);
 void dz_try(Errs* e, AstNode* t);
 void dz_catch(Errs* e, AstNode* c);
+oc_string dz_value_type(Errs* e, AstNode* x);
 void dz_expect(Errs* e, AstNode* x, oc_string expected);
 void dz_expr(Errs* e, AstNode* x);
 AstNode* dz_arm_body(Errs* e, AstNode* body);
@@ -4974,10 +4978,90 @@ bool validator_check_conversion(Validator* v, oc_string target, AstNode* value, 
     if ((!validator_check_no_float_to_int(v, target, value, place))) {
     return false;
     }
+    if ((!validator_check_kind(v, target, value, place))) {
+    return false;
+    }
     if ((!validator_check_int_narrowing(v, target, value, place))) {
     return false;
     }
     return validator_check_lossless_to_float(v, target, value, place);
+}
+
+oc_string type_kind(oc_string t) {
+    if (is_int_type_name(t)) {
+    return (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    }
+    if (is_float_type_name(t)) {
+    return (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 };
+    }
+    if (__OC_SEQ(((t).len), >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(t, 0), ==, ((uint8_t)42))) {
+    return (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
+    }
+    if (__OC_SEQ(__oc_index_str(t, 0), ==, ((uint8_t)38))) {
+    return (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 };
+    }
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string validator_value_type(Validator* v, AstNode* value) {
+    if (is_untyped_int(value)) {
+    return (oc_string){ .ptr = (const uint8_t*)("an integer"), .len = sizeof("an integer") - 1 };
+    }
+    return validator_expr_type(v, value);
+}
+
+bool validator_check_kind(Validator* v, oc_string target, AstNode* value, oc_string place) {
+    if (__OC_SEQ(value, ==, ((AstNode*)(0)))) {
+    return true;
+    }
+    oc_string tk = type_kind(target);
+    if (__OC_SEQ(((tk).len), ==, ((size_t)0))) {
+    return true;
+    }
+    oc_string vt = validator_value_type(v, value);
+    oc_string vk = type_kind(vt);
+    if (str_eq(vt, (oc_string){ .ptr = (const uint8_t*)("an integer"), .len = sizeof("an integer") - 1 })) {
+    vk = (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    }
+    if (__OC_SEQ(((vk).len), ==, ((size_t)0))) {
+    return true;
+    }
+    if (str_eq(tk, vk)) {
+    return true;
+    }
+    bool numbers = false;
+    if (str_eq(tk, (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 })) {
+    numbers = str_eq(vk, (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 });
+    }
+    if (str_eq(tk, (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 })) {
+    numbers = str_eq(vk, (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 });
+    }
+    if (numbers) {
+    return true;
+    }
+    if (str_eq(tk, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
+    if (str_eq(vk, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    return true;
+    }
+    }
+    print_src_loc(((v)->srcmap), ((value)->tok));
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("error: expected "), .len = sizeof("error: expected ") - 1 });
+    print_str_raw(target);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(", got "), .len = sizeof(", got ") - 1 });
+    print_str_raw(vt);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)(" in "), .len = sizeof(" in ") - 1 });
+    print_str_raw(place);
+    print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
+    ((v)->has_error) = true;
+    return false;
 }
 
 bool int_type_fits(oc_string from, oc_string to) {
@@ -7625,6 +7709,22 @@ AstNode* dz_union_lit(Errs* e, oc_string ut, AstNode* code, AstNode* value, Toke
     return s;
 }
 
+oc_string dz_value_type(Errs* e, AstNode* x) {
+    if (__OC_SEQ(((x)->tag), ==, NODE_STRING)) {
+    return (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 };
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_BOOL)) {
+    return (oc_string){ .ptr = (const uint8_t*)("bool"), .len = sizeof("bool") - 1 };
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_FLOAT)) {
+    return (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 };
+    }
+    if (is_untyped_int(x)) {
+    return (oc_string){ .ptr = (const uint8_t*)("an integer"), .len = sizeof("an integer") - 1 };
+    }
+    return dz_type_of(e, x);
+}
+
 void dz_expect(Errs* e, AstNode* x, oc_string expected) {
     if (__OC_SEQ(x, ==, ((AstNode*)(0)))) {
     return;
@@ -7661,6 +7761,48 @@ void dz_expect(Errs* e, AstNode* x, oc_string expected) {
     return;
     }
     AstNode* lit = ((AstNode*)(0));
+    oc_string want = dz_ok_type(expected);
+    oc_string want_t = dz_err_type(expected);
+    if (is_ok) {
+    want_t = want;
+    }
+    oc_string got = dz_value_type(e, arg);
+    bool wrong = false;
+    if (is_ok) {
+    oc_string wk = type_kind(want);
+    oc_string gk = type_kind(got);
+    if (str_eq(got, (oc_string){ .ptr = (const uint8_t*)("an integer"), .len = sizeof("an integer") - 1 })) {
+    gk = (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    }
+    if (__OC_SEQ(((wk).len), >, ((size_t)0))) {
+    if (__OC_SEQ(((gk).len), >, ((size_t)0))) {
+    wrong = (!str_eq(wk, gk));
+    if (str_eq(wk, (oc_string){ .ptr = (const uint8_t*)("float"), .len = sizeof("float") - 1 })) {
+    if (str_eq(gk, (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 })) {
+    wrong = false;
+    }
+    }
+    }
+    }
+    }
+    else {
+    if (__OC_SEQ(dz_enum(e, want_t), !=, ((AstNode*)(0)))) {
+    oc_string gk = type_kind(got);
+    if (str_eq(got, (oc_string){ .ptr = (const uint8_t*)("an integer"), .len = sizeof("an integer") - 1 })) {
+    gk = (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 };
+    }
+    if (__OC_SEQ(((gk).len), >, ((size_t)0))) {
+    wrong = true;
+    }
+    if (str_eq(gk, (oc_string){ .ptr = (const uint8_t*)("int"), .len = sizeof("int") - 1 })) {
+    wrong = false;
+    }
+    }
+    }
+    if (wrong) {
+    dz_err(e, ((arg)->tok), ((((x)->tok)).slice), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("(...) expects "), .len = sizeof("(...) expects ") - 1 }, want_t), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(", got "), .len = sizeof(", got ") - 1 }, got));
+    return;
+    }
     if (is_ok) {
     dz_expect(e, arg, dz_ok_type(expected));
     lit = dz_union_lit(e, expected, dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, ((x)->tok)), arg, ((x)->tok));

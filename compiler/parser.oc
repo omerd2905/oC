@@ -2017,8 +2017,59 @@ fn validator_check_conversion(v: *mut Validator, target: string, value: *mut Ast
         return true;
     }
     if !validator_check_no_float_to_int(v, target, value, place) { return false; }
+    if !validator_check_kind(v, target, value, place) { return false; }
     if !validator_check_int_narrowing(v, target, value, place) { return false; }
     return validator_check_lossless_to_float(v, target, value, place);
+}
+
+// The kind of a type for the checks below: "int", "float", "bool", "string", "ptr", or ""
+// (a struct, an array or a type the validator cannot see; not compared).
+fn type_kind(t: string) -> string {
+    if is_int_type_name(t) { return "int"; }
+    if is_float_type_name(t) { return "float"; }
+    if str_eq(t, "bool") { return "bool"; }
+    if str_eq(t, "string") { return "string"; }
+    if t.len > 0 {
+        if t[0] == 42 { return "ptr"; }
+        if t[0] == 38 { return "ptr"; }
+    }
+    return "";
+}
+
+// The type of a value as far as type_kind needs it, literals included ("" if unknown).
+fn validator_value_type(v: *mut Validator, value: *mut AstNode) -> string {
+    if is_untyped_int(value) { return "an integer"; }
+    return validator_expr_type(v, value);
+}
+
+// A value goes only where its kind fits: no string into an i64, no number into a bool or a
+// string (the C compiler rejected these with an error about the generated C; the native
+// backend compiled them into garbage). Numbers between integer and float types are checked
+// by the conversion rules instead.
+fn validator_check_kind(v: *mut Validator, target: string, value: *mut AstNode, place: string) -> bool {
+    if value == (0).as(*mut AstNode) { return true; }
+    let tk: string = type_kind(target);
+    if tk.len == 0 { return true; }
+    let vt: string = validator_value_type(v, value);
+    let mut vk: string = type_kind(vt);
+    if str_eq(vt, "an integer") { vk = "int"; }
+    if vk.len == 0 { return true; }
+    if str_eq(tk, vk) { return true; }
+    let mut numbers: bool = false;
+    if str_eq(tk, "int") { numbers = str_eq(vk, "float"); }
+    if str_eq(tk, "float") { numbers = str_eq(vk, "int"); }
+    if numbers { return true; }
+    if str_eq(tk, "ptr") { if str_eq(vk, "string") { return true; } }
+    print_src_loc(v.srcmap, value.tok);
+    print_str_raw("error: expected ");
+    print_str_raw(target);
+    print_str_raw(", got ");
+    print_str_raw(vt);
+    print_str_raw(" in ");
+    print_str_raw(place);
+    print_str_raw("\n");
+    v.has_error = true;
+    return false;
 }
 
 // Bits and signedness of an integer type: every value of `from` fits `to`.
@@ -4299,6 +4350,15 @@ extern fn dz_stmt(e: *mut Errs, s: *mut AstNode) -> *mut AstNode;
 extern fn dz_try(e: *mut Errs, t: *mut AstNode);
 extern fn dz_catch(e: *mut Errs, c: *mut AstNode);
 
+// The type of x for a mismatch message: literals by kind, everything else as dz_type_of.
+fn dz_value_type(e: *mut Errs, x: *mut AstNode) -> string {
+    if x.tag == NODE_STRING { return "string"; }
+    if x.tag == NODE_BOOL { return "bool"; }
+    if x.tag == NODE_FLOAT { return "f64"; }
+    if is_untyped_int(x) { return "an integer"; }
+    return dz_type_of(e, x);
+}
+
 // An expression in a place whose type is `expected`: Ok(..) / Err(..) become the union.
 fn dz_expect(e: *mut Errs, x: *mut AstNode, expected: string) {
     if x == (0).as(*mut AstNode) { return; }
@@ -4332,6 +4392,31 @@ fn dz_expect(e: *mut Errs, x: *mut AstNode, expected: string) {
                 return;
             }
             let mut lit: *mut AstNode = (0).as(*mut AstNode);
+            let want: string = dz_ok_type(expected);
+            let mut want_t: string = dz_err_type(expected);
+            if is_ok { want_t = want; }
+            let got: string = dz_value_type(e, arg);
+            let mut wrong: bool = false;
+            if is_ok {
+                let wk: string = type_kind(want);
+                let mut gk: string = type_kind(got);
+                if str_eq(got, "an integer") { gk = "int"; }
+                if wk.len > 0 {
+                    if gk.len > 0 {
+                        wrong = !str_eq(wk, gk);
+                        if str_eq(wk, "float") { if str_eq(gk, "int") { wrong = false; } }
+                    }
+                }
+            } else if dz_enum(e, want_t) != (0).as(*mut AstNode) {
+                let mut gk: string = type_kind(got);
+                if str_eq(got, "an integer") { gk = "int"; }
+                if gk.len > 0 { wrong = true; } // a number is caught below with its own message
+                if str_eq(gk, "int") { wrong = false; }
+            }
+            if wrong {
+                dz_err(e, arg.tok, x.tok.slice, str_concat(e.arena, "(...) expects ", want_t), str_concat(e.arena, ", got ", got));
+                return;
+            }
             if is_ok {
                 dz_expect(e, arg, dz_ok_type(expected));
                 lit = dz_union_lit(e, expected, dz_int(e, "0", x.tok), arg, x.tok);
