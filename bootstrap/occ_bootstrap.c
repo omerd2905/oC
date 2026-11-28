@@ -418,9 +418,11 @@ struct VarInfo {
 };
 
 struct FnEffects {
-    oc_string names[256];
-    uint8_t effects[4096];
-    bool borrows[4096];
+    oc_string names[1024];
+    uint8_t effects[16384];
+    bool borrows[16384];
+    bool views[16384];
+    bool outs[16384];
     size_t count;
 };
 
@@ -739,6 +741,15 @@ oc_string get_ident_name(AstNode* expr);
 oc_string get_underlying_address_of(AstNode* expr);
 uint8_t fx_param_effect(FnEffects* fx, oc_string fn_name, size_t idx);
 bool fx_param_borrows(FnEffects* fx, oc_string fn_name, size_t idx);
+int32_t fx_lookup(FnEffects* fx, oc_string fn_name);
+bool fx_param_views(FnEffects* fx, oc_string fn_name, size_t idx);
+bool fx_param_outs(FnEffects* fx, oc_string fn_name, size_t idx);
+bool fx_can_point(oc_string t);
+bool fx_view_of(FnEffects* fx, AstNode* expr, oc_string* names, size_t count);
+void fx_taint(FnEffects* fx, AstNode* n, oc_string* names, size_t* count);
+void fx_find_escapes(FnEffects* fx, AstNode* n, oc_string* names, size_t count, AstNode* params, bool* rets, bool* outs);
+oc_string fx_root_name(AstNode* e);
+bool fx_views(FnEffects* fx, size_t slot, AstNode* f, bool ret_ptr);
 oc_string get_arena_arg_name(AstNode* arg);
 bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, bool ret_ptr, AstNode* n);
 oc_string get_arena_source(FnEffects* fx, AstNode* expr);
@@ -3942,6 +3953,302 @@ bool fx_param_borrows(FnEffects* fx, oc_string fn_name, size_t idx) {
     return false;
 }
 
+int32_t fx_lookup(FnEffects* fx, oc_string fn_name) {
+    size_t i = ((size_t)0);
+    while (__OC_SEQ(i, <, ((fx)->count))) {
+    if (str_eq(__OC_AT((((fx)->names)), (i)), fn_name)) {
+    return ({ __auto_type _v = (i); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    }
+    i = __OC_ADD(i, ((size_t)1));
+    }
+    return ((int32_t)(-(int64_t)1));
+}
+
+bool fx_param_views(FnEffects* fx, oc_string fn_name, size_t idx) {
+    if (__OC_SEQ(idx, >=, ((size_t)16))) {
+    return false;
+    }
+    int32_t f = fx_lookup(fx, fn_name);
+    if (__OC_SEQ(f, <, ((int32_t)0))) {
+    return false;
+    }
+    return __OC_AT((((fx)->views)), (__OC_ADD(__OC_MUL(({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), ((size_t)16)), idx)));
+}
+
+bool fx_param_outs(FnEffects* fx, oc_string fn_name, size_t idx) {
+    if (__OC_SEQ(idx, >=, ((size_t)16))) {
+    return false;
+    }
+    int32_t f = fx_lookup(fx, fn_name);
+    if (__OC_SEQ(f, <, ((int32_t)0))) {
+    return false;
+    }
+    return __OC_AT((((fx)->outs)), (__OC_ADD(__OC_MUL(({ __auto_type _v = (f); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), ((size_t)16)), idx)));
+}
+
+bool fx_can_point(oc_string t) {
+    if (is_scalar_value_type(t)) {
+    return false;
+    }
+    if (is_float_type_name(t)) {
+    return false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("Arena"), .len = sizeof("Arena") - 1 })) {
+    return false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("*mut Arena"), .len = sizeof("*mut Arena") - 1 })) {
+    return false;
+    }
+    if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("*Arena"), .len = sizeof("*Arena") - 1 })) {
+    return false;
+    }
+    return __OC_SEQ(((t).len), >, ((size_t)0));
+}
+
+bool fx_view_of(FnEffects* fx, AstNode* expr, oc_string* names, size_t count) {
+    if (__OC_SEQ(expr, ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_IDENT)) {
+    size_t i = ((size_t)0);
+    while (__OC_SEQ(i, <, count)) {
+    if (str_eq(__OC_AT((names), (i)), ((((expr)->tok)).slice))) {
+    return true;
+    }
+    i = __OC_ADD(i, ((size_t)1));
+    }
+    return false;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_FIELD_ACCESS)) {
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
+    return false;
+    }
+    return fx_view_of(fx, ((expr)->left), names, count);
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_CALL)) {
+    AstNode* a = ((expr)->left);
+    size_t ai = ((size_t)0);
+    while (__OC_SEQ(a, !=, ((AstNode*)(0)))) {
+    if (fx_param_views(fx, ((((expr)->tok)).slice), ai)) {
+    if (fx_view_of(fx, a, names, count)) {
+    return true;
+    }
+    }
+    a = ((a)->next);
+    ai = __OC_ADD(ai, ((size_t)1));
+    }
+    return false;
+    }
+    bool list = __OC_SEQ(((expr)->tag), ==, NODE_STRUCT_INIT);
+    if (__OC_SEQ(((expr)->tag), ==, NODE_ARRAY_INIT)) {
+    list = true;
+    }
+    if (list) {
+    AstNode* el = ((expr)->left);
+    while (__OC_SEQ(el, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((expr)->tag), ==, NODE_STRUCT_INIT)) {
+    if (fx_view_of(fx, ((el)->left), names, count)) {
+    return true;
+    }
+    }
+    else {
+    if (fx_view_of(fx, el, names, count)) {
+    return true;
+    }
+    }
+    el = ((el)->next);
+    }
+    return false;
+    }
+    bool passes = __OC_SEQ(((expr)->tag), ==, NODE_SLICE);
+    if (__OC_SEQ(((expr)->tag), ==, NODE_CAST)) {
+    passes = true;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_INDEX)) {
+    passes = true;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_ADDRESS_OF)) {
+    passes = true;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_DEREF)) {
+    passes = true;
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_UNARY)) {
+    passes = true;
+    }
+    if (passes) {
+    return fx_view_of(fx, ((expr)->left), names, count);
+    }
+    if (__OC_SEQ(((expr)->tag), ==, NODE_BINARY)) {
+    if (is_comparison_tok(((((expr)->tok)).tag))) {
+    return false;
+    }
+    if (fx_view_of(fx, ((expr)->left), names, count)) {
+    return true;
+    }
+    return fx_view_of(fx, ((expr)->right), names, count);
+    }
+    return false;
+}
+
+void fx_taint(FnEffects* fx, AstNode* n, oc_string* names, size_t* count) {
+    AstNode* cur = n;
+    while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
+    oc_string lhs = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    AstNode* rhs = ((AstNode*)(0));
+    oc_string lhs_t = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if (__OC_SEQ(((cur)->tag), ==, NODE_LET)) {
+    lhs = ((((cur)->tok)).slice);
+    lhs_t = ((cur)->type_name);
+    rhs = ((cur)->left);
+    }
+    if (__OC_SEQ(((cur)->tag), ==, NODE_ASSIGN)) {
+    if (__OC_SEQ(((cur)->left), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((cur)->left))->tag), ==, NODE_IDENT)) {
+    lhs = ((((((cur)->left))->tok)).slice);
+    }
+    }
+    rhs = ((cur)->right);
+    }
+    if (__OC_SEQ(((lhs).len), >, ((size_t)0))) {
+    bool scalar = is_scalar_value_type(lhs_t);
+    if (is_float_type_name(lhs_t)) {
+    scalar = true;
+    }
+    if ((!scalar)) {
+    if (fx_view_of(fx, rhs, ((oc_string*)(names)), __OC_AT((count), (0)))) {
+    bool known = false;
+    size_t i = ((size_t)0);
+    while (__OC_SEQ(i, <, __OC_AT((count), (0)))) {
+    if (str_eq(__OC_AT((names), (i)), lhs)) {
+    known = true;
+    }
+    i = __OC_ADD(i, ((size_t)1));
+    }
+    if ((!known)) {
+    if (__OC_SEQ(__OC_AT((count), (0)), <, ((size_t)64))) {
+    __OC_AT((names), (__OC_AT((count), (0)))) = lhs;
+    __OC_AT((count), (0)) = __OC_ADD(__OC_AT((count), (0)), ((size_t)1));
+    }
+    }
+    }
+    }
+    }
+    fx_taint(fx, ((cur)->left), names, count);
+    fx_taint(fx, ((cur)->right), names, count);
+    cur = ((cur)->next);
+    }
+}
+
+void fx_find_escapes(FnEffects* fx, AstNode* n, oc_string* names, size_t count, AstNode* params, bool* rets, bool* outs) {
+    AstNode* cur = n;
+    while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((cur)->tag), ==, NODE_RETURN)) {
+    if (fx_view_of(fx, ((cur)->left), names, count)) {
+    __OC_AT((rets), (0)) = true;
+    }
+    }
+    if (__OC_SEQ(((cur)->tag), ==, NODE_ASSIGN)) {
+    if (__OC_SEQ(((cur)->left), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((cur)->left))->tag), !=, NODE_IDENT)) {
+    oc_string target = fx_root_name(((cur)->left));
+    if (fx_view_of(fx, ((cur)->right), names, count)) {
+    AstNode* prm = params;
+    size_t pi = ((size_t)0);
+    while (__OC_SEQ(prm, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(pi, <, ((size_t)16))) {
+    if (str_eq(((((prm)->tok)).slice), target)) {
+    if (starts_with(((prm)->type_name), (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    __OC_AT((outs), (pi)) = true;
+    }
+    }
+    }
+    prm = ((prm)->next);
+    pi = __OC_ADD(pi, ((size_t)1));
+    }
+    }
+    }
+    }
+    }
+    fx_find_escapes(fx, ((cur)->left), names, count, params, rets, outs);
+    fx_find_escapes(fx, ((cur)->right), names, count, params, rets, outs);
+    cur = ((cur)->next);
+    }
+}
+
+oc_string fx_root_name(AstNode* e) {
+    AstNode* cur = e;
+    while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((cur)->tag), ==, NODE_IDENT)) {
+    return ((((cur)->tok)).slice);
+    }
+    bool step = __OC_SEQ(((cur)->tag), ==, NODE_FIELD_ACCESS);
+    if (__OC_SEQ(((cur)->tag), ==, NODE_INDEX)) {
+    step = true;
+    }
+    if (__OC_SEQ(((cur)->tag), ==, NODE_DEREF)) {
+    step = true;
+    }
+    if (__OC_SEQ(((cur)->tag), ==, NODE_ADDRESS_OF)) {
+    step = true;
+    }
+    if (__OC_SEQ(((cur)->tag), ==, NODE_CAST)) {
+    step = true;
+    }
+    if ((!step)) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    cur = ((cur)->left);
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+bool fx_views(FnEffects* fx, size_t slot, AstNode* f, bool ret_ptr) {
+    bool changed = false;
+    AstNode* prm = ((f)->left);
+    size_t n = ((size_t)0);
+    while (__OC_SEQ(prm, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(n, <, ((size_t)16))) {
+    if (fx_can_point(((prm)->type_name))) {
+    oc_string names[64] = {0};
+    __OC_AT((names), (0)) = ((((prm)->tok)).slice);
+    size_t count = ((size_t)1);
+    size_t before = ((size_t)0);
+    while (__OC_SEQ(before, !=, count)) {
+    before = count;
+    fx_taint(fx, ((f)->right), ((oc_string*)((&(names)))), (&(count)));
+    }
+    bool rets[1] = {0};
+    bool outs[16] = {0};
+    fx_find_escapes(fx, ((f)->right), ((oc_string*)((&(names)))), count, ((f)->left), ((bool*)((&(rets)))), ((bool*)((&(outs)))));
+    if (ret_ptr) {
+    if (__OC_AT((rets), (0))) {
+    if ((!__OC_AT((((fx)->views)), (__OC_ADD(__OC_MUL(slot, ((size_t)16)), n))))) {
+    __OC_AT((((fx)->views)), (__OC_ADD(__OC_MUL(slot, ((size_t)16)), n))) = true;
+    changed = true;
+    }
+    }
+    }
+    size_t m = ((size_t)0);
+    while (__OC_SEQ(m, <, ((size_t)16))) {
+    if (__OC_AT((outs), (m))) {
+    if (__OC_SEQ(m, !=, n)) {
+    if ((!__OC_AT((((fx)->outs)), (__OC_ADD(__OC_MUL(slot, ((size_t)16)), m))))) {
+    __OC_AT((((fx)->outs)), (__OC_ADD(__OC_MUL(slot, ((size_t)16)), m))) = true;
+    changed = true;
+    }
+    }
+    }
+    m = __OC_ADD(m, ((size_t)1));
+    }
+    }
+    }
+    prm = ((prm)->next);
+    n = __OC_ADD(n, ((size_t)1));
+    }
+    return changed;
+}
+
 oc_string get_arena_arg_name(AstNode* arg) {
     oc_string u = get_underlying_address_of(arg);
     if (__OC_SEQ(((u).len), >, ((size_t)0))) {
@@ -4035,6 +4342,19 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     oc_string direct = get_arena_source(((v)->fx), expr);
+    if (__OC_SEQ(((expr)->tag), ==, NODE_CALL)) {
+    oc_string all = direct;
+    AstNode* a = ((expr)->left);
+    size_t ai = ((size_t)0);
+    while (__OC_SEQ(a, !=, ((AstNode*)(0)))) {
+    if (fx_param_views(((v)->fx), ((((expr)->tok)).slice), ai)) {
+    all = arena_list_union(v, all, get_expr_arena_borrow(v, a));
+    }
+    a = ((a)->next);
+    ai = __OC_ADD(ai, ((size_t)1));
+    }
+    return all;
+    }
     if (__OC_SEQ(((direct).len), >, ((size_t)0))) {
     return direct;
     }
@@ -5624,6 +5944,26 @@ bool check_expr_use(Validator* v, AstNode* expr) {
     }
     }
     }
+    AstNode* out_arg = ((expr)->left);
+    size_t oi = ((size_t)0);
+    while (__OC_SEQ(out_arg, !=, ((AstNode*)(0)))) {
+    if (fx_param_outs(((v)->fx), ((((expr)->tok)).slice), oi)) {
+    oc_string tgt_name = fx_root_name(out_arg);
+    int32_t tgt_idx = validator_find_var(v, tgt_name);
+    if (__OC_SEQ(tgt_idx, >=, ((int32_t)0))) {
+    AstNode* src = ((expr)->left);
+    while (__OC_SEQ(src, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(src, !=, out_arg)) {
+    oc_string b = get_expr_arena_borrow(v, src);
+    ((__OC_AT((((v)->vars)), (({ __auto_type _v = (tgt_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena) = arena_list_union(v, ((__OC_AT((((v)->vars)), (({ __auto_type _v = (tgt_idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })))).borrowed_from_arena), b);
+    }
+    src = ((src)->next);
+    }
+    }
+    }
+    out_arg = ((out_arg)->next);
+    oi = __OC_ADD(oi, ((size_t)1));
+    }
     AstNode* mut_arg = ((expr)->left);
     while (__OC_SEQ(mut_arg, !=, ((AstNode*)(0)))) {
     if (__OC_SEQ(((mut_arg)->tag), ==, NODE_ADDRESS_OF)) {
@@ -6518,14 +6858,18 @@ bool validate_program(AstNode* root, SourceMap* m, Generics* g) {
     }
     top = ((top)->next);
     }
-    FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { ((uint8_t)0) }, .borrows = { false }, .count = ((size_t)0) };
+    FnEffects fx = (FnEffects){ .names = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } }, .effects = { ((uint8_t)0) }, .borrows = { false }, .views = { false }, .outs = { false }, .count = ((size_t)0) };
     AstNode* decl = ((root)->left);
     while (__OC_SEQ(decl, !=, ((AstNode*)(0)))) {
     if (__OC_SEQ(((decl)->tag), ==, NODE_FN)) {
     if (__OC_SEQ(((decl)->right), !=, ((AstNode*)(0)))) {
-    if (__OC_SEQ(((fx).count), <, ((size_t)256))) {
+    if (__OC_SEQ(((fx).count), <, ((size_t)1024))) {
     __OC_AT((((fx).names)), (((fx).count))) = ((((decl)->tok)).slice);
     ((fx).count) = __OC_ADD(((fx).count), ((size_t)1));
+    }
+    else {
+    fwrite("security error: validator function summary capacity (1024) exceeded", 1, sizeof("security error: validator function summary capacity (1024) exceeded") - 1, stdout); fputc('\n', stdout);
+    return false;
     }
     }
     }
@@ -6539,12 +6883,18 @@ bool validate_program(AstNode* root, SourceMap* m, Generics* g) {
     while (__OC_SEQ(decl, !=, ((AstNode*)(0)))) {
     if (__OC_SEQ(((decl)->tag), ==, NODE_FN)) {
     if (__OC_SEQ(((decl)->right), !=, ((AstNode*)(0)))) {
-    if (__OC_SEQ(slot, <, ((size_t)256))) {
+    if (__OC_SEQ(slot, <, ((size_t)1024))) {
     bool ret_ptr = __OC_SEQ(((((decl)->type_name)).len), >, ((size_t)0));
     if (is_scalar_value_type(((decl)->type_name))) {
     ret_ptr = false;
     }
+    if (is_float_type_name(((decl)->type_name))) {
+    ret_ptr = false;
+    }
     if (fx_scan((&(fx)), slot, ((decl)->left), ret_ptr, ((decl)->right))) {
+    changed = true;
+    }
+    if (fx_views((&(fx)), slot, decl, ret_ptr)) {
     changed = true;
     }
     }

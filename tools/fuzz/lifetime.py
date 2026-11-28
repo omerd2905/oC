@@ -82,6 +82,13 @@ class LetArr(Stmt):
     def render(self, ind): return [ind + "let mut %s: [2]*mut u8 = [%s, %s];" % (self.r, self.cells[0], self.cells[1])]
 
 
+class LetView(Stmt):
+    """let mut v: string = fz_view(src);  a view of src (its first byte), not a copy: it lives
+    exactly as long as src's arena."""
+    def __init__(self, v, src): self.v, self.src = v, src
+    def render(self, ind): return [ind + "let mut %s: string = fz_view(%s);" % (self.v, self.src)]
+
+
 class LetStrArr(Stmt):
     """let mut q: [2]string = [s0, s1];  (strings that may come from different arenas)"""
     def __init__(self, q, cells): self.q, self.cells = q, cells
@@ -173,6 +180,7 @@ HELPERS = {
     "fz_str": 'fn fz_str(a: *mut Arena, x: string) -> string {\n    return str_concat(a, x, "+");\n}',
     "fz_first": "fn fz_first(h: *FzHolder) -> u8 {\n    return h.p[0];\n}",
     "fz_len": "fn fz_len(s: string) -> usize {\n    return s.len;\n}",
+    "fz_view": "fn fz_view(s: string) -> string {\n    return s[0..1];\n}",
     "fz_total": "fn fz_total(ws: []string) -> usize {\n    let mut n: usize = 0;\n    let mut i: usize = 0;\n"
                 "    while i < ws.len {\n        n = n + ws[i].len;\n        i = i + 1;\n    }\n    return n;\n}",
     "fz_firsts": "fn fz_firsts(ws: [2]string) -> string {\n    return ws[0];\n}",
@@ -194,6 +202,8 @@ def render(body):
     holder = False
     for s in walk(body):
         for name in (getattr(s, "via", None), "fz_reset_if" if isinstance(s, Reset) and s.cond else None):
+            if isinstance(s, LetView) and name is None:
+                used.add("fz_view")
             if isinstance(s, UseArr) and name == s.via:
                 used.add(name)
                 continue
@@ -285,6 +295,10 @@ def step(s, st, static, trace):
         for i, c in enumerate(s.cells):
             st.use(c)
             st.cells["%s[%d]" % (s.r, i)] = st.cells[c]
+    elif isinstance(s, LetView):
+        a, epoch, content = st.cells[s.src]
+        st.use(s.src)
+        st.cells[s.v] = (a, epoch, content[:1])
     elif isinstance(s, LetStrArr):
         for i, c in enumerate(s.cells):
             st.use(c)
@@ -460,7 +474,7 @@ class Gen:
             if top:
                 choices += ["ptr", "str"]
                 if self.phase != "A":
-                    choices += ["holder", "array", "strarray", "strarray", "str"]
+                    choices += ["holder", "array", "strarray", "strarray", "str", "view", "view"]
             if self.phase != "A":
                 choices += ["store"]
             if self.phase == "C" and depth < 2:
@@ -473,6 +487,16 @@ class Gen:
 
     def gen_ptr(self, depth): return self.new_ptr()
     def gen_str(self, depth): return self.new_str()
+
+    def gen_view(self, depth):
+        src = self.pick_cell("str")
+        if src is None or "." in src or "[" in src:
+            return None
+        v = self.name("s")
+        self.arena_of[v] = self.arena_of[src]
+        if src in self.valid:
+            self.valid[v] = "str"
+        return LetView(v, src)
 
     def gen_strarray(self, depth):
         a, b = self.pick_cell("str"), self.pick_cell("str")
