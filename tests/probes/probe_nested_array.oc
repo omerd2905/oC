@@ -1,0 +1,5 @@
+// Arrays of arrays are rejected until both backends lay them out (natively grid[1] read 0).
+fn main() {
+    let grid: [2][2]u8 = [[1, 2], [5, 6]];
+    print(grid[1][0]);
+}

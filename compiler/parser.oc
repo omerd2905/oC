@@ -4394,13 +4394,18 @@ fn dz_expr(e: *mut Errs, x: *mut AstNode) {
             dz_expect(e, x, "");
             return;
         }
-        let f: *mut AstNode = program_find_fn(e.root, x.tok.slice);
+        let f: *mut AstNode = dz_find_fn(e, x.tok.slice);
         let mut prm: *mut AstNode = (0).as(*mut AstNode);
         if f != (0).as(*mut AstNode) { prm = f.left; }
         let mut a: *mut AstNode = x.left;
         while a != (0).as(*mut AstNode) {
             if prm != (0).as(*mut AstNode) {
-                dz_expect(e, a, prm.type_name);
+                if starts_with(prm.tok.slice, "__arg_") {
+                    dz_expr(e, a);
+                    dz_pass_array(e, a, prm.type_name[1..prm.type_name.len]);
+                } else {
+                    dz_expect(e, a, prm.type_name);
+                }
                 prm = prm.next;
             } else {
                 dz_expr(e, a);
@@ -4776,6 +4781,21 @@ fn dz_type(e: *mut Errs, t: string) -> string {
     return gx_done(u);
 }
 
+// "[2][3]u8" (also behind a pointer): an array whose elements are arrays.
+fn dz_has_nested_array(t: string) -> bool {
+    let mut i: usize = 0;
+    while i + 1 < t.len {
+        if t[i] == 93 { // ']'
+            if t[i + 1] == 91 { // '['
+                // the outer bracket must be an array length, not a slice "[]"
+                if i > 0 { if t[i - 1] != 91 { return true; } }
+            }
+        }
+        i = i + 1;
+    }
+    return false;
+}
+
 fn dz_types(e: *mut Errs, n: *mut AstNode) {
     let mut cur: *mut AstNode = n;
     while cur != (0).as(*mut AstNode) {
@@ -4783,11 +4803,98 @@ fn dz_types(e: *mut Errs, n: *mut AstNode) {
             let mut is_type: bool = cur.tag != NODE_ADDRESS_OF;
             if cur.tag == NODE_FLOAT { is_type = false; }
             if cur.tag == NODE_STRUCT_DECL { is_type = false; } // "packed"
-            if is_type { cur.type_name = dz_type(e, cur.type_name); }
+            if is_type {
+                if dz_has_nested_array(cur.type_name) {
+                    // shortcut: neither backend lays out [N][M]T yet; reject instead of miscompiling.
+                    dz_err(e, cur.tok, "arrays of arrays (", cur.type_name, ") are not supported yet; use a struct holding the inner array, or one array of N * M elements");
+                }
+                cur.type_name = dz_type(e, cur.type_name);
+            }
         }
         dz_types(e, cur.left);
         dz_types(e, cur.right);
         cur = cur.next;
+    }
+}
+
+// A function, ordinary or generic, named `name`; null if none.
+fn dz_find_fn(e: *mut Errs, name: string) -> *mut AstNode {
+    let mut d: *mut AstNode = e.root.left;
+    while d != (0).as(*mut AstNode) {
+        if d.tag == NODE_FN {
+            if str_eq(d.tok.slice, name) { return d; }
+        }
+        if d.tag == NODE_GENERIC {
+            if d.right != (0).as(*mut AstNode) {
+                if d.right.tag == NODE_FN {
+                    if str_eq(d.right.tok.slice, name) { return d.right; }
+                }
+            }
+        }
+        d = d.next;
+    }
+    return (0).as(*mut AstNode);
+}
+
+// A fixed-size array type "[N]T" (not a slice "[]T").
+fn dz_is_array_type(t: string) -> bool {
+    if t.len < 3 { return false; }
+    if t[0] != 91 { return false; }
+    return t[1] != 93;
+}
+
+// An array passed by value, `f(a)`, is passed as `f(&a)`; the callee copies it on entry (see
+// dz_lower_array_params). Anything that is not a place is first stored in a temporary.
+fn dz_pass_array(e: *mut Errs, a: *mut AstNode, arr_t: string) {
+    let at: Token = a.tok;
+    let inner: *mut AstNode = ast_alloc_node(e.arena, a.tag, a.tok);
+    inner.type_name = a.type_name;
+    inner.left = a.left;
+    inner.right = a.right;
+    let mut place: bool = a.tag == NODE_IDENT;
+    if a.tag == NODE_FIELD_ACCESS { place = true; }
+    if a.tag == NODE_INDEX { place = true; }
+    if place {
+        a.left = inner;
+    } else {
+        let tmp: string = dz_tmp(e);
+        e.pre = dz_append(e.pre, dz_let(e, tmp, arr_t, inner, false, at));
+        a.left = dz_ident(e, tmp, at);
+    }
+    a.tag = NODE_ADDRESS_OF;
+    a.type_name = "";
+    a.right = (0).as(*mut AstNode);
+}
+
+// fn f(a: [N]T) receives the address of the caller's array and copies it first:
+// fn f(__arg_a: *[N]T) { let a: [N]T = *__arg_a; ... }. Neither backend can pass an array
+// itself (C has no array values; the native backend passes at most 6 words in registers).
+// An array return type is an error.
+fn dz_lower_array_params(e: *mut Errs, f: *mut AstNode) {
+    if dz_is_array_type(f.type_name) {
+        dz_err(e, f.tok, "a function cannot return an array (", f.type_name, "); return a struct that holds it, or fill one passed as *mut [N]T");
+    }
+    if f.right == (0).as(*mut AstNode) { return; }
+    let mut copies: *mut AstNode = (0).as(*mut AstNode);
+    let mut p: *mut AstNode = f.left;
+    while p != (0).as(*mut AstNode) {
+        if dz_is_array_type(p.type_name) {
+            let name: string = p.tok.slice;
+            let arr_t: string = p.type_name;
+            let hidden: string = str_concat(e.arena, "__arg_", name);
+            p.tok.slice = hidden;
+            p.type_name = str_concat(e.arena, "*", arr_t);
+            let deref: *mut AstNode = ast_alloc_node(e.arena, NODE_DEREF, p.tok);
+            deref.left = dz_ident(e, hidden, p.tok);
+            let copy: *mut AstNode = ast_alloc_node(e.arena, NODE_LET, dz_tok(p.tok, TOK_IDENT, name));
+            copy.type_name = arr_t;
+            copy.left = deref;
+            copies = dz_append(copies, copy);
+        }
+        p = p.next;
+    }
+    if copies != (0).as(*mut AstNode) {
+        f.right.left = dz_append(copies, f.right.left);
     }
 }
 
@@ -4853,6 +4960,15 @@ fn desugar_errors(root: *mut AstNode, arena: *mut Arena, m: *SourceMap) -> bool 
     sd.left = fcode;
     tmpl.right = sd;
     if last == (0).as(*mut AstNode) { root.left = tmpl; } else { last.next = tmpl; }
+    // Arrays passed by value become pointers plus a copy, before any call to them is lowered.
+    d = root.left;
+    while d != (0).as(*mut AstNode) {
+        if d.tag == NODE_FN { dz_lower_array_params(&mut e, d); }
+        if d.tag == NODE_GENERIC {
+            if d.right.tag == NODE_FN { dz_lower_array_params(&mut e, d.right); }
+        }
+        d = d.next;
+    }
     // Lower the bodies (generic templates included), then the types.
     d = root.left;
     while d != (0).as(*mut AstNode) {

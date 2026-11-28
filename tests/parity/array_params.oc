@@ -1,0 +1,32 @@
+// Fixed-size arrays passed by value, `fn f(a: [N]T)` (issue #74, part 2): the C backend
+// emitted invalid C and the native one read garbage. The callee gets a copy; the argument
+// can be a variable, a literal, a field or an element.
+struct Holder { arr: [2]u8 }
+
+fn total3(a: [3]i32) -> i32 {
+    let mut s: i32 = 0;
+    let mut i: usize = 0;
+    while i < 3 {
+        s = s + a[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn pair(a: [2]u8) -> u32 { return a[0] + a[1]; }
+
+fn joined(words: [2]string) -> usize { return words[0].len + words[1].len; }
+
+fn first<T, const N: usize>(a: [N]T) -> T { return a[0]; }
+
+fn main() {
+    let a3: [3]i32 = [1, 2, 3];
+    print(total3(a3));          // 6
+    print(total3([4, 5, 6]));   // 15
+    print(a3[0]);               // 1: the caller's array is unchanged
+    let h: Holder = Holder { arr: [3, 4] };
+    print(pair(h.arr));         // 7
+    print(joined(["ab", "cde"])); // 5
+    let w: [2]i64 = [7, 8];
+    print(first(w));            // 7
+}
