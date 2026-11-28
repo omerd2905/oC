@@ -7213,6 +7213,12 @@ GArgs gx_infer(Generics* g, Validator* v, AstNode* t, AstNode* call) {
     }
     pat = gx_canon(g, ((prm)->type_name));
     con = gx_canon(g, gx_arg_type(g, v, arg));
+    if (is_untyped_float(arg)) {
+    con = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    if (__OC_SEQ(gx_param_index(((t)->left), pat), >=, ((int32_t)0))) {
+    gx_bind((&(defaults)), pat, (oc_string){ .ptr = (const uint8_t*)("f64"), .len = sizeof("f64") - 1 });
+    }
+    }
     if (__OC_SEQ(((con).len), ==, ((size_t)0))) {
     if (is_int_literal(arg)) {
     if (__OC_SEQ(gx_param_index(((t)->left), pat), >=, ((int32_t)0))) {

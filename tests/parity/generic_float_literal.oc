@@ -1,0 +1,12 @@
+// An untyped float literal takes a generic parameter's type from the other arguments
+// (issue #78): scale(f32_var, 0.5) used to fail with "T would have two types".
+fn scale<T>(x: T, k: T) -> T { return x * k; }
+
+fn main() {
+    let v: f32 = 3.0;
+    print(scale(v, 0.5));     // 1.500000, computed in f32
+    print(scale(2.0, v));     // 6.000000
+    print(scale(1.5, 0.5));   // 0.750000: literals alone are f64
+    let n: i32 = 4;
+    print(scale(n, 3));       // 12
+}
