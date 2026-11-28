@@ -147,6 +147,8 @@ static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {
 }
 
 static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }
+static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); } return i; }
+static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); } return lo; }
 #define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, "panic: floating-point result is NaN or infinite at %s\n", loc); exit(1); } _r; })
 
 #define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })
@@ -855,6 +857,17 @@ AstNode* dz_stmt_in(Errs* e, AstNode* s);
 AstNode* dz_stmt(Errs* e, AstNode* s);
 AstNode* dz_stmts(Errs* e, AstNode* first);
 oc_string dz_type(Errs* e, oc_string t);
+oc_string dz_slice_types(Errs* e, oc_string t);
+bool dz_is_slice_type(oc_string t);
+oc_string dz_elem_type(oc_string t);
+oc_string dz_array_len(oc_string t);
+bool dz_pure(AstNode* x);
+AstNode* dz_copy(Errs* e, AstNode* x);
+AstNode* dz_reusable(Errs* e, AstNode* x, oc_string t);
+AstNode* dz_call2(Errs* e, oc_string name, AstNode* a, AstNode* b, Token at);
+AstNode* dz_len_expr(Errs* e, oc_string n, Token at);
+void dz_lower_index(Errs* e, AstNode* x);
+void dz_lower_slice(Errs* e, AstNode* x);
 bool dz_has_nested_array(oc_string t);
 void dz_types(Errs* e, AstNode* n);
 AstNode* dz_find_fn(Errs* e, oc_string name);
@@ -4228,6 +4241,12 @@ bool is_builtin_fn(oc_string name) {
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
     return true;
     }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("__oc_bound"), .len = sizeof("__oc_bound") - 1 })) {
+    return true;
+    }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
+    return true;
+    }
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
     return true;
     }
@@ -4463,6 +4482,12 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     }
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_bound"), .len = sizeof("__oc_bound") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
     }
     AstNode* callee = validator_find_fn(v, ((((expr)->tok)).slice));
     if (__OC_SEQ(callee, ==, ((AstNode*)(0)))) {
@@ -7440,6 +7465,14 @@ oc_string dz_type_of(Errs* e, AstNode* x) {
     if (starts_with(st, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
     st = __oc_slice_str(st, 1, ((st).len));
     }
+    if (dz_is_slice_type(st)) {
+    if (str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
+    return str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 }, trim(__oc_slice_str(st, 2, ((st).len))));
+    }
+    }
     AstNode* d = ((((e)->root))->left);
     while (__OC_SEQ(d, !=, ((AstNode*)(0)))) {
     if (__OC_SEQ(((d)->tag), ==, NODE_STRUCT_DECL)) {
@@ -7459,6 +7492,25 @@ oc_string dz_type_of(Errs* e, AstNode* x) {
     }
     if (__OC_SEQ(((x)->tag), ==, NODE_CAST)) {
     return ((x)->type_name);
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_INDEX)) {
+    return dz_elem_type(dz_type_of(e, ((x)->left)));
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_SLICE)) {
+    oc_string bt = dz_type_of(e, ((x)->left));
+    oc_string el = dz_elem_type(bt);
+    if (__OC_SEQ(((el).len), ==, ((size_t)0))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (str_eq(el, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 };
+    }
+    return str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("[]"), .len = sizeof("[]") - 1 }, el);
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_STRUCT_INIT)) {
+    if (str_eq(((((x)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__Slice"), .len = sizeof("__Slice") - 1 })) {
+    return str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("[]"), .len = sizeof("[]") - 1 }, ((x)->type_name));
+    }
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
@@ -7732,8 +7784,20 @@ void dz_expr(Errs* e, AstNode* x) {
     }
     return;
     }
+    if (__OC_SEQ(((x)->tag), ==, NODE_SLICE)) {
+    dz_expr(e, ((x)->left));
+    if (__OC_SEQ(((x)->right), !=, ((AstNode*)(0)))) {
+    dz_expr(e, ((((x)->right))->left));
+    dz_expr(e, ((((x)->right))->right));
+    }
+    dz_lower_slice(e, x);
+    return;
+    }
     dz_expr(e, ((x)->left));
     dz_expr(e, ((x)->right));
+    if (__OC_SEQ(((x)->tag), ==, NODE_INDEX)) {
+    dz_lower_index(e, x);
+    }
 }
 
 AstNode* dz_arm_body(Errs* e, AstNode* body) {
@@ -8008,7 +8072,7 @@ AstNode* dz_stmt_in(Errs* e, AstNode* s) {
     if (__OC_SEQ(((s)->tag), ==, NODE_WHILE)) {
     dz_expr(e, ((s)->left));
     if (__OC_SEQ(((e)->pre), !=, ((AstNode*)(0)))) {
-    dz_err(e, ((((s)->left))->tok), (oc_string){ .ptr = (const uint8_t*)("try and catch cannot be used in a while condition (it is evaluated again on every iteration): compute the value in the loop body"), .len = sizeof("try and catch cannot be used in a while condition (it is evaluated again on every iteration): compute the value in the loop body") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
+    dz_err(e, ((((s)->left))->tok), (oc_string){ .ptr = (const uint8_t*)("try and catch cannot be used in a while condition, nor can indexing or slicing the result of a call (it is evaluated again on every iteration): compute the value in the loop body"), .len = sizeof("try and catch cannot be used in a while condition, nor can indexing or slicing the result of a call (it is evaluated again on every iteration): compute the value in the loop body") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 }, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
     }
     if (__OC_SEQ(((s)->right), !=, ((AstNode*)(0)))) {
     ((((s)->right))->left) = dz_stmts(e, ((((s)->right))->left));
@@ -8131,7 +8195,7 @@ oc_string dz_type(Errs* e, oc_string t) {
     oc_string s1 = gx_done(sb);
     int64_t b = dz_bang(s1);
     if (__OC_SEQ(b, <, ((int64_t)0))) {
-    return s1;
+    return dz_slice_types(e, s1);
     }
     StrBuf u = strbuf_init(((e)->arena), __OC_ADD(((s1).len), ((size_t)24)));
     strbuf_push_str((&(u)), (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion<"), .len = sizeof("__ErrorUnion<") - 1 });
@@ -8140,6 +8204,252 @@ oc_string dz_type(Errs* e, oc_string t) {
     strbuf_push_str((&(u)), dz_type(e, trim(__oc_slice_str(s1, __OC_ADD(({ __auto_type _v = (b); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }), ((size_t)1)), ((s1).len)))));
     strbuf_push_str((&(u)), (oc_string){ .ptr = (const uint8_t*)(">"), .len = sizeof(">") - 1 });
     return gx_done(u);
+}
+
+oc_string dz_slice_types(Errs* e, oc_string t) {
+    oc_string cur = t;
+    size_t from = ((size_t)0);
+    while (__OC_SEQ(__OC_ADD(from, ((size_t)1)), <, ((cur).len))) {
+    if (__OC_SEQ(__oc_index_str(cur, from), ==, ((uint8_t)91))) {
+    if (__OC_SEQ(__oc_index_str(cur, __OC_ADD(from, ((size_t)1))), ==, ((uint8_t)93))) {
+    size_t j = __OC_ADD(from, ((size_t)2));
+    int32_t depth = ((int32_t)0);
+    while (__OC_SEQ(j, <, ((cur).len))) {
+    if (__OC_SEQ(__oc_index_str(cur, j), ==, ((uint8_t)60))) {
+    depth = __OC_ADD(depth, ((int32_t)1));
+    }
+    if (__OC_SEQ(__oc_index_str(cur, j), ==, ((uint8_t)62))) {
+    if (__OC_SEQ(depth, ==, ((int32_t)0))) {
+    break;
+    }
+    depth = __OC_SUB(depth, ((int32_t)1));
+    }
+    if (__OC_SEQ(__oc_index_str(cur, j), ==, ((uint8_t)44))) {
+    if (__OC_SEQ(depth, ==, ((int32_t)0))) {
+    break;
+    }
+    }
+    j = __OC_ADD(j, ((size_t)1));
+    }
+    oc_string elem = dz_slice_types(e, trim(__oc_slice_str(cur, __OC_ADD(from, ((size_t)2)), j)));
+    oc_string repl = (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 };
+    if ((!str_eq(elem, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 }))) {
+    repl = str_concat(((e)->arena), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("__Slice<"), .len = sizeof("__Slice<") - 1 }, elem), (oc_string){ .ptr = (const uint8_t*)(">"), .len = sizeof(">") - 1 });
+    }
+    cur = str_concat(((e)->arena), str_concat(((e)->arena), __oc_slice_str(cur, 0, from), repl), __oc_slice_str(cur, j, ((cur).len)));
+    from = __OC_ADD(from, ((repl).len));
+    continue;
+    }
+    }
+    from = __OC_ADD(from, ((size_t)1));
+    }
+    return cur;
+}
+
+bool dz_is_slice_type(oc_string t) {
+    if ((!starts_with(t, (oc_string){ .ptr = (const uint8_t*)("[]"), .len = sizeof("[]") - 1 }))) {
+    return false;
+    }
+    return (!str_eq(trim(__oc_slice_str(t, 2, ((t).len))), (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 }));
+}
+
+oc_string dz_elem_type(oc_string t) {
+    oc_string u = t;
+    if (starts_with(u, (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 })) {
+    u = __oc_slice_str(u, 5, ((u).len));
+    }
+    else {
+    if (starts_with(u, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    u = __oc_slice_str(u, 1, ((u).len));
+    }
+    }
+    if (str_eq(u, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 };
+    }
+    if (starts_with(u, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 })) {
+    size_t close = ((size_t)1);
+    while (__OC_SEQ(close, <, ((u).len))) {
+    if (__OC_SEQ(__oc_index_str(u, close), ==, ((uint8_t)93))) {
+    break;
+    }
+    close = __OC_ADD(close, ((size_t)1));
+    }
+    if (__OC_SEQ(__OC_ADD(close, ((size_t)1)), <=, ((u).len))) {
+    return trim(__oc_slice_str(u, __OC_ADD(close, ((size_t)1)), ((u).len)));
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    if (__OC_SEQ(((u).len), <, ((t).len))) {
+    return u;
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+}
+
+oc_string dz_array_len(oc_string t) {
+    oc_string u = t;
+    if (starts_with(u, (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 })) {
+    u = __oc_slice_str(u, 5, ((u).len));
+    }
+    else {
+    if (starts_with(u, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 })) {
+    u = __oc_slice_str(u, 1, ((u).len));
+    }
+    }
+    if ((!dz_is_array_type(u))) {
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    size_t close = ((size_t)1);
+    while (__OC_SEQ(close, <, ((u).len))) {
+    if (__OC_SEQ(__oc_index_str(u, close), ==, ((uint8_t)93))) {
+    break;
+    }
+    close = __OC_ADD(close, ((size_t)1));
+    }
+    return trim(__oc_slice_str(u, 1, close));
+}
+
+bool dz_pure(AstNode* x) {
+    if (__OC_SEQ(x, ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_IDENT)) {
+    return true;
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_INT)) {
+    return true;
+    }
+    if (__OC_SEQ(((x)->tag), ==, NODE_FIELD_ACCESS)) {
+    return dz_pure(((x)->left));
+    }
+    return false;
+}
+
+AstNode* dz_copy(Errs* e, AstNode* x) {
+    if (__OC_SEQ(((x)->tag), ==, NODE_FIELD_ACCESS)) {
+    return dz_field(e, dz_copy(e, ((x)->left)), ((((x)->tok)).slice), ((x)->tok));
+    }
+    AstNode* c = ast_alloc_node(((e)->arena), ((x)->tag), ((x)->tok));
+    ((c)->type_name) = ((x)->type_name);
+    return c;
+}
+
+AstNode* dz_reusable(Errs* e, AstNode* x, oc_string t) {
+    if (dz_pure(x)) {
+    return x;
+    }
+    oc_string tmp = dz_tmp(e);
+    AstNode* init = ast_alloc_node(((e)->arena), ((x)->tag), ((x)->tok));
+    ((init)->type_name) = ((x)->type_name);
+    ((init)->left) = ((x)->left);
+    ((init)->right) = ((x)->right);
+    ((e)->pre) = dz_append(((e)->pre), dz_let(e, tmp, t, init, false, ((x)->tok)));
+    return dz_ident(e, tmp, ((x)->tok));
+}
+
+AstNode* dz_call2(Errs* e, oc_string name, AstNode* a, AstNode* b, Token at) {
+    AstNode* c = ast_alloc_node(((e)->arena), NODE_CALL, dz_tok(at, TOK_IDENT, name));
+    ((c)->left) = a;
+    ((a)->next) = b;
+    return c;
+}
+
+AstNode* dz_len_expr(Errs* e, oc_string n, Token at) {
+    if (__OC_SEQ(((n).len), >, ((size_t)0))) {
+    if (is_digit(__oc_index_str(n, 0))) {
+    return dz_int(e, n, at);
+    }
+    }
+    return dz_ident(e, n, at);
+}
+
+void dz_lower_index(Errs* e, AstNode* x) {
+    oc_string bt = dz_type_of(e, ((x)->left));
+    if ((!dz_is_slice_type(bt))) {
+    return;
+    }
+    AstNode* base = dz_reusable(e, ((x)->left), bt);
+    AstNode* idx = ((x)->right);
+    ((x)->right) = dz_call2(e, (oc_string){ .ptr = (const uint8_t*)("__oc_bound"), .len = sizeof("__oc_bound") - 1 }, idx, dz_field(e, dz_copy(e, base), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 }, ((x)->tok)), ((x)->tok));
+    ((x)->left) = dz_field(e, base, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 }, ((x)->tok));
+}
+
+void dz_lower_slice(Errs* e, AstNode* x) {
+    oc_string bt = dz_type_of(e, ((x)->left));
+    oc_string elem = dz_elem_type(bt);
+    if (__OC_SEQ(((elem).len), ==, ((size_t)0))) {
+    return;
+    }
+    if (str_eq(elem, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    return;
+    }
+    oc_string n = dz_array_len(bt);
+    bool is_slice = dz_is_slice_type(bt);
+    bool is_ptr = starts_with(bt, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
+    if (__OC_SEQ(((n).len), ==, ((size_t)0))) {
+    if ((!is_slice)) {
+    return;
+    }
+    is_ptr = false;
+    }
+    Token at = ((x)->tok);
+    AstNode* base = dz_reusable(e, ((x)->left), bt);
+    AstNode* lo = ((AstNode*)(0));
+    AstNode* hi = ((AstNode*)(0));
+    if (__OC_SEQ(((x)->right), !=, ((AstNode*)(0)))) {
+    lo = ((((x)->right))->left);
+    hi = ((((x)->right))->right);
+    }
+    if (__OC_SEQ(lo, ==, ((AstNode*)(0)))) {
+    lo = dz_int(e, (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 }, at);
+    }
+    if (__OC_SEQ(hi, ==, ((AstNode*)(0)))) {
+    if (is_slice) {
+    hi = dz_field(e, dz_copy(e, base), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 }, at);
+    }
+    else {
+    hi = dz_len_expr(e, n, at);
+    }
+    }
+    lo = dz_reusable(e, lo, (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 });
+    hi = dz_reusable(e, hi, (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 });
+    AstNode* first = ((AstNode*)(0));
+    AstNode* total = ((AstNode*)(0));
+    if (is_slice) {
+    first = dz_field(e, base, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 }, at);
+    total = dz_field(e, dz_copy(e, base), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 }, at);
+    }
+    else {
+    first = ast_alloc_node(((e)->arena), NODE_CAST, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("as"), .len = sizeof("as") - 1 }));
+    ((first)->type_name) = str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("*mut "), .len = sizeof("*mut ") - 1 }, elem);
+    if (is_ptr) {
+    ((first)->left) = base;
+    }
+    else {
+    AstNode* addr = ast_alloc_node(((e)->arena), NODE_ADDRESS_OF, dz_tok(at, TOK_AMP, (oc_string){ .ptr = (const uint8_t*)("&"), .len = sizeof("&") - 1 }));
+    ((addr)->left) = base;
+    ((first)->left) = addr;
+    }
+    total = dz_len_expr(e, n, at);
+    }
+    AstNode* range = ast_alloc_node(((e)->arena), NODE_CALL, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 }));
+    ((range)->left) = lo;
+    ((lo)->next) = hi;
+    ((hi)->next) = total;
+    AstNode* ptr_val = dz_bin(e, TOK_PLUS, (oc_string){ .ptr = (const uint8_t*)("+"), .len = sizeof("+") - 1 }, first, range, at);
+    AstNode* len_val = dz_bin(e, TOK_MINUS, (oc_string){ .ptr = (const uint8_t*)("-"), .len = sizeof("-") - 1 }, dz_copy(e, hi), dz_copy(e, lo), at);
+    AstNode* lit = ast_alloc_node(((e)->arena), NODE_STRUCT_INIT, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("__Slice"), .len = sizeof("__Slice") - 1 }));
+    ((lit)->type_name) = elem;
+    AstNode* fp = ast_alloc_node(((e)->arena), NODE_PARAM, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 }));
+    ((fp)->left) = ptr_val;
+    AstNode* fl = ast_alloc_node(((e)->arena), NODE_PARAM, dz_tok(at, TOK_IDENT, (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 }));
+    ((fl)->left) = len_val;
+    ((fp)->next) = fl;
+    ((lit)->left) = fp;
+    ((x)->tag) = NODE_STRUCT_INIT;
+    ((x)->tok) = ((lit)->tok);
+    ((x)->type_name) = ((lit)->type_name);
+    ((x)->left) = ((lit)->left);
+    ((x)->right) = ((AstNode*)(0));
 }
 
 bool dz_has_nested_array(oc_string t) {
@@ -8315,6 +8625,24 @@ bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m) {
     d = nxt;
     }
     last = prev;
+    Token sl_at = ((root)->tok);
+    AstNode* sl_tmpl = ast_alloc_node(arena, NODE_GENERIC, dz_tok(sl_at, ((sl_at).tag), (oc_string){ .ptr = (const uint8_t*)("__Slice"), .len = sizeof("__Slice") - 1 }));
+    ((sl_tmpl)->left) = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, ((sl_at).tag), (oc_string){ .ptr = (const uint8_t*)("T"), .len = sizeof("T") - 1 }));
+    AstNode* sl_decl = ast_alloc_node(arena, NODE_STRUCT_DECL, dz_tok(sl_at, ((sl_at).tag), (oc_string){ .ptr = (const uint8_t*)("__Slice"), .len = sizeof("__Slice") - 1 }));
+    AstNode* sl_ptr = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, ((sl_at).tag), (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 }));
+    ((sl_ptr)->type_name) = (oc_string){ .ptr = (const uint8_t*)("*mut T"), .len = sizeof("*mut T") - 1 };
+    AstNode* sl_len = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, ((sl_at).tag), (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 }));
+    ((sl_len)->type_name) = (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    ((sl_ptr)->next) = sl_len;
+    ((sl_decl)->left) = sl_ptr;
+    ((sl_tmpl)->right) = sl_decl;
+    if (__OC_SEQ(last, ==, ((AstNode*)(0)))) {
+    ((root)->left) = sl_tmpl;
+    }
+    else {
+    ((last)->next) = sl_tmpl;
+    }
+    last = sl_tmpl;
     Token at = ((root)->tok);
     AstNode* tmpl = ast_alloc_node(arena, NODE_GENERIC, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("__ErrorUnion"), .len = sizeof("__ErrorUnion") - 1 }));
     AstNode* pt = ast_alloc_node(arena, NODE_PARAM, dz_tok(at, ((at).tag), (oc_string){ .ptr = (const uint8_t*)("T"), .len = sizeof("T") - 1 }));
@@ -10326,6 +10654,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012"), .len = sizeof("    return (oc_string){ .ptr = s.ptr + start, .len = end - start };\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012"), .len = sizeof("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return i; }\012"), .len = sizeof("static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return i; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return lo; }\012"), .len = sizeof("static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return lo; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012"), .len = sizeof("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012"), .len = sizeof("static inline uint8_t __oc_index_str(oc_string s, size_t idx) {\012") - 1 });
@@ -11262,6 +11592,12 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     }
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("f64_to_bits"), .len = sizeof("f64_to_bits") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("u64"), .len = sizeof("u64") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_bound"), .len = sizeof("__oc_bound") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
     }
     if (__OC_SEQ(((wrapping_op(((((expr)->tok)).slice))).len), >, ((size_t)0))) {
     oc_string lt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -13741,6 +14077,50 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: system calls and win32_* imports take at most 6 register words"), .len = sizeof("native codegen error: system calls and win32_* imports take at most 6 register words") - 1 });
     return;
     }
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("__oc_bound"), .len = sizeof("__oc_bound") - 1 })) {
+    ng_emit_expr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, ((uint8_t)80));
+    ng_emit_expr(ng, code, data, ((((expr)->left))->next));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)137));
+    buf_append_u8(code, ((uint8_t)195));
+    buf_append_u8(code, ((uint8_t)88));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)57));
+    buf_append_u8(code, ((uint8_t)216));
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 }, true);
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)131));
+    elf_append_u32(code, ((uint32_t)0));
+    return;
+    }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
+    ng_emit_expr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, ((uint8_t)80));
+    ng_emit_expr(ng, code, data, ((((expr)->left))->next));
+    buf_append_u8(code, ((uint8_t)80));
+    ng_emit_expr(ng, code, data, ((((((expr)->left))->next))->next));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)137));
+    buf_append_u8(code, ((uint8_t)195));
+    buf_append_u8(code, ((uint8_t)89));
+    buf_append_u8(code, ((uint8_t)88));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)57));
+    buf_append_u8(code, ((uint8_t)217));
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 }, true);
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)135));
+    elf_append_u32(code, ((uint32_t)0));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)57));
+    buf_append_u8(code, ((uint8_t)200));
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 }, true);
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)135));
+    elf_append_u32(code, ((uint32_t)0));
+    return;
     }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("sys_arena_poison"), .len = sizeof("sys_arena_poison") - 1 })) {
     buf_append_u8(code, ((uint8_t)72));
