@@ -1,0 +1,29 @@
+// Two native-backend bugs found while working on #74:
+// - a struct's own `ptr` or `len` field was typed like string's (*u8, usize), so s.ptr[1]
+//   on a `ptr: *i32` field read a byte at the wrong place;
+// - p + k on a non-byte pointer moved k bytes instead of k elements.
+struct View {
+    ptr: *i32,
+    len: usize,
+}
+
+fn last(v: View) -> i32 {
+    return v.ptr[v.len - 1];
+}
+
+fn main() {
+    let a: [4]i32 = [10, 20, 30, 40];
+    let v: View = View { ptr: (&a).as(*i32), len: 4 };
+    print(v.ptr[1]);        // 20
+    print(last(v));         // 40
+    let p: *i32 = (&a).as(*i32);
+    let q: *i32 = p + 2;
+    print(q[0]);            // 30
+    print((q - 1)[0]);      // 20
+    let w: [2]i64 = [7, 9];
+    let pw: *i64 = (&w).as(*i64);
+    print((pw + 1)[0]);     // 9
+    let s: string = "oc!";
+    print(s.len);           // 3
+    print(s.ptr[2]);        // 33
+}

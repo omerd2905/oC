@@ -346,11 +346,19 @@ fn ng_find_field_offset(ng: *mut NativeGen, s_name: string, f_name: string) -> i
 }
 
 fn ng_find_field_type(ng: *mut NativeGen, s_name: string, f_name: string) -> string {
+    // The built-in string (and a slice); a struct's own `ptr` or `len` field has the type it
+    // declares.
+    let mut builtin: bool = str_eq(s_name, "string");
+    if s_name.len == 0 { builtin = true; }
+    if builtin {
+        if str_eq(f_name, "len") { return "usize"; }
+        if str_eq(f_name, "ptr") { return "*u8"; }
+    }
+    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
+    if idx >= 0 { return ng.field_types[idx.as(usize)]; }
     if str_eq(f_name, "len") { return "usize"; }
     if str_eq(f_name, "ptr") { return "*u8"; }
-    let idx: i32 = ng_find_field_idx(ng, s_name, f_name);
-    if idx < 0 { return ""; }
-    return ng.field_types[idx.as(usize)];
+    return "";
 }
 
 // Natural width of a scalar type in memory: 1, 2, 4 or 8 bytes.
@@ -2007,6 +2015,22 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             }
         }
 
+        if is_ptr_arith {
+            // p + k and p - k move by k elements, as in C (not by k bytes).
+            let rt1: string = ng_expr_type(ng, expr.right);
+            let mut int_rhs: bool = true;
+            if rt1.len > 0 {
+                if rt1[0] == 42 { int_rhs = false; }
+                if rt1[0] == 38 { int_rhs = false; }
+            }
+            let stride: i32 = ng_type_stride(ng_strip_ptr_type(lt));
+            if int_rhs {
+                if stride > 1 {
+                    buf_append_u8(code, 72); buf_append_u8(code, 105); buf_append_u8(code, 219); // imul $stride, %rbx, %rbx
+                    elf_append_i32(code, stride);
+                }
+            }
+        }
         if expr.tok.tag == TOK_PLUS {
             buf_append_u8(code, 72);
             buf_append_u8(code, 1);
