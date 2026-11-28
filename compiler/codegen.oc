@@ -313,6 +313,21 @@ fn emit_c_type(type_name: string, out: *mut CodeBuffer) {
             }
         }
         let base: string = type_name[base_start..type_name.len];
+        if base.len > 0 {
+            if base[0] == 91 { // *[N]T: a pointer to the array, so (*p)[i] is checked against N
+                let mut close: usize = 1;
+                while close < base.len {
+                    if base[close] == 93 { break; }
+                    close = close + 1;
+                }
+                buf_append(out, "__typeof__(");
+                emit_c_type(base[close + 1..base.len], out);
+                buf_append(out, "[");
+                buf_append(out, base[1..close]);
+                buf_append(out, "])*");
+                return;
+            }
+        }
         buf_append_c_type(out, base);
         buf_append(out, "*");
         return;
@@ -910,7 +925,12 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
             return;
         }
         // __OC_AT bounds-checks fixed-size arrays ([N]T) against N; raw pointers stay unchecked.
+        // Through p: *[N]T, p[i] is element i of the array p points to.
+        let base_t: string = cg_expr_type(expr.left, out);
+        let mut via_array_ptr: bool = starts_with(base_t, "*[");
+        if starts_with(base_t, "*mut [") { via_array_ptr = true; }
         buf_append(out, "__OC_AT((");
+        if via_array_ptr { buf_append(out, "*"); }
         codegen_expr(expr.left, out);
         buf_append(out, "), (");
         codegen_expr(expr.right, out);

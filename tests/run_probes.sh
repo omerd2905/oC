@@ -102,6 +102,7 @@ RUNTIME_TRAP=(
   "probe_min_mod_i32.oc"
   "probe_min_div_i64.oc"
   "probe_min_mod_i64.oc"
+  "probe_array_ptr_bounds.oc"
 )
 
 PASS=0

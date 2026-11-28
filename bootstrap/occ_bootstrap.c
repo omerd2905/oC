@@ -8597,6 +8597,23 @@ void emit_c_type(oc_string type_name, CodeBuffer* out) {
     }
     }
     oc_string base = __oc_slice_str(type_name, base_start, ((type_name).len));
+    if (__OC_SEQ(((base).len), >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(base, 0), ==, ((uint8_t)91))) {
+    size_t close = ((size_t)1);
+    while (__OC_SEQ(close, <, ((base).len))) {
+    if (__OC_SEQ(__oc_index_str(base, close), ==, ((uint8_t)93))) {
+    break;
+    }
+    close = __OC_ADD(close, ((size_t)1));
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__typeof__("), .len = sizeof("__typeof__(") - 1 });
+    emit_c_type(__oc_slice_str(base, __OC_ADD(close, ((size_t)1)), ((base).len)), out);
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("["), .len = sizeof("[") - 1 });
+    buf_append(out, __oc_slice_str(base, 1, close));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("])*"), .len = sizeof("])*") - 1 });
+    return;
+    }
+    }
     buf_append_c_type(out, base);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
     return;
@@ -9372,7 +9389,15 @@ void codegen_expr(AstNode* expr, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 });
     return;
     }
+    oc_string base_t = cg_expr_type(((expr)->left), out);
+    bool via_array_ptr = starts_with(base_t, (oc_string){ .ptr = (const uint8_t*)("*["), .len = sizeof("*[") - 1 });
+    if (starts_with(base_t, (oc_string){ .ptr = (const uint8_t*)("*mut ["), .len = sizeof("*mut [") - 1 })) {
+    via_array_ptr = true;
+    }
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("__OC_AT(("), .len = sizeof("__OC_AT((") - 1 });
+    if (via_array_ptr) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 });
+    }
     codegen_expr(((expr)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("), ("), .len = sizeof("), (") - 1 });
     codegen_expr(((expr)->right), out);
@@ -11147,11 +11172,18 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     if (__OC_SEQ(__oc_index_str(lt, 0), ==, ((uint8_t)91))) {
     return ng_parse_array_elem(lt);
     }
+    oc_string pointee = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     if (__OC_SEQ(__oc_index_str(lt, 0), ==, ((uint8_t)42))) {
-    return ng_strip_ptr_type(lt);
+    pointee = ng_strip_ptr_type(lt);
     }
     if (__OC_SEQ(__oc_index_str(lt, 0), ==, ((uint8_t)38))) {
-    return ng_strip_ptr_type(lt);
+    pointee = ng_strip_ptr_type(lt);
+    }
+    if (__OC_SEQ(((pointee).len), >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(pointee, 0), ==, ((uint8_t)91))) {
+    return ng_parse_array_elem(pointee);
+    }
+    return pointee;
     }
     }
     return (oc_string){ .ptr = (const uint8_t*)("i64"), .len = sizeof("i64") - 1 };
@@ -12131,6 +12163,12 @@ void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstN
     }
     else {
     elem_t = ng_strip_ptr_type(lt);
+    if (__OC_SEQ(((elem_t).len), >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(elem_t, 0), ==, ((uint8_t)91))) {
+    arr_len = ng_parse_array_len(elem_t);
+    elem_t = ng_parse_array_elem(elem_t);
+    }
+    }
     ng_emit_expr(ng, code, data, ((expr)->left));
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)133));

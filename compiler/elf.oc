@@ -591,8 +591,13 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
             if lt[0] == 91 {
                 return ng_parse_array_elem(lt);
             }
-            if lt[0] == 42 { return ng_strip_ptr_type(lt); }
-            if lt[0] == 38 { return ng_strip_ptr_type(lt); }
+            let mut pointee: string = "";
+            if lt[0] == 42 { pointee = ng_strip_ptr_type(lt); }
+            if lt[0] == 38 { pointee = ng_strip_ptr_type(lt); }
+            if pointee.len > 0 {
+                if pointee[0] == 91 { return ng_parse_array_elem(pointee); } // p: *[N]T, p[i]: T
+                return pointee;
+            }
         }
         return "i64";
     }
@@ -1294,6 +1299,12 @@ fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut Cod
                 ng_emit_lvalue_addr(ng, code, data, expr.left);
             } else {
                 elem_t = ng_strip_ptr_type(lt);
+                if elem_t.len > 0 {
+                    if elem_t[0] == 91 { // p: *[N]T indexes the array it points to, checked against N
+                        arr_len = ng_parse_array_len(elem_t);
+                        elem_t = ng_parse_array_elem(elem_t);
+                    }
+                }
                 ng_emit_expr(ng, code, data, expr.left);
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 133);
