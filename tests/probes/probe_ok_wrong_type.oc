@@ -1,0 +1,11 @@
+// A wrongly typed value in Ok(...) is an oC error (issue #77): it used to be a gcc error on
+// the C backend and compiled silently natively.
+enum E { Bad }
+
+fn f(x: i32) -> i64!E {
+    return Ok("text");
+}
+
+fn main() {
+    print(f(1) catch 0);
+}

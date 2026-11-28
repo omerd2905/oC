@@ -1,0 +1,6 @@
+// A number is not a bool: write n != 0 (issue #77).
+fn main() {
+    let n: i32 = 1;
+    let b: bool = n;
+    print(b);
+}

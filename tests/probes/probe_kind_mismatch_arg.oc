@@ -1,0 +1,8 @@
+// A string is not an i64 (issue #77; the same check covers every place a value goes).
+fn twice(x: i64) -> i64 {
+    return x * 2;
+}
+
+fn main() {
+    print(twice("4"));
+}
