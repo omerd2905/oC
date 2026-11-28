@@ -1515,6 +1515,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#include <stdbool.h>\n");
     buf_append(out, "#include <stdlib.h>\n");
     buf_append(out, "#include <string.h>\n");
+    buf_append(out, "#include <errno.h>\n");
     // Portable host shim: oC syscall flags are canonical Linux x86_64 values, translated per host OS.
     buf_append(out, "#include <fcntl.h>\n");
     buf_append(out, "#include <sys/stat.h>\n");
@@ -1551,8 +1552,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\n");
     buf_append(out, "static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\n");
     buf_append(out, "#else\n");
-    buf_append(out, "static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\n");
-    buf_append(out, "static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\n");
+    buf_append(out, "static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { ssize_t r; do { r = read(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\n");
+    buf_append(out, "static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { ssize_t r; do { r = write(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\n");
     buf_append(out, "static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\n");
     buf_append(out, "static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\n");
     buf_append(out, "static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\n");

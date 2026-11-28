@@ -59,6 +59,49 @@ class Realloc(LetPtr):
         return [ind + "%s = %s;" % (self.v, self.call()), ind + "%s[0] = %d;" % (self.v, self.k)]
 
 
+class CopyVar(Stmt):
+    """dst = src;  (between two pointer or string variables)"""
+    def __init__(self, dst, src): self.dst, self.src = dst, src
+    def render(self, ind): return [ind + "%s = %s;" % (self.dst, self.src)]
+
+
+class LetPick(Stmt):
+    """let mut v: *mut u8 = fz_pick(&mut a, &mut b, cond); v[0] = k;"""
+    def __init__(self, v, a, b, cond, k):
+        self.v, self.a, self.b, self.cond, self.k = v, a, b, cond, k
+
+    def render(self, ind):
+        return [
+            ind + "let mut %s: *mut u8 = fz_pick(&mut %s, &mut %s, %s);" % (self.v, self.a, self.b, self.cond),
+            ind + "%s[0] = %d;" % (self.v, self.k),
+        ]
+
+
+class LetLocal(Stmt):
+    def __init__(self, x, val): self.x, self.val = x, val
+    def render(self, ind): return [ind + "let mut %s: i32 = %d;" % (self.x, self.val)]
+
+
+class LetRef(Stmt):
+    def __init__(self, r, x): self.r, self.x = r, x
+    def render(self, ind): return [ind + "let mut %s: *i32 = &%s;" % (self.r, self.x)]
+
+
+class RebindRef(Stmt):
+    def __init__(self, r, x): self.r, self.x = r, x
+    def render(self, ind): return [ind + "%s = &%s;" % (self.r, self.x)]
+
+
+class MutLocal(Stmt):
+    def __init__(self, x): self.x = x
+    def render(self, ind): return [ind + "fz_bump(&mut %s);" % self.x]
+
+
+class UseRef(Stmt):
+    def __init__(self, r): self.r = r
+    def render(self, ind): return [ind + "print(*%s);" % self.r]
+
+
 class LetStr(Stmt):
     """let mut v: string = str_concat(&mut a, "lit", <src or "lit2">);  or through fz_str."""
     def __init__(self, v, a, lit, src=None, via=None):
@@ -196,6 +239,8 @@ HELPERS = {
                 "    while i < ws.len {\n        n = n + ws[i].len;\n        i = i + 1;\n    }\n    return n;\n}",
     "fz_firsts": "fn fz_firsts(ws: [2]string) -> string {\n    return ws[0];\n}",
     "fz_ptrs": "fn fz_ptrs(p: *[2]string) -> usize {\n    return p[1].len;\n}",
+    "fz_pick": "fn fz_pick(a: *mut Arena, b: *mut Arena, c: bool) -> *mut u8 {\n    if c {\n        return arena_alloc(a, 16);\n    }\n    return arena_alloc(b, 16);\n}",
+    "fz_bump": "fn fz_bump(p: &mut i32) {\n    *p = *p + 1;\n}",
 }
 HELPER_DEPS = {"fz_alloc2": ["fz_alloc"], "fz_alloc3": ["fz_alloc2", "fz_alloc"]}
 
@@ -221,6 +266,10 @@ def render(body):
             if name:
                 used.add(name)
                 used.update(HELPER_DEPS.get(name, []))
+        if isinstance(s, LetPick):
+            used.add("fz_pick")
+        if isinstance(s, MutLocal):
+            used.add("fz_bump")
         if isinstance(s, LetHolder):
             holder = True
     out = ['import "std/str.oc";', ""]
@@ -246,19 +295,44 @@ def render(body):
 
 class State:
     def __init__(self):
-        self.arenas, self.cells, self.conds, self.unsafe, self.out = {}, {}, {}, False, []
+        self.arenas, self.locals, self.cells, self.conds, self.unsafe, self.out = {}, {}, {}, {}, False, []
 
     def copy(self):
         s = State()
         s.arenas = {k: list(v) for k, v in self.arenas.items()}
+        s.locals = {k: list(v) for k, v in self.locals.items()}
         s.cells, s.conds, s.unsafe, s.out = dict(self.cells), self.conds, self.unsafe, list(self.out)
         return s
 
     def key(self):
-        return (tuple(sorted((k, tuple(v)) for k, v in self.arenas.items())), tuple(sorted(self.cells.items())), self.unsafe)
+        return (
+            tuple(sorted((k, tuple(v)) for k, v in self.arenas.items())),
+            tuple(sorted((k, tuple(v)) for k, v in self.locals.items())),
+            tuple(sorted(self.cells.items())),
+            self.unsafe,
+        )
+
+    def static_key(self):
+        cell_states = []
+        for k, (a, epoch, _) in sorted(self.cells.items()):
+            if a.startswith("@"):
+                alive = self.locals[a[1:]][0] == epoch
+            else:
+                alive = (not self.arenas[a][1]) and (self.arenas[a][0] == epoch)
+            cell_states.append((k, a, alive))
+        return (
+            tuple(sorted((k, v[1]) for k, v in self.arenas.items())),
+            tuple(cell_states),
+            self.unsafe,
+        )
 
     def use(self, cell):
         a, epoch, content = self.cells[cell]
+        if a.startswith("@"):
+            lepoch, lval = self.locals[a[1:]]
+            if lepoch != epoch:
+                self.unsafe = True
+            return lval
         if self.arenas[a][0] != epoch or self.arenas[a][1]:
             self.unsafe = True
         return content
@@ -350,6 +424,27 @@ def step(s, st, static, trace):
     elif isinstance(s, Store):
         st.use(s.src)
         st.cells[s.dst] = st.cells[s.src]
+    elif isinstance(s, CopyVar):
+        st.use(s.src)
+        st.cells[s.dst] = st.cells[s.src]
+    elif isinstance(s, LetPick):
+        if static:
+            other = st.copy()
+            st.fresh(s.v, s.a, s.k)
+            other.fresh(s.v, s.b, s.k)
+            return [st, other]
+        st.fresh(s.v, s.a if st.conds[s.cond] else s.b, s.k)
+    elif isinstance(s, LetLocal):
+        st.locals[s.x] = [0, s.val]
+    elif isinstance(s, (LetRef, RebindRef)):
+        st.cells[s.r] = ("@" + s.x, st.locals[s.x][0], None)
+    elif isinstance(s, MutLocal):
+        st.locals[s.x][0] += 1
+        st.locals[s.x][1] += 1
+    elif isinstance(s, UseRef):
+        if trace is not None and not static:
+            trace[id(s)] = st.cells[s.r][0]
+        st.emit(str(st.use(s.r)))
     elif isinstance(s, If):
         if static:
             other = st.copy()
@@ -357,10 +452,19 @@ def step(s, st, static, trace):
         return run(s.then if st.conds[s.c] else s.els, [st], static, trace)
     elif isinstance(s, While):
         if static:
-            out, cur = [st.copy()], [st]
-            for _ in range(2):
-                cur = run(s.body, cur, static, trace)
-                out += [c.copy() for c in cur]
+            out = [st.copy()]
+            seen = {st.static_key()}
+            frontier = [st]
+            while frontier:
+                nxt = run(s.body, frontier, static, trace)
+                new_frontier = []
+                for c in nxt:
+                    k = c.static_key()
+                    if k not in seen:
+                        seen.add(k)
+                        out.append(c.copy())
+                        new_frontier.append(c)
+                frontier = new_frontier
             return out
         cur = [st]
         for _ in range(s.n):
@@ -374,7 +478,7 @@ def run(stmts, states, static, trace=None):
         nxt, seen = [], set()
         for st in states:
             for r in step(s, st, static, trace):
-                k = r.key()
+                k = r.static_key() if static else r.key()
                 if not static or k not in seen:
                     seen.add(k)
                     nxt.append(r)
@@ -404,10 +508,12 @@ class Gen:
     def __init__(self, rng, phase):
         self.rng, self.phase = rng, phase
         self.n = {}
-        self.arena_of = {}        # ptr/str variable -> its arena (fixed for the variable's life)
+        self.arena_of = {}        # ptr/str variable -> its arena (or tuple of arenas for LetPick)
         self.valid = {}           # cell -> kind, for cells believed usable here (a guide only)
-        self.ptr_vars, self.holders, self.arrays, self.conds = [], [], [], []
+        self.ptr_vars, self.str_vars, self.holders, self.arrays, self.conds = [], [], [], [], []
         self.str_arrays = []
+        self.local_vars, self.ref_vars = [], []
+        self.ref_target = {}      # ref var -> local var name
 
     def name(self, prefix):
         k = self.n.get(prefix, 0)
@@ -424,12 +530,27 @@ class Gen:
                 c = self.name("c")
                 self.conds.append(c)
                 body.append(LetCond(c, r.random() < 0.5))
+        if self.phase != "A":
+            for _ in range(r.randint(1, 2)):
+                x = self.name("lx")
+                self.local_vars.append(x)
+                body.append(LetLocal(x, r.randint(1, 50)))
+            for _ in range(r.randint(1, 2)):
+                rf = self.name("rf")
+                x = r.choice(self.local_vars)
+                self.ref_vars.append(rf)
+                self.ref_target[rf] = x
+                self.valid[rf] = "ref"
+                body.append(LetRef(rf, x))
         for _ in range(r.randint(3, 6)):
             body.append(self.new_ptr())
         body += self.block(r.randint(4, 12), top=True)
         for cell, kind in sorted(self.valid.items()):
             if r.random() < 0.5:
-                body.append(Use(cell, kind))
+                if kind == "ref":
+                    body.append(UseRef(cell))
+                else:
+                    body.append(Use(cell, kind))
         body += [Deinit(a) for a in self.arenas]
         return body
 
@@ -454,20 +575,27 @@ class Gen:
         src = r.choice(strs) if strs and r.random() < 0.5 else None
         via = "fz_str" if self.phase != "A" and r.random() < 0.3 else None
         self.arena_of[v] = a
+        self.str_vars.append(v)
         self.valid[v] = "str"
         return LetStr(v, a, r.choice(WORDS), src, via)
 
     def drop_arena(self, a):
         for cell in list(self.valid):
-            if self.cell_arena(cell) == a:
+            ca = self.cell_arena(cell)
+            if ca == a or (isinstance(ca, tuple) and a in ca):
                 del self.valid[cell]
+
+    def drop_local(self, x):
+        for rf in list(self.valid):
+            if self.valid[rf] == "ref" and self.ref_target.get(rf) == x:
+                del self.valid[rf]
 
     def cell_arena(self, cell):
         return self.arena_of.get(cell)
 
     def pick_cell(self, kind=None):
         r = self.rng
-        cells = [c for c, k in self.valid.items() if kind in (None, k)]
+        cells = [c for c, k in self.valid.items() if k != "ref" and kind in (None, k)]
         if r.random() < 0.06 or not cells:   # now and then a cell that may be dangling
             cells = [c for c in self.all_cells() if kind in (None, self.kind_of(c))]
         return r.choice(cells) if cells else None
@@ -496,8 +624,10 @@ class Gen:
                 choices += ["ptr", "str"]
                 if self.phase != "A":
                     choices += ["holder", "array", "strarray", "strarray", "str", "view", "view", "split"]
+                    if self.phase == "C" and len(self.arenas) >= 2 and self.conds:
+                        choices += ["pick"]
             if self.phase != "A":
-                choices += ["store"]
+                choices += ["store", "copyvar", "rebindref", "mutlocal", "useref"]
             if self.phase == "C" and depth < 2:
                 choices += ["if", "while"]
             what = r.choice(choices)
@@ -509,12 +639,69 @@ class Gen:
     def gen_ptr(self, depth): return self.new_ptr()
     def gen_str(self, depth): return self.new_str()
 
+    def gen_pick(self, depth):
+        if len(self.arenas) < 2 or not self.conds:
+            return None
+        a, b = self.rng.sample(self.arenas, 2)
+        v = self.name("p")
+        self.arena_of[v] = (a, b)
+        self.ptr_vars.append(v)
+        self.valid[v] = "ptr"
+        return LetPick(v, a, b, self.rng.choice(self.conds), self.rng.randint(1, 250))
+
+    def gen_copyvar(self, depth):
+        r = self.rng
+        groups = []
+        if len(self.ptr_vars) >= 2:
+            groups.append(("ptr", self.ptr_vars))
+        if len(self.str_vars) >= 2:
+            groups.append(("str", self.str_vars))
+        if not groups:
+            return None
+        kind, pool = r.choice(groups)
+        dst = r.choice(pool)
+        srcs = [v for v in pool if v != dst]
+        src = r.choice(srcs)
+        self.arena_of[dst] = self.arena_of[src]
+        if src in self.valid:
+            self.valid[dst] = kind
+        else:
+            self.valid.pop(dst, None)
+        return CopyVar(dst, src)
+
+    def gen_rebindref(self, depth):
+        if not self.ref_vars or not self.local_vars:
+            return None
+        rf = self.rng.choice(self.ref_vars)
+        x = self.rng.choice(self.local_vars)
+        self.ref_target[rf] = x
+        self.valid[rf] = "ref"
+        return RebindRef(rf, x)
+
+    def gen_mutlocal(self, depth):
+        if not self.local_vars:
+            return None
+        x = self.rng.choice(self.local_vars)
+        self.drop_local(x)
+        return MutLocal(x)
+
+    def gen_useref(self, depth):
+        if not self.ref_vars:
+            return None
+        usable = [rf for rf in self.ref_vars if rf in self.valid]
+        if usable and self.rng.random() >= 0.15:
+            rf = self.rng.choice(usable)
+        else:
+            rf = self.rng.choice(self.ref_vars)
+        return UseRef(rf)
+
     def gen_view(self, depth):
         src = self.pick_cell("str")
         if src is None or "." in src or "[" in src:
             return None
         v = self.name("s")
         self.arena_of[v] = self.arena_of[src]
+        self.str_vars.append(v)
         if src in self.valid:
             self.valid[v] = "str"
         return LetView(v, src)
@@ -565,8 +752,12 @@ class Gen:
         if not self.ptr_vars:
             return None
         v = self.rng.choice(self.ptr_vars)
+        a = self.arena_of[v]
+        if isinstance(a, tuple) or (len(self.arenas) > 1 and self.rng.random() < 0.5):
+            a = self.rng.choice(self.arenas)
+            self.arena_of[v] = a
         self.valid[v] = "ptr"
-        return Realloc(v, self.arena_of[v], self.rng.randint(1, 250))
+        return Realloc(v, a, self.rng.randint(1, 250))
 
     def gen_holder(self, depth):
         p, s = self.pick_cell("ptr"), self.pick_cell("str")
@@ -617,9 +808,9 @@ class Gen:
 
     def gen_while(self, depth):
         before = dict(self.valid)
-        body = self.block(self.rng.randint(1, 3), depth=depth + 1)
+        body = self.block(self.rng.randint(1, 4), depth=depth + 1)
         self.valid = {c: k for c, k in self.valid.items() if c in before}
-        return While(self.name("i"), self.rng.randint(1, 3), body)
+        return While(self.name("i"), self.rng.randint(1, 5), body)
 
 
 def find_uses(body, trace):
@@ -628,7 +819,7 @@ def find_uses(body, trace):
 
     def visit(block):
         for i, s in enumerate(block):
-            if isinstance(s, (Use, UseArr)) and id(s) in trace:
+            if isinstance(s, (Use, UseArr, UseRef)) and id(s) in trace:
                 out.append((block, i))
             for b in s.children():
                 visit(b)
@@ -648,6 +839,9 @@ def generate(seed, phase):
         if uses:
             block, i = rng.choice(uses)
             a = trace[id(block[i])]
-            block.insert(i, Deinit(a) if rng.random() < 0.2 else Reset(a))
+            if a.startswith("@"):
+                block.insert(i, MutLocal(a[1:]))
+            else:
+                block.insert(i, Deinit(a) if rng.random() < 0.2 else Reset(a))
             lab, out = label(body)
     return body, lab, out

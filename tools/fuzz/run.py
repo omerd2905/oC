@@ -34,10 +34,11 @@ import arith       # noqa: E402
 import lifetime    # noqa: E402
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-OCC = os.path.join(ROOT, "bin", "occ")
+EXE = ".exe" if os.name == "nt" else ""
+OCC = os.path.join(ROOT, "bin", "occ" + EXE)
 # Words the validator uses for lifetime errors; any other compile error means the generator
 # produced an invalid program.
-LIFETIME_WORDS = ("use-after-free", "arena", "escape", "borrow", "live long enough", "dangling")
+LIFETIME_WORDS = ("use-after-free", "arena", "escape", "borrow", "live long enough", "dangling", "invalidated")
 # Reported, but not a failure: the validator tracks a local array or struct as a whole, so
 # after one arena's reset every element of an aggregate that also held its pointers counts as
 # dangling (conservative, documented). The generator names aggregates h<N> and r<N>.
@@ -54,9 +55,15 @@ def build(src, path, backend):
 
 
 def execute(path):
+    exe = path + EXE if EXE and os.path.exists(path + EXE) else path
     try:
-        p = subprocess.run([path], capture_output=True, timeout=10)
-        return p.returncode, p.stdout.decode("latin-1"), p.stderr.decode("latin-1")
+        p = subprocess.run([exe], capture_output=True, timeout=10)
+        out = p.stdout.decode("latin-1")
+        err = p.stderr.decode("latin-1")
+        if os.name == "nt":
+            out = out.replace("\r\n", "\n")
+            err = err.replace("\r\n", "\n")
+        return p.returncode, out, err
     except subprocess.TimeoutExpired:
         return "timeout", "", ""
 
@@ -221,7 +228,7 @@ def main():
     ap.add_argument("--budget", type=int, default=2000, help="programs per mode")
     ap.add_argument("--seed", type=int, default=None, help="first seed (default: random)")
     ap.add_argument("--mode", choices=["lifetime", "arith", "both"], default="both")
-    ap.add_argument("--jobs", type=int, default=os.cpu_count() or 2)
+    ap.add_argument("--jobs", type=int, default=min(2 if os.name == "nt" else 4, os.cpu_count() or 2))
     ap.add_argument("--out", default=os.path.join(ROOT, "fuzz-findings"))
     ap.add_argument("--occ", default=OCC)
     ap.add_argument("--minimize", type=int, default=3, help="findings to minimize per category")

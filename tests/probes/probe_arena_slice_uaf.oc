@@ -1,0 +1,10 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut xs: []i64 = arena_slice<i64>(&mut a, 4);
+    xs[0] = 7;
+    arena_reset(&mut a);
+    print(xs[0]);
+    arena_deinit(&mut a);
+}

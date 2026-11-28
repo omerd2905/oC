@@ -88,6 +88,10 @@ COMPILE_REJECT=(
   "probe_ret_multi_arena_escape.oc|cannot return reference to locally allocated arena 'local'"
   "probe_if_var_borrow_uaf.oc|reference 'r' invalidated by mutable operation on 'x'"
   "probe_fn_param_limit.oc|security error: function parameter limit (16) exceeded"
+  "probe_multi_arena_call_uaf.oc|use-after-free: variable 'p' used after arena 'b' was deinitialized"
+  "probe_arena_slice_uaf.oc|use-after-free: variable 'xs' used after arena 'a' was reset"
+  "probe_arena_try_alloc_uaf.oc|use-after-free: variable 'p' used after arena 'a' was reset"
+  "probe_arena_slice_u8_reject.oc|[]u8 is string (read-only bytes)"
 )
 
 RUNTIME_TRAP=(
@@ -127,6 +131,7 @@ RUNTIME_TRAP=(
   "probe_str2_split_empty_sep.oc"
   "probe_null_index_trap.oc"
   "probe_null_field_trap.oc"
+  "probe_arena_slice_bounds.oc"
 )
 
 PASS=0

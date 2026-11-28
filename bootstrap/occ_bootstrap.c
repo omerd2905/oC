@@ -7,6 +7,7 @@
 #include <stdbool.h>
 #include <stdlib.h>
 #include <string.h>
+#include <errno.h>
 #include <fcntl.h>
 #include <sys/stat.h>
 #ifdef _WIN32
@@ -57,8 +58,8 @@ static inline int32_t sys_unlink(const char* path) { return (int32_t)_unlink(pat
 static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }
 static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }
 #else
-static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }
-static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }
+static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { ssize_t r; do { r = read(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }
+static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { ssize_t r; do { r = write(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }
 static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }
 static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }
 static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }
@@ -324,12 +325,13 @@ typedef struct CodeBuffer CodeBuffer;
 typedef struct LitByte LitByte;
 typedef struct NativeGen NativeGen;
 typedef struct ModuleLoader ModuleLoader;
+typedef struct __ErrorUnion__Pmutu8__u32 __ErrorUnion__Pmutu8__u32;
+typedef struct __ErrorUnion__string__u32 __ErrorUnion__string__u32;
 typedef struct __ErrorUnion__u64__u32 __ErrorUnion__u64__u32;
 typedef struct __ErrorUnion__i64__u32 __ErrorUnion__i64__u32;
 typedef struct __Slice__string __Slice__string;
 typedef struct __ErrorUnion__Utf8Char__u32 __ErrorUnion__Utf8Char__u32;
 typedef struct __ErrorUnion__usize__u32 __ErrorUnion__usize__u32;
-typedef struct __ErrorUnion__string__u32 __ErrorUnion__string__u32;
 
 struct Arena {
     size_t offset;
@@ -598,6 +600,16 @@ struct ModuleLoader {
     uint32_t lines;
 };
 
+struct __ErrorUnion__Pmutu8__u32 {
+    uint64_t code;
+    uint8_t* value;
+};
+
+struct __ErrorUnion__string__u32 {
+    uint64_t code;
+    oc_string value;
+};
+
 struct __ErrorUnion__u64__u32 {
     uint64_t code;
     uint64_t value;
@@ -623,14 +635,12 @@ struct __ErrorUnion__usize__u32 {
     size_t value;
 };
 
-struct __ErrorUnion__string__u32 {
-    uint64_t code;
-    oc_string value;
-};
-
 void arena_poison_region(Arena* arena);
 Arena arena_init(size_t capacity);
 uint8_t* arena_alloc(Arena* arena, size_t size);
+size_t arena_remaining(Arena* arena);
+__ErrorUnion__Pmutu8__u32 arena_try_alloc(Arena* arena, size_t size);
+__ErrorUnion__string__u32 arena_try_copy(Arena* arena, oc_string src);
 void arena_reset(Arena* arena);
 void arena_deinit(Arena* arena);
 bool str_eq(oc_string a, oc_string b);
@@ -799,7 +809,7 @@ oc_string fx_root_name(AstNode* e);
 bool fx_views(FnEffects* fx, size_t slot, AstNode* f, bool ret_ptr);
 oc_string get_arena_arg_name(AstNode* arg);
 bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, bool ret_ptr, AstNode* n);
-oc_string get_arena_source(FnEffects* fx, AstNode* expr);
+oc_string get_arena_source(Validator* v, AstNode* expr);
 oc_string get_expr_arena_borrow(Validator* v, AstNode* expr);
 oc_string validator_field_type(Validator* v, oc_string s_name, oc_string f_name);
 oc_string validator_stack_place_type(Validator* v, AstNode* expr);
@@ -862,13 +872,16 @@ AstNode* parse_program(Parser* p);
 oc_string gx_done(StrBuf sb);
 void gx_err(Generics* g, Token tok, oc_string msg, oc_string name);
 bool gx_is_ident_char(uint8_t c);
+oc_string gx_canon_arena(Arena* arena, oc_string t);
 oc_string gx_canon(Generics* g, oc_string t);
+GArgs gx_split_arena(Arena* arena, oc_string text);
 GArgs gx_split(Generics* g, oc_string text);
 void gx_mangle_into(StrBuf* sb, oc_string t);
 oc_string gx_mangled(Generics* g, oc_string name, GArgs args);
 oc_string gx_join(Generics* g, GArgs args);
 AstNode* gx_template(Generics* g, oc_string name);
 size_t gx_count(AstNode* list);
+oc_string gx_subst_arena(Arena* arena, oc_string t, AstNode* params, GArgs args);
 oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args);
 AstNode* gx_clone(Generics* g, AstNode* n);
 void gx_fill(Generics* g, AstNode* n, AstNode* params, GArgs args);
@@ -1074,6 +1087,7 @@ void ng_emit_win_runtime(NativeGen* ng, CodeBuffer* code, bool* has_offset);
 size_t pe_align(size_t v, size_t a);
 void pe_append_zeros(CodeBuffer* buf, size_t n);
 void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size_t rva, size_t raw_size, size_t raw_off, uint32_t flags);
+bool ng_patch_rip_data_relocs(NativeGen* ng, CodeBuffer* code, size_t text_rva, size_t data_rva);
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str);
 bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bool fp_trap, bool arena_poison, SourceMap* m);
 bool emit_native_elf(AstNode* root, oc_string out_file_str, bool fp_trap, bool arena_poison, SourceMap* m);
@@ -1147,6 +1161,41 @@ uint8_t* arena_alloc(Arena* arena, size_t size) {
     uint8_t* ptr = ((uint8_t*)((((__oc_notnull(arena))->buffer) + ((__oc_notnull(arena))->offset))));
     ((__oc_notnull(arena))->offset) = __OC_ADD(((__oc_notnull(arena))->offset), aligned);
     return ptr;
+}
+
+size_t arena_remaining(Arena* arena) {
+    if (__OC_SEQ(__OC_MOD(((__oc_notnull(arena))->offset), ((size_t)8)), !=, ((size_t)0))) {
+    return ((size_t)0);
+    }
+    if (__OC_SEQ(((__oc_notnull(arena))->offset), >=, ((__oc_notnull(arena))->capacity))) {
+    return ((size_t)0);
+    }
+    return __OC_SUB(((__oc_notnull(arena))->capacity), ((__oc_notnull(arena))->offset));
+}
+
+__ErrorUnion__Pmutu8__u32 arena_try_alloc(Arena* arena, size_t size) {
+    uint8_t* p = arena_alloc(arena, size);
+    if (__OC_SEQ(((size_t)(p)), ==, ((size_t)0))) {
+    return (__ErrorUnion__Pmutu8__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
+    }
+    return (__ErrorUnion__Pmutu8__u32){ .code = ((uint64_t)0), .value = p };
+}
+
+__ErrorUnion__string__u32 arena_try_copy(Arena* arena, oc_string src) {
+    if (__OC_SEQ(((src).len), ==, ((size_t)0))) {
+    return (__ErrorUnion__string__u32){ .code = ((uint64_t)0), .value = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } };
+    }
+    __ErrorUnion__Pmutu8__u32 __err1 = arena_try_alloc(arena, ((src).len));
+    if (__OC_SEQ(((__err1).code), !=, ((uint64_t)0))) {
+    return (__ErrorUnion__string__u32){ .code = ((__err1).code) };
+    }
+    uint8_t* buf = ((__err1).value);
+    size_t i = ((size_t)0);
+    while (__OC_SEQ(i, <, ((src).len))) {
+    __OC_AT((buf), (i)) = __oc_index_str(src, i);
+    i = __OC_ADD(i, ((size_t)1));
+    }
+    return (__ErrorUnion__string__u32){ .code = ((uint64_t)0), .value = (oc_string){ .ptr = ((uint8_t*)(buf)), .len = ((src).len) } };
 }
 
 void arena_reset(Arena* arena) {
@@ -1608,11 +1657,11 @@ __ErrorUnion__i64__u32 str_to_i64_radix(oc_string s, uint32_t radix) {
     digits = __oc_slice_str(s, 1, ((s).len));
     }
     }
-    __ErrorUnion__u64__u32 __err1 = num_digits(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
-    if (__OC_SEQ(((__err1).code), !=, ((uint64_t)0))) {
-    return (__ErrorUnion__i64__u32){ .code = ((__err1).code) };
+    __ErrorUnion__u64__u32 __err4 = num_digits(digits, ({ __auto_type _v = (radix); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
+    if (__OC_SEQ(((__err4).code), !=, ((uint64_t)0))) {
+    return (__ErrorUnion__i64__u32){ .code = ((__err4).code) };
     }
-    uint64_t mag = ((__err1).value);
+    uint64_t mag = ((__err4).value);
     if (neg) {
     if (__OC_SEQ(mag, >, ((uint64_t)9223372036854775808ULL))) {
     return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
@@ -1638,9 +1687,9 @@ __ErrorUnion__i64__u32 str_to_i64(oc_string s) {
 
 ParsedU64 parsed_u64(__ErrorUnion__u64__u32 r) {
     ParsedU64 fail = (ParsedU64){ .ok = false, .value = ((uint64_t)0) };
-    __ErrorUnion__u64__u32 __err2 = r;
-    if (__OC_SEQ(((__err2).code), ==, ((uint64_t)0))) {
-    uint64_t v = ((__err2).value);
+    __ErrorUnion__u64__u32 __err5 = r;
+    if (__OC_SEQ(((__err5).code), ==, ((uint64_t)0))) {
+    uint64_t v = ((__err5).value);
     return (ParsedU64){ .ok = true, .value = v };
     }
     else {
@@ -1651,9 +1700,9 @@ ParsedU64 parsed_u64(__ErrorUnion__u64__u32 r) {
 
 ParsedI64 parsed_i64(__ErrorUnion__i64__u32 r) {
     ParsedI64 fail = (ParsedI64){ .ok = false, .value = ((int64_t)0) };
-    __ErrorUnion__i64__u32 __err3 = r;
-    if (__OC_SEQ(((__err3).code), ==, ((uint64_t)0))) {
-    int64_t v = ((__err3).value);
+    __ErrorUnion__i64__u32 __err6 = r;
+    if (__OC_SEQ(((__err6).code), ==, ((uint64_t)0))) {
+    int64_t v = ((__err6).value);
     return (ParsedI64){ .ok = true, .value = v };
     }
     else {
@@ -2081,11 +2130,11 @@ __ErrorUnion__usize__u32 utf8_len(oc_string s) {
     size_t n = ((size_t)0);
     size_t i = ((size_t)0);
     while (__OC_SEQ(i, <, ((s).len))) {
-    __ErrorUnion__Utf8Char__u32 __err4 = utf8_decode(s, i);
-    if (__OC_SEQ(((__err4).code), !=, ((uint64_t)0))) {
-    return (__ErrorUnion__usize__u32){ .code = ((__err4).code) };
+    __ErrorUnion__Utf8Char__u32 __err7 = utf8_decode(s, i);
+    if (__OC_SEQ(((__err7).code), !=, ((uint64_t)0))) {
+    return (__ErrorUnion__usize__u32){ .code = ((__err7).code) };
     }
-    Utf8Char c = ((__err4).value);
+    Utf8Char c = ((__err7).value);
     i = __OC_ADD(i, ((c).width));
     n = __OC_ADD(n, ((size_t)1));
     }
@@ -2093,8 +2142,8 @@ __ErrorUnion__usize__u32 utf8_len(oc_string s) {
 }
 
 bool utf8_valid(oc_string s) {
-    __ErrorUnion__usize__u32 __err5 = utf8_len(s);
-    if (__OC_SEQ(((__err5).code), ==, ((uint64_t)0))) {
+    __ErrorUnion__usize__u32 __err8 = utf8_len(s);
+    if (__OC_SEQ(((__err8).code), ==, ((uint64_t)0))) {
     return true;
     }
     else {
@@ -2141,9 +2190,9 @@ __ErrorUnion__string__u32 stdin_line(Arena* arena) {
 }
 
 ReadLine read_line(Arena* arena) {
-    __ErrorUnion__string__u32 __err6 = stdin_line(arena);
-    if (__OC_SEQ(((__err6).code), ==, ((uint64_t)0))) {
-    oc_string line = ((__err6).value);
+    __ErrorUnion__string__u32 __err9 = stdin_line(arena);
+    if (__OC_SEQ(((__err9).code), ==, ((uint64_t)0))) {
+    oc_string line = ((__err9).value);
     return (ReadLine){ .ok = true, .line = line };
     }
     else {
@@ -2177,9 +2226,9 @@ __ErrorUnion__string__u32 stdin_all(Arena* arena) {
 }
 
 ReadAll read_all(Arena* arena) {
-    __ErrorUnion__string__u32 __err7 = stdin_all(arena);
-    if (__OC_SEQ(((__err7).code), ==, ((uint64_t)0))) {
-    oc_string data = ((__err7).value);
+    __ErrorUnion__string__u32 __err10 = stdin_all(arena);
+    if (__OC_SEQ(((__err10).code), ==, ((uint64_t)0))) {
+    oc_string data = ((__err10).value);
     return (ReadAll){ .ok = true, .data = data };
     }
     else {
@@ -2223,9 +2272,9 @@ __ErrorUnion__i64__u32 stdin_i64(void) {
     return (__ErrorUnion__i64__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
     }
     oc_string all = (oc_string){ .ptr = ((uint8_t*)((&(buf)))), .len = ((size_t)64) };
-    __ErrorUnion__i64__u32 __err8 = str_to_i64(trim(__oc_slice_str(all, 0, len)));
-    if (__OC_SEQ(((__err8).code), ==, ((uint64_t)0))) {
-    int64_t v = ((__err8).value);
+    __ErrorUnion__i64__u32 __err11 = str_to_i64(trim(__oc_slice_str(all, 0, len)));
+    if (__OC_SEQ(((__err11).code), ==, ((uint64_t)0))) {
+    int64_t v = ((__err11).value);
     return (__ErrorUnion__i64__u32){ .code = ((uint64_t)0), .value = v };
     }
     else {
@@ -2235,9 +2284,9 @@ __ErrorUnion__i64__u32 stdin_i64(void) {
 }
 
 ParsedI64 read_i64(void) {
-    __ErrorUnion__i64__u32 __err9 = stdin_i64();
-    if (__OC_SEQ(((__err9).code), ==, ((uint64_t)0))) {
-    int64_t v = ((__err9).value);
+    __ErrorUnion__i64__u32 __err12 = stdin_i64();
+    if (__OC_SEQ(((__err12).code), ==, ((uint64_t)0))) {
+    int64_t v = ((__err12).value);
     return (ParsedI64){ .ok = true, .value = v };
     }
     else {
@@ -2296,12 +2345,23 @@ __ErrorUnion__usize__u32 file_read(oc_string path, uint8_t* out_buf, size_t max_
     if (__OC_SEQ(fd, <, ((int32_t)0))) {
     return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
     }
-    int64_t n = sys_read(fd, out_buf, max_len);
-    sys_close(fd);
+    size_t total = ((size_t)0);
+    while (__OC_SEQ(total, <, max_len)) {
+    int64_t n = sys_read(fd, ((uint8_t*)((out_buf + total))), __OC_SUB(max_len, total));
+    if (__OC_SEQ(n, ==, ((int64_t)(-(int64_t)4)))) {
+    continue;
+    }
     if (__OC_SEQ(n, <, ((int64_t)0))) {
+    sys_close(fd);
     return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (1); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
     }
-    return (__ErrorUnion__usize__u32){ .code = ((uint64_t)0), .value = ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }) };
+    if (__OC_SEQ(n, ==, ((int64_t)0))) {
+    break;
+    }
+    total = __OC_ADD(total, ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    sys_close(fd);
+    return (__ErrorUnion__usize__u32){ .code = ((uint64_t)0), .value = total };
 }
 
 __ErrorUnion__usize__u32 file_write(oc_string path, oc_string content) {
@@ -2314,18 +2374,26 @@ __ErrorUnion__usize__u32 file_write(oc_string path, oc_string content) {
     if (__OC_SEQ(fd, <, ((int32_t)0))) {
     return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (0); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
     }
-    int64_t n = sys_write(fd, ((uint8_t*)(((content).ptr))), ((content).len));
+    size_t written = ((size_t)0);
+    while (__OC_SEQ(written, <, ((content).len))) {
+    int64_t n = sys_write(fd, ((uint8_t*)((((content).ptr) + written))), __OC_SUB(((content).len), written));
+    if (__OC_SEQ(n, ==, ((int64_t)(-(int64_t)4)))) {
+    continue;
+    }
+    if (__OC_SEQ(n, <=, ((int64_t)0))) {
     sys_close(fd);
-    if (__OC_SEQ(n, !=, ({ __auto_type _v = (((content).len)); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))) {
     return (__ErrorUnion__usize__u32){ .code = __OC_ADD(({ __auto_type _v = (2); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }), ((uint64_t)1)) };
     }
+    written = __OC_ADD(written, ({ __auto_type _v = (n); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    }
+    sys_close(fd);
     return (__ErrorUnion__usize__u32){ .code = ((uint64_t)0), .value = ((content).len) };
 }
 
 int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
-    __ErrorUnion__usize__u32 __err10 = file_read(path, out_buf, max_len);
-    if (__OC_SEQ(((__err10).code), ==, ((uint64_t)0))) {
-    size_t n = ((__err10).value);
+    __ErrorUnion__usize__u32 __err13 = file_read(path, out_buf, max_len);
+    if (__OC_SEQ(((__err13).code), ==, ((uint64_t)0))) {
+    size_t n = ((__err13).value);
     return ({ __auto_type _v = (n); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; });
     }
     else {
@@ -2335,8 +2403,8 @@ int64_t read_file(oc_string path, uint8_t* out_buf, size_t max_len) {
 }
 
 bool write_file(oc_string path, oc_string content) {
-    __ErrorUnion__usize__u32 __err11 = file_write(path, content);
-    if (__OC_SEQ(((__err11).code), ==, ((uint64_t)0))) {
+    __ErrorUnion__usize__u32 __err14 = file_write(path, content);
+    if (__OC_SEQ(((__err14).code), ==, ((uint64_t)0))) {
     return true;
     }
     else {
@@ -2945,6 +3013,9 @@ int32_t srcmap_file(SourceMap* m, uint32_t line) {
 
 AstNode* ast_alloc_node(Arena* arena, uint32_t tag, Token tok) {
     uint8_t* raw = arena_alloc(arena, ((size_t)128));
+    if (__OC_SEQ(((size_t)(raw)), ==, ((size_t)0))) {
+    sys_exit(((int32_t)1));
+    }
     AstNode* node = ((AstNode*)(raw));
     ((__oc_notnull(node))->tag) = tag;
     ((__oc_notnull(node))->tok) = tok;
@@ -4812,27 +4883,28 @@ bool fx_scan(FnEffects* fx, size_t slot, AstNode* params, bool ret_ptr, AstNode*
     return changed;
 }
 
-oc_string get_arena_source(FnEffects* fx, AstNode* expr) {
+oc_string get_arena_source(Validator* v, AstNode* expr) {
     if (__OC_SEQ(expr, ==, ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
     if (__OC_SEQ(((__oc_notnull(expr))->tag), ==, NODE_CALL)) {
+    oc_string all = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     AstNode* arg = ((__oc_notnull(expr))->left);
     size_t ai = ((size_t)0);
     while (__OC_SEQ(arg, !=, ((AstNode*)(0)))) {
-    if (fx_param_borrows(fx, ((((__oc_notnull(expr))->tok)).slice), ai)) {
+    if (fx_param_borrows(((__oc_notnull(v))->fx), ((((__oc_notnull(expr))->tok)).slice), ai)) {
     oc_string name = get_arena_arg_name(arg);
     if (__OC_SEQ(((name).len), >, ((size_t)0))) {
-    return name;
+    all = arena_list_union(v, all, name);
     }
     }
     arg = ((__oc_notnull(arg))->next);
     ai = __OC_ADD(ai, ((size_t)1));
     }
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    return all;
     }
     if (__OC_SEQ(((__oc_notnull(expr))->tag), ==, NODE_CAST)) {
-    return get_arena_source(fx, ((__oc_notnull(expr))->left));
+    return get_arena_source(v, ((__oc_notnull(expr))->left));
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
@@ -4841,7 +4913,7 @@ oc_string get_expr_arena_borrow(Validator* v, AstNode* expr) {
     if (__OC_SEQ(expr, ==, ((AstNode*)(0)))) {
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
-    oc_string direct = get_arena_source(((__oc_notnull(v))->fx), expr);
+    oc_string direct = get_arena_source(v, expr);
     if (__OC_SEQ(((__oc_notnull(expr))->tag), ==, NODE_CALL)) {
     oc_string all = direct;
     AstNode* a = ((__oc_notnull(expr))->left);
@@ -7567,8 +7639,8 @@ bool gx_is_ident_char(uint8_t c) {
     return __OC_SEQ(c, ==, ((uint8_t)95));
 }
 
-oc_string gx_canon(Generics* g, oc_string t) {
-    StrBuf sb = strbuf_init(((__oc_notnull(g))->arena), __OC_ADD(((t).len), ((size_t)1)));
+oc_string gx_canon_arena(Arena* arena, oc_string t) {
+    StrBuf sb = strbuf_init(arena, __OC_ADD(((t).len), ((size_t)1)));
     size_t i = ((size_t)0);
     while (__OC_SEQ(i, <, ((t).len))) {
     uint8_t c = __oc_index_str(t, i);
@@ -7608,7 +7680,11 @@ oc_string gx_canon(Generics* g, oc_string t) {
     return gx_done(sb);
 }
 
-GArgs gx_split(Generics* g, oc_string text) {
+oc_string gx_canon(Generics* g, oc_string t) {
+    return gx_canon_arena(((__oc_notnull(g))->arena), t);
+}
+
+GArgs gx_split_arena(Arena* arena, oc_string text) {
     GArgs r = (GArgs){ .n = ((size_t)0), .items = { (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 } } };
     int32_t depth = ((int32_t)0);
     size_t start = ((size_t)0);
@@ -7637,7 +7713,7 @@ GArgs gx_split(Generics* g, oc_string text) {
     }
     if (cut) {
     if (__OC_SEQ(((r).n), <, ((size_t)8))) {
-    __OC_AT((((r).items)), (((r).n))) = gx_canon(g, trim(__oc_slice_str(text, start, i)));
+    __OC_AT((((r).items)), (((r).n))) = gx_canon_arena(arena, trim(__oc_slice_str(text, start, i)));
     ((r).n) = __OC_ADD(((r).n), ((size_t)1));
     }
     start = __OC_ADD(i, ((size_t)1));
@@ -7645,6 +7721,10 @@ GArgs gx_split(Generics* g, oc_string text) {
     i = __OC_ADD(i, ((size_t)1));
     }
     return r;
+}
+
+GArgs gx_split(Generics* g, oc_string text) {
+    return gx_split_arena(((__oc_notnull(g))->arena), text);
 }
 
 void gx_mangle_into(StrBuf* sb, oc_string t) {
@@ -7740,11 +7820,11 @@ size_t gx_count(AstNode* list) {
     return n;
 }
 
-oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args) {
+oc_string gx_subst_arena(Arena* arena, oc_string t, AstNode* params, GArgs args) {
     if (__OC_SEQ(((t).len), ==, ((size_t)0))) {
     return t;
     }
-    StrBuf sb = strbuf_init(((__oc_notnull(g))->arena), __OC_ADD(((t).len), ((size_t)16)));
+    StrBuf sb = strbuf_init(arena, __OC_ADD(((t).len), ((size_t)16)));
     size_t i = ((size_t)0);
     while (__OC_SEQ(i, <, ((t).len))) {
     if (gx_is_ident_char(__oc_index_str(t, i))) {
@@ -7781,6 +7861,10 @@ oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args) {
     }
     }
     return gx_done(sb);
+}
+
+oc_string gx_subst(Generics* g, oc_string t, AstNode* params, GArgs args) {
+    return gx_subst_arena(((__oc_notnull(g))->arena), t, params, args);
 }
 
 AstNode* gx_clone(Generics* g, AstNode* n) {
@@ -7850,6 +7934,18 @@ oc_string gx_instantiate(Generics* g, AstNode* t, GArgs args, Token site) {
     print_str_raw((oc_string){ .ptr = (const uint8_t*)("\012"), .len = sizeof("\012") - 1 });
     ((__oc_notnull(g))->ok) = false;
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    bool is_arena_slice = str_eq(((((__oc_notnull(t))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("arena_slice"), .len = sizeof("arena_slice") - 1 });
+    if (str_eq(((((__oc_notnull(t))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("arena_try_slice"), .len = sizeof("arena_try_slice") - 1 })) {
+    is_arena_slice = true;
+    }
+    if (is_arena_slice) {
+    if (__OC_SEQ(((args).n), ==, ((size_t)1))) {
+    if (str_eq(__OC_AT((((args).items)), (0)), (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
+    gx_err(g, site, (oc_string){ .ptr = (const uint8_t*)("[]u8 is string (read-only bytes); use arena_try_alloc for *mut u8 or []i8 for a mutable byte slice: "), .len = sizeof("[]u8 is string (read-only bytes); use arena_try_alloc for *mut u8 or []i8 for a mutable byte slice: ") - 1 }, ((((__oc_notnull(t))->tok)).slice));
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    }
+    }
     }
     oc_string name = gx_mangled(g, ((((__oc_notnull(t))->tok)).slice), args);
     size_t i = ((size_t)0);
@@ -8444,6 +8540,21 @@ oc_string dz_type_of(Errs* e, AstNode* x) {
     AstNode* f = program_find_fn(((__oc_notnull(e))->root), ((((__oc_notnull(x))->tok)).slice));
     if (__OC_SEQ(f, !=, ((AstNode*)(0)))) {
     return ((__oc_notnull(f))->type_name);
+    }
+    if (__OC_SEQ(((((__oc_notnull(x))->type_name)).len), >, ((size_t)0))) {
+    AstNode* d = ((__oc_notnull(((__oc_notnull(e))->root)))->left);
+    while (__OC_SEQ(d, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((__oc_notnull(d))->tag), ==, NODE_GENERIC)) {
+    if (__OC_SEQ(((__oc_notnull(d))->right), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((__oc_notnull(((__oc_notnull(d))->right)))->tag), ==, NODE_FN)) {
+    if (str_eq(((((__oc_notnull(d))->tok)).slice), ((((__oc_notnull(x))->tok)).slice))) {
+    return gx_subst_arena(((__oc_notnull(e))->arena), ((__oc_notnull(((__oc_notnull(d))->right)))->type_name), ((__oc_notnull(d))->left), gx_split_arena(((__oc_notnull(e))->arena), ((__oc_notnull(x))->type_name)));
+    }
+    }
+    }
+    }
+    d = ((__oc_notnull(d))->next);
+    }
     }
     return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
@@ -11745,6 +11856,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdbool.h>\012"), .len = sizeof("#include <stdbool.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <stdlib.h>\012"), .len = sizeof("#include <stdlib.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <string.h>\012"), .len = sizeof("#include <string.h>\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <errno.h>\012"), .len = sizeof("#include <errno.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <fcntl.h>\012"), .len = sizeof("#include <fcntl.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#include <sys/stat.h>\012"), .len = sizeof("#include <sys/stat.h>\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#ifdef _WIN32\012"), .len = sizeof("#ifdef _WIN32\012") - 1 });
@@ -11780,8 +11892,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012"), .len = sizeof("static inline int32_t sys_socket(int32_t domain, int32_t type, int32_t protocol) { (void)domain; (void)type; (void)protocol; return -1; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\012"), .len = sizeof("static inline int32_t sys_connect(int32_t fd, const void* addr, uint32_t len) { (void)fd; (void)addr; (void)len; return -1; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#else\012"), .len = sizeof("#else\012") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\012"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)read(fd, buf, count); }\012") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\012"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)write(fd, buf, count); }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { ssize_t r; do { r = read(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\012"), .len = sizeof("static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { ssize_t r; do { r = read(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { ssize_t r; do { r = write(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\012"), .len = sizeof("static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { ssize_t r; do { r = write(fd, buf, count); } while (r < 0 && errno == EINTR); return (int64_t)r; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\012"), .len = sizeof("static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { return (int32_t)open(path, __oc_open_flags(flags), (mode_t)mode); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012"), .len = sizeof("static inline int32_t sys_close(int32_t fd) { return (int32_t)close(fd); }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012"), .len = sizeof("static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { int p = 0; if (prot & 1) p |= PROT_READ; if (prot & 2) p |= PROT_WRITE; if (prot & 4) p |= PROT_EXEC; int m = 0; if (flags & 1) m |= MAP_SHARED; if (flags & 2) m |= MAP_PRIVATE; if (flags & 32) m |= MAP_ANONYMOUS; return mmap((void*)addr, len, p, m, fd, (off_t)off); }\012") - 1 });
@@ -15385,12 +15497,22 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, ((uint8_t)73));
     buf_append_u8(code, ((uint8_t)137));
     buf_append_u8(code, ((uint8_t)202));
+    size_t retry_pos = ((__oc_notnull(code))->len);
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)199));
     buf_append_u8(code, ((uint8_t)192));
     elf_append_u32(code, sys_nr);
     buf_append_u8(code, ((uint8_t)15));
     buf_append_u8(code, ((uint8_t)5));
+    if (__OC_SEQ(sys_nr, <=, ((uint32_t)1))) {
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)131));
+    buf_append_u8(code, ((uint8_t)248));
+    buf_append_u8(code, ((uint8_t)252));
+    int32_t rel8 = ({ __auto_type _v = (__OC_SUB(({ __auto_type _v = (retry_pos); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(((__oc_notnull(code))->len), ((size_t)2))); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
+    buf_append_u8(code, ((uint8_t)116));
+    buf_append_u8(code, ({ __auto_type _v = (__OC_ADD(((int32_t)256), rel8)); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; }));
+    }
     return;
     }
     }
@@ -16334,6 +16456,46 @@ void pe_append_section_header(CodeBuffer* pe, oc_string name, size_t vsize, size
     elf_append_u32(pe, flags);
 }
 
+bool ng_patch_rip_data_relocs(NativeGen* ng, CodeBuffer* code, size_t text_rva, size_t data_rva) {
+    size_t ri = ((size_t)0);
+    while (__OC_SEQ(ri, <, ((__oc_notnull(ng))->data_reloc_count))) {
+    size_t c_pos = __OC_AT((((__oc_notnull(ng))->data_reloc_code)), (ri));
+    bool form_ok = false;
+    if (__OC_SEQ(c_pos, >=, ((size_t)2))) {
+    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)2)))), ==, ((uint8_t)72))) {
+    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), >=, ((uint8_t)184))) {
+    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), <=, ((uint8_t)191))) {
+    form_ok = true;
+    }
+    }
+    }
+    }
+    if ((!form_ok)) {
+    fwrite("native codegen error: unexpected data relocation form", 1, sizeof("native codegen error: unexpected data relocation form") - 1, stdout); fputc('\n', stdout);
+    return false;
+    }
+    uint8_t reg = __OC_SUB(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), ((uint8_t)184));
+    size_t target_rva = __OC_ADD(data_rva, __OC_AT((((__oc_notnull(ng))->data_reloc_data)), (ri)));
+    int64_t rel = __OC_SUB(({ __auto_type _v = (target_rva); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(__OC_ADD(text_rva, c_pos), ((size_t)5))); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
+    if (__OC_SEQ(rel, <, ((int64_t)(-(int64_t)2147483648)))) {
+    fwrite("native codegen error: RIP-relative data displacement out of range", 1, sizeof("native codegen error: RIP-relative data displacement out of range") - 1, stdout); fputc('\n', stdout);
+    return false;
+    }
+    if (__OC_SEQ(rel, >, ((int64_t)2147483647))) {
+    fwrite("native codegen error: RIP-relative data displacement out of range", 1, sizeof("native codegen error: RIP-relative data displacement out of range") - 1, stdout); fputc('\n', stdout);
+    return false;
+    }
+    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))) = ((uint8_t)141);
+    __OC_AT((((__oc_notnull(code))->buffer)), (c_pos)) = __OC_ADD(((uint8_t)5), __OC_MUL(reg, ((uint8_t)8)));
+    elf_patch_i32(code, __OC_ADD(c_pos, ((size_t)1)), ({ __auto_type _v = (rel); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)5)))) = ((uint8_t)15);
+    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)6)))) = ((uint8_t)31);
+    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)7)))) = ((uint8_t)0);
+    ri = __OC_ADD(ri, ((size_t)1));
+    }
+    return true;
+}
+
 bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
     oc_string dll_name = (oc_string){ .ptr = (const uint8_t*)("KERNEL32.dll"), .len = sizeof("KERNEL32.dll") - 1 };
     size_t thunk_bytes = __OC_MUL(__OC_ADD(NG_IMP_COUNT, ((size_t)1)), ((size_t)8));
@@ -16371,33 +16533,8 @@ bool ng_write_pe(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string ou
     elf_patch_i32(code, pos, ({ __auto_type _v = (rel); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
     fi = __OC_ADD(fi, ((size_t)1));
     }
-    size_t ri = ((size_t)0);
-    while (__OC_SEQ(ri, <, ((__oc_notnull(ng))->data_reloc_count))) {
-    size_t c_pos = __OC_AT((((__oc_notnull(ng))->data_reloc_code)), (ri));
-    bool form_ok = false;
-    if (__OC_SEQ(c_pos, >=, ((size_t)2))) {
-    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)2)))), ==, ((uint8_t)72))) {
-    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), >=, ((uint8_t)184))) {
-    if (__OC_SEQ(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), <=, ((uint8_t)191))) {
-    form_ok = true;
-    }
-    }
-    }
-    }
-    if ((!form_ok)) {
-    fwrite("native codegen error: unexpected data relocation form for PE32+", 1, sizeof("native codegen error: unexpected data relocation form for PE32+") - 1, stdout); fputc('\n', stdout);
+    if ((!ng_patch_rip_data_relocs(ng, code, text_rva, __OC_ADD(rdata_rva, udata_off)))) {
     return false;
-    }
-    uint8_t reg = __OC_SUB(__OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))), ((uint8_t)184));
-    size_t target_rva = __OC_ADD(__OC_ADD(rdata_rva, udata_off), __OC_AT((((__oc_notnull(ng))->data_reloc_data)), (ri)));
-    int64_t rel = __OC_SUB(({ __auto_type _v = (target_rva); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }), ({ __auto_type _v = (__OC_ADD(__OC_ADD(text_rva, c_pos), ((size_t)5))); if (!(_v < 0) && (uint64_t)_v > 9223372036854775807ULL) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int64_t)_v; }));
-    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_SUB(c_pos, ((size_t)1)))) = ((uint8_t)141);
-    __OC_AT((((__oc_notnull(code))->buffer)), (c_pos)) = __OC_ADD(((uint8_t)5), __OC_MUL(reg, ((uint8_t)8)));
-    elf_patch_i32(code, __OC_ADD(c_pos, ((size_t)1)), ({ __auto_type _v = (rel); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
-    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)5)))) = ((uint8_t)15);
-    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)6)))) = ((uint8_t)31);
-    __OC_AT((((__oc_notnull(code))->buffer)), (__OC_ADD(c_pos, ((size_t)7)))) = ((uint8_t)0);
-    ri = __OC_ADD(ri, ((size_t)1));
     }
     CodeBuffer pe_buf = buf_init(__OC_ADD(file_size, ((size_t)1)));
     CodeBuffer* pe = (&(pe_buf));
@@ -17168,15 +17305,9 @@ bool emit_native_pe(AstNode* root, oc_string out_file_str, bool fp_trap, bool ar
 bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string out_file_str) {
     size_t rodata_end_off = __OC_ADD(((size_t)256), ((__oc_notnull(data))->len));
     size_t code_file_off = __OC_MUL(__OC_DIV(__OC_ADD(rodata_end_off, ((size_t)4095)), ((size_t)4096)), ((size_t)4096));
-    uint64_t code_vaddr = __OC_ADD(((uint64_t)4194304), ({ __auto_type _v = (code_file_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
-    uint64_t data_base_vaddr = __OC_ADD(((uint64_t)4194304), ((uint64_t)256));
-    size_t ri = ((size_t)0);
-    while (__OC_SEQ(ri, <, ((__oc_notnull(ng))->data_reloc_count))) {
-    size_t c_pos = __OC_AT((((__oc_notnull(ng))->data_reloc_code)), (ri));
-    size_t d_off = __OC_AT((((__oc_notnull(ng))->data_reloc_data)), (ri));
-    uint64_t target_vaddr = __OC_ADD(data_base_vaddr, ({ __auto_type _v = (d_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
-    elf_patch_u64(code, c_pos, target_vaddr);
-    ri = __OC_ADD(ri, ((size_t)1));
+    uint64_t code_vaddr = ({ __auto_type _v = (code_file_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; });
+    if ((!ng_patch_rip_data_relocs(ng, code, code_file_off, ((size_t)256)))) {
+    return false;
     }
     size_t total_code_len = ((__oc_notnull(code))->len);
     CodeBuffer elf_buf = buf_init(((size_t)524288));
@@ -17194,7 +17325,7 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     buf_append_u8(elf, ((uint8_t)0));
     p = __OC_ADD(p, ((size_t)1));
     }
-    elf_append_u16(elf, ((uint32_t)2));
+    elf_append_u16(elf, ((uint32_t)3));
     elf_append_u16(elf, ((uint32_t)62));
     elf_append_u32(elf, ((uint32_t)1));
     elf_append_u64(elf, code_vaddr);
@@ -17210,8 +17341,8 @@ bool ng_write_elf(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, oc_string o
     elf_append_u32(elf, ((uint32_t)1));
     elf_append_u32(elf, ((uint32_t)4));
     elf_append_u64(elf, ((uint64_t)0));
-    elf_append_u64(elf, ((uint64_t)4194304));
-    elf_append_u64(elf, ((uint64_t)4194304));
+    elf_append_u64(elf, ((uint64_t)0));
+    elf_append_u64(elf, ((uint64_t)0));
     elf_append_u64(elf, ({ __auto_type _v = (rodata_end_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     elf_append_u64(elf, ({ __auto_type _v = (rodata_end_off); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint64_t)_v; }));
     elf_append_u64(elf, ((uint64_t)4096));

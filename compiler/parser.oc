@@ -1634,28 +1634,29 @@ fn fx_scan(fx: *mut FnEffects, slot: usize, params: *mut AstNode, ret_ptr: bool,
 
 // Arena a call result points into: arena_alloc(&mut a, n) directly, or any function whose
 // summary says its return value borrows from an arena argument. "" if none.
-fn get_arena_source(fx: *mut FnEffects, expr: *mut AstNode) -> string {
+fn get_arena_source(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     if expr.tag == NODE_CALL {
+        let mut all: string = "";
         let mut arg: *mut AstNode = expr.left;
         let mut ai: usize = 0;
         while arg != (0).as(*mut AstNode) {
-            if fx_param_borrows(fx, expr.tok.slice, ai) {
+            if fx_param_borrows(v.fx, expr.tok.slice, ai) {
                 let name: string = get_arena_arg_name(arg);
-                if name.len > 0 { return name; }
+                if name.len > 0 { all = arena_list_union(v, all, name); }
             }
             arg = arg.next;
             ai = ai + 1;
         }
-        return "";
+        return all;
     }
-    if expr.tag == NODE_CAST { return get_arena_source(fx, expr.left); }
+    if expr.tag == NODE_CAST { return get_arena_source(v, expr.left); }
     return "";
 }
 
 fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
-    let direct: string = get_arena_source(v.fx, expr);
+    let direct: string = get_arena_source(v, expr);
     if expr.tag == NODE_CALL {
         // trim(s), s2 = substr(s, ...): a view of an argument borrows what that argument does.
         let mut all: string = direct;
@@ -3846,8 +3847,8 @@ fn gx_is_ident_char(c: u8) -> bool {
 
 // Type text without incidental spaces ("Pair< i32 ,u8 >" -> "Pair<i32,u8>"), so equal types
 // have equal text. The space in "*mut u8" stays.
-fn gx_canon(g: *mut Generics, t: string) -> string {
-    let mut sb: StrBuf = strbuf_init(g.arena, t.len + 1);
+fn gx_canon_arena(arena: *mut Arena, t: string) -> string {
+    let mut sb: StrBuf = strbuf_init(arena, t.len + 1);
     let mut i: usize = 0;
     while i < t.len {
         let c: u8 = t[i];
@@ -3873,8 +3874,12 @@ fn gx_canon(g: *mut Generics, t: string) -> string {
     return gx_done(sb);
 }
 
+fn gx_canon(g: *mut Generics, t: string) -> string {
+    return gx_canon_arena(g.arena, t);
+}
+
 // Splits "A, Pair<B,C>, 4" at its top-level commas.
-fn gx_split(g: *mut Generics, text: string) -> GArgs {
+fn gx_split_arena(arena: *mut Arena, text: string) -> GArgs {
     let mut r: GArgs = GArgs { n: 0, items: [""] };
     let mut depth: i32 = 0;
     let mut start: usize = 0;
@@ -3891,7 +3896,7 @@ fn gx_split(g: *mut Generics, text: string) -> GArgs {
         }
         if cut {
             if r.n < 8 {
-                r.items[r.n] = gx_canon(g, trim(text[start..i]));
+                r.items[r.n] = gx_canon_arena(arena, trim(text[start..i]));
                 r.n = r.n + 1;
             }
             start = i + 1;
@@ -3899,6 +3904,10 @@ fn gx_split(g: *mut Generics, text: string) -> GArgs {
         i = i + 1;
     }
     return r;
+}
+
+fn gx_split(g: *mut Generics, text: string) -> GArgs {
+    return gx_split_arena(g.arena, text);
 }
 
 // An identifier for a type: letters and digits stay, the rest is spelled out.
@@ -3962,9 +3971,9 @@ fn gx_count(list: *mut AstNode) -> usize {
 }
 
 // Type text with each template parameter name replaced by its argument.
-fn gx_subst(g: *mut Generics, t: string, params: *mut AstNode, args: GArgs) -> string {
+fn gx_subst_arena(arena: *mut Arena, t: string, params: *mut AstNode, args: GArgs) -> string {
     if t.len == 0 { return t; }
-    let mut sb: StrBuf = strbuf_init(g.arena, t.len + 16);
+    let mut sb: StrBuf = strbuf_init(arena, t.len + 16);
     let mut i: usize = 0;
     while i < t.len {
         if gx_is_ident_char(t[i]) {
@@ -3996,6 +4005,10 @@ fn gx_subst(g: *mut Generics, t: string, params: *mut AstNode, args: GArgs) -> s
         }
     }
     return gx_done(sb);
+}
+
+fn gx_subst(g: *mut Generics, t: string, params: *mut AstNode, args: GArgs) -> string {
+    return gx_subst_arena(g.arena, t, params, args);
 }
 
 fn gx_clone(g: *mut Generics, n: *mut AstNode) -> *mut AstNode {
@@ -4064,6 +4077,16 @@ fn gx_instantiate(g: *mut Generics, t: *mut AstNode, args: GArgs, site: Token) -
         print_str_raw("\n");
         g.ok = false;
         return "";
+    }
+    let mut is_arena_slice: bool = str_eq(t.tok.slice, "arena_slice");
+    if str_eq(t.tok.slice, "arena_try_slice") { is_arena_slice = true; }
+    if is_arena_slice {
+        if args.n == 1 {
+            if str_eq(args.items[0], "u8") {
+                gx_err(g, site, "[]u8 is string (read-only bytes); use arena_try_alloc for *mut u8 or []i8 for a mutable byte slice: ", t.tok.slice);
+                return "";
+            }
+        }
     }
     let name: string = gx_mangled(g, t.tok.slice, args);
     let mut i: usize = 0;
@@ -4620,6 +4643,21 @@ fn dz_type_of(e: *mut Errs, x: *mut AstNode) -> string {
     if x.tag == NODE_CALL {
         let f: *mut AstNode = program_find_fn(e.root, x.tok.slice);
         if f != (0).as(*mut AstNode) { return f.type_name; }
+        if x.type_name.len > 0 {
+            let mut d: *mut AstNode = e.root.left;
+            while d != (0).as(*mut AstNode) {
+                if d.tag == NODE_GENERIC {
+                    if d.right != (0).as(*mut AstNode) {
+                        if d.right.tag == NODE_FN {
+                            if str_eq(d.tok.slice, x.tok.slice) {
+                                return gx_subst_arena(e.arena, d.right.type_name, d.left, gx_split_arena(e.arena, x.type_name));
+                            }
+                        }
+                    }
+                }
+                d = d.next;
+            }
+        }
         return "";
     }
     if x.tag == NODE_FIELD_ACCESS {

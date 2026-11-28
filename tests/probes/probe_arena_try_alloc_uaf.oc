@@ -1,0 +1,9 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let p: *mut u8 = arena_try_alloc(&mut a, 16) catch (0).as(*mut u8);
+    arena_reset(&mut a);
+    print(p[0]);
+    arena_deinit(&mut a);
+}

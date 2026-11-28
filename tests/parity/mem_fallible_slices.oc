@@ -1,0 +1,71 @@
+import "std/mem.oc";
+import "std/str.oc";
+import "std/fs.oc";
+
+struct Point {
+    x: i64,
+    y: i64,
+}
+
+fn main() {
+    let mut a: Arena = arena_init(64);
+    print(arena_remaining(&a));
+
+    match arena_try_alloc(&mut a, 16) {
+        Ok(p) => {
+            p[0] = 42;
+            print(p[0]);
+        }
+        Err(_) => print("alloc err"),
+    }
+    print(arena_remaining(&a));
+
+    match arena_try_alloc(&mut a, 100) {
+        Ok(_) => print("bad oom"),
+        Err(e) => print(e),
+    }
+
+    let s: string = arena_try_copy(&mut a, "hello") catch "fail";
+    print(s);
+
+    match arena_try_slice<i64>(&mut a, 4611686018427387904) {
+        Ok(_) => print("bad overflow"),
+        Err(e) => print(e),
+    }
+
+    let mut pts: []Point = arena_try_slice<Point>(&mut a, 2) catch arena_slice<Point>(&mut a, 0);
+    pts[0] = Point { x: 10, y: 20 };
+    pts[1] = Point { x: 30, y: 40 };
+    print(pts.len);
+    print(pts[0].x + pts[1].y);
+    arena_deinit(&mut a);
+
+    let mut b: Arena = arena_init(4096);
+    let mut xs: []i32 = arena_slice<i32>(&mut b, 4);
+    xs[0] = 5;
+    xs[1] = 6;
+    xs[2] = 7;
+    xs[3] = 8;
+    let sub: []i32 = xs[1..3];
+    print(sub.len);
+    print(sub[0] + sub[1]);
+    arena_deinit(&mut b);
+
+    let mut io_a: Arena = arena_init(262144);
+    let big: string = str_repeat(&mut io_a, "x", 100000);
+    match file_write("oc_big_io_test.txt", big) {
+        Ok(nw) => print(nw),
+        Err(_) => print("big write err"),
+    }
+    let buf: *mut u8 = arena_alloc(&mut io_a, 100000);
+    match file_read("oc_big_io_test.txt", buf, 100000) {
+        Ok(nr) => {
+            print(nr);
+            print(buf[0] == 120);
+            print(buf[99999] == 120);
+        }
+        Err(_) => print("big read err"),
+    }
+    print(unlink_file("oc_big_io_test.txt"));
+    arena_deinit(&mut io_a);
+}

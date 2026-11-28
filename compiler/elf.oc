@@ -2524,12 +2524,19 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 73);
                 buf_append_u8(code, 137);
                 buf_append_u8(code, 202); // mov %rcx, %r10
+                let retry_pos: usize = code.len;
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 199);
                 buf_append_u8(code, 192);
                 elf_append_u32(code, sys_nr);
                 buf_append_u8(code, 15);
                 buf_append_u8(code, 5); // syscall
+                if sys_nr <= 1 {
+                    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 248); buf_append_u8(code, 252); // cmp $-4, %rax
+                    let rel8: i32 = (retry_pos.as(i64) - (code.len + 2).as(i64)).as(i32);
+                    buf_append_u8(code, 116); // je retry_pos
+                    buf_append_u8(code, (256 + rel8).as(u8));
+                }
                 return;
             }
         }
@@ -3312,6 +3319,47 @@ fn pe_append_section_header(pe: *mut CodeBuffer, name: string, vsize: usize, rva
     elf_append_u32(pe, flags);
 }
 
+// Rewrite absolute data loads (movabs $imm64, %reg) as RIP-relative lea + 3-byte nop (same length).
+fn ng_patch_rip_data_relocs(ng: *mut NativeGen, code: *mut CodeBuffer, text_rva: usize, data_rva: usize) -> bool {
+    let mut ri: usize = 0;
+    while ri < ng.data_reloc_count {
+        let c_pos: usize = ng.data_reloc_code[ri];
+        let mut form_ok: bool = false;
+        if c_pos >= 2 {
+            if code.buffer[c_pos - 2] == 72 {
+                if code.buffer[c_pos - 1] >= 184 {
+                    if code.buffer[c_pos - 1] <= 191 {
+                        form_ok = true;
+                    }
+                }
+            }
+        }
+        if !form_ok {
+            print("native codegen error: unexpected data relocation form");
+            return false;
+        }
+        let reg: u8 = code.buffer[c_pos - 1] - 184;
+        let target_rva: usize = data_rva + ng.data_reloc_data[ri];
+        let rel: i64 = target_rva.as(i64) - (text_rva + c_pos + 5).as(i64);
+        if rel < -2147483648 {
+            print("native codegen error: RIP-relative data displacement out of range");
+            return false;
+        }
+        if rel > 2147483647 {
+            print("native codegen error: RIP-relative data displacement out of range");
+            return false;
+        }
+        code.buffer[c_pos - 1] = 141;     // lea
+        code.buffer[c_pos] = 5 + reg * 8; // ModRM: disp32(%rip)
+        elf_patch_i32(code, c_pos + 1, rel.as(i32));
+        code.buffer[c_pos + 5] = 15;
+        code.buffer[c_pos + 6] = 31;
+        code.buffer[c_pos + 7] = 0;       // nopl (%rax)
+        ri = ri + 1;
+    }
+    return true;
+}
+
 // PE32+ image: headers | .text (RX, RVA 0x1000) | .rdata (R: IAT, import table, strings).
 // No section is ever writable; the loader temporarily unprotects the IAT (data directory 12)
 // while binding imports. Code is position independent, so ASLR needs no .reloc section.
@@ -3358,34 +3406,8 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
         fi = fi + 1;
     }
 
-    // Rewrite absolute data loads (movabs $imm64, %reg) as RIP-relative lea + 3-byte nop (same length).
-    let mut ri: usize = 0;
-    while ri < ng.data_reloc_count {
-        let c_pos: usize = ng.data_reloc_code[ri];
-        let mut form_ok: bool = false;
-        if c_pos >= 2 {
-            if code.buffer[c_pos - 2] == 72 {
-                if code.buffer[c_pos - 1] >= 184 {
-                    if code.buffer[c_pos - 1] <= 191 {
-                        form_ok = true;
-                    }
-                }
-            }
-        }
-        if !form_ok {
-            print("native codegen error: unexpected data relocation form for PE32+");
-            return false;
-        }
-        let reg: u8 = code.buffer[c_pos - 1] - 184;
-        let target_rva: usize = rdata_rva + udata_off + ng.data_reloc_data[ri];
-        let rel: i64 = target_rva.as(i64) - (text_rva + c_pos + 5).as(i64);
-        code.buffer[c_pos - 1] = 141;     // lea
-        code.buffer[c_pos] = 5 + reg * 8; // ModRM: disp32(%rip)
-        elf_patch_i32(code, c_pos + 1, rel.as(i32));
-        code.buffer[c_pos + 5] = 15;
-        code.buffer[c_pos + 6] = 31;
-        code.buffer[c_pos + 7] = 0;       // nopl (%rax)
-        ri = ri + 1;
+    if !ng_patch_rip_data_relocs(ng, code, text_rva, rdata_rva + udata_off) {
+        return false;
     }
 
     let mut pe_buf: CodeBuffer = buf_init(file_size + 1);
@@ -4111,22 +4133,16 @@ fn emit_native_pe(root: *mut AstNode, out_file_str: string, fp_trap: bool, arena
 }
 
 fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, out_file_str: string) -> bool {
-    // 5. Compute W^X segment layout and patch data relocations
+    // 5. Compute W^X PIE segment layout and patch RIP-relative data relocations
     let rodata_end_off: usize = 256 + data.len;
     let code_file_off: usize = ((rodata_end_off + 4095) / 4096) * 4096;
-    let code_vaddr: u64 = 4194304 + code_file_off.as(u64);
-    let data_base_vaddr: u64 = 4194304 + 256;
+    let code_vaddr: u64 = code_file_off.as(u64);
 
-    let mut ri: usize = 0;
-    while ri < ng.data_reloc_count {
-        let c_pos: usize = ng.data_reloc_code[ri];
-        let d_off: usize = ng.data_reloc_data[ri];
-        let target_vaddr: u64 = data_base_vaddr + d_off.as(u64);
-        elf_patch_u64(code, c_pos, target_vaddr);
-        ri = ri + 1;
+    if !ng_patch_rip_data_relocs(ng, code, code_file_off, 256) {
+        return false;
     }
 
-    // 6. Assemble ELF with strict W^X segments + PT_GNU_STACK
+    // 6. Assemble static PIE ELF (ET_DYN) with strict W^X segments + PT_GNU_STACK
     let total_code_len: usize = code.len;
     let mut elf_buf: CodeBuffer = buf_init(524288);
     let elf: *mut CodeBuffer = &mut elf_buf;
@@ -4145,10 +4161,10 @@ fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         buf_append_u8(elf, 0);
         p = p + 1;
     }
-    elf_append_u16(elf, 2);          // ET_EXEC
+    elf_append_u16(elf, 3);          // ET_DYN (static PIE)
     elf_append_u16(elf, 62);         // EM_X86_64
     elf_append_u32(elf, 1);          // EV_CURRENT
-    elf_append_u64(elf, code_vaddr); // e_entry = 0x401000
+    elf_append_u64(elf, code_vaddr); // e_entry = 0x1000 (relative to load bias)
     elf_append_u64(elf, 64);         // e_phoff = 64
     elf_append_u64(elf, 0);          // e_shoff = 0
     elf_append_u32(elf, 0);          // e_flags = 0
@@ -4163,8 +4179,8 @@ fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
     elf_append_u32(elf, 1);
     elf_append_u32(elf, 4);
     elf_append_u64(elf, 0);
-    elf_append_u64(elf, 4194304);
-    elf_append_u64(elf, 4194304);
+    elf_append_u64(elf, 0);
+    elf_append_u64(elf, 0);
     elf_append_u64(elf, rodata_end_off.as(u64));
     elf_append_u64(elf, rodata_end_off.as(u64));
     elf_append_u64(elf, 4096);

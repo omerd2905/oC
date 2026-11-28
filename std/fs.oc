@@ -51,12 +51,23 @@ fn file_read(path: string, out_buf: *mut u8, max_len: usize) -> usize!FsError {
     if fd < 0 {
         return Err(FsError.OpenFailed)
     }
-    let n: i64 = sys_read(fd, out_buf, max_len)
-    sys_close(fd)
-    if n < 0 {
-        return Err(FsError.ReadFailed)
+    let mut total: usize = 0
+    while total < max_len {
+        let n: i64 = sys_read(fd, (out_buf + total).as(*mut u8), max_len - total)
+        if n == -4 {
+            continue;
+        }
+        if n < 0 {
+            sys_close(fd)
+            return Err(FsError.ReadFailed)
+        }
+        if n == 0 {
+            break;
+        }
+        total = total + n.as(usize)
     }
-    return Ok(n.as(usize))
+    sys_close(fd)
+    return Ok(total)
 }
 
 // Creates or truncates the file and writes content; Ok(content.len).
@@ -70,11 +81,19 @@ fn file_write(path: string, content: string) -> usize!FsError {
     if fd < 0 {
         return Err(FsError.OpenFailed)
     }
-    let n: i64 = sys_write(fd, content.ptr.as(*u8), content.len)
-    sys_close(fd)
-    if n != content.len.as(i64) {
-        return Err(FsError.WriteFailed)
+    let mut written: usize = 0
+    while written < content.len {
+        let n: i64 = sys_write(fd, (content.ptr + written).as(*u8), content.len - written)
+        if n == -4 {
+            continue;
+        }
+        if n <= 0 {
+            sys_close(fd)
+            return Err(FsError.WriteFailed)
+        }
+        written = written + n.as(usize)
     }
+    sys_close(fd)
     return Ok(content.len)
 }
 

@@ -1,0 +1,17 @@
+import "std/mem.oc";
+
+fn pick(a: *mut Arena, b: *mut Arena, c: bool) -> *mut u8 {
+    if c {
+        return arena_alloc(a, 8);
+    }
+    return arena_alloc(b, 8);
+}
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut b: Arena = arena_init(4096);
+    let p: *mut u8 = pick(&mut a, &mut b, false);
+    arena_deinit(&mut b);
+    print(p[0]);
+    arena_deinit(&mut a);
+}

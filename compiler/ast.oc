@@ -70,6 +70,7 @@ fn srcmap_file(m: *SourceMap, line: u32) -> i32 {
 
 fn ast_alloc_node(arena: *mut Arena, tag: u32, tok: Token) -> *mut AstNode {
     let raw: *mut u8 = arena_alloc(arena, 128);
+    if raw.as(usize) == 0 { sys_exit(1); }
     let node: *mut AstNode = raw.as(*mut AstNode);
     node.tag = tag;
     node.tok = tok;

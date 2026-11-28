@@ -1,0 +1,8 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let s: string = arena_slice<u8>(&mut a, 4);
+    print(s.len);
+    arena_deinit(&mut a);
+}
