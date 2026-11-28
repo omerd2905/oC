@@ -1316,7 +1316,24 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                         }
                     }
                 }
-                if use_zero_init {
+                let mut copy_from: *mut AstNode = (0).as(*mut AstNode);
+                if stmt.left != (0).as(*mut AstNode) {
+                    if stmt.left.tag != NODE_ARRAY_INIT { copy_from = stmt.left; }
+                }
+                if copy_from != (0).as(*mut AstNode) {
+                    // let b: [N]T = a (or = *p): C cannot initialize an array from another.
+                    buf_append(out, "]; memcpy(");
+                    buf_append_ident(out, stmt.tok.slice);
+                    buf_append(out, ", ");
+                    if copy_from.tag == NODE_DEREF {
+                        codegen_expr(copy_from.left, out);
+                    } else {
+                        codegen_expr(copy_from, out);
+                    }
+                    buf_append(out, ", sizeof ");
+                    buf_append_ident(out, stmt.tok.slice);
+                    buf_append(out, ");\n");
+                } else if use_zero_init {
                     buf_append(out, "] = {0};\n");
                 } else {
                     buf_append(out, "] = ");

@@ -931,6 +931,8 @@ oc_string ng_strip_ptr_type(oc_string t);
 size_t ng_parse_array_len(oc_string t);
 oc_string ng_parse_array_elem(oc_string t);
 int32_t ng_type_stride(oc_string t);
+int32_t ng_stride(NativeGen* ng, oc_string t);
+void ng_emit_store_value(NativeGen* ng, CodeBuffer* code, oc_string t, int32_t disp, bool at_rsp);
 bool ng_is_byte_type(oc_string t);
 bool is_unsigned_type_name(oc_string t);
 oc_string ng_float_result_type(oc_string lt, oc_string rt);
@@ -9848,6 +9850,27 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     }
     }
     }
+    AstNode* copy_from = ((AstNode*)(0));
+    if (__OC_SEQ(((stmt)->left), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((stmt)->left))->tag), !=, NODE_ARRAY_INIT)) {
+    copy_from = ((stmt)->left);
+    }
+    }
+    if (__OC_SEQ(copy_from, !=, ((AstNode*)(0)))) {
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("]; memcpy("), .len = sizeof("]; memcpy(") - 1 });
+    buf_append_ident(out, ((((stmt)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", "), .len = sizeof(", ") - 1 });
+    if (__OC_SEQ(((copy_from)->tag), ==, NODE_DEREF)) {
+    codegen_expr(((copy_from)->left), out);
+    }
+    else {
+    codegen_expr(copy_from, out);
+    }
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(", sizeof "), .len = sizeof(", sizeof ") - 1 });
+    buf_append_ident(out, ((((stmt)->tok)).slice));
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)(");\012"), .len = sizeof(");\012") - 1 });
+    }
+    else {
     if (use_zero_init) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("] = {0};\012"), .len = sizeof("] = {0};\012") - 1 });
     }
@@ -9855,6 +9878,7 @@ void codegen_stmt(AstNode* stmt, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("] = "), .len = sizeof("] = ") - 1 });
     codegen_expr(((stmt)->left), out);
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)(";\012"), .len = sizeof(";\012") - 1 });
+    }
     }
     return;
     }
@@ -10915,6 +10939,41 @@ int32_t ng_type_stride(oc_string t) {
     return ((int32_t)8);
 }
 
+int32_t ng_stride(NativeGen* ng, oc_string t) {
+    int32_t sz = ng_find_struct_size(ng, t);
+    if (__OC_SEQ(sz, >, ((int32_t)8))) {
+    return sz;
+    }
+    return ng_type_stride(t);
+}
+
+void ng_emit_store_value(NativeGen* ng, CodeBuffer* code, oc_string t, int32_t disp, bool at_rsp) {
+    int32_t stride = ng_stride(ng, t);
+    if (__OC_SEQ(stride, ==, ((int32_t)1))) {
+    ng_emit_store_disp(code, ((uint8_t)0), ((int32_t)1), disp, at_rsp);
+    return;
+    }
+    ng_emit_store_disp(code, ((uint8_t)0), ((int32_t)8), disp, at_rsp);
+    if (__OC_SEQ(stride, >=, ((int32_t)16))) {
+    ng_emit_store_disp(code, ((uint8_t)2), ((int32_t)8), __OC_ADD(disp, ((int32_t)8)), at_rsp);
+    }
+    if (__OC_SEQ(stride, >=, ((int32_t)24))) {
+    ng_emit_store_disp(code, ((uint8_t)1), ((int32_t)8), __OC_ADD(disp, ((int32_t)16)), at_rsp);
+    }
+    if (__OC_SEQ(stride, >=, ((int32_t)32))) {
+    buf_append_u8(code, ((uint8_t)76));
+    buf_append_u8(code, ((uint8_t)137));
+    if (at_rsp) {
+    buf_append_u8(code, ((uint8_t)132));
+    buf_append_u8(code, ((uint8_t)36));
+    }
+    else {
+    buf_append_u8(code, ((uint8_t)133));
+    }
+    elf_append_i32(code, __OC_ADD(disp, ((int32_t)24)));
+    }
+}
+
 bool ng_is_byte_type(oc_string t) {
     if (str_eq(t, (oc_string){ .ptr = (const uint8_t*)("u8"), .len = sizeof("u8") - 1 })) {
     return true;
@@ -11924,7 +11983,7 @@ void ng_emit_store_disp(CodeBuffer* code, uint8_t reg, int32_t width, int32_t di
 void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, int32_t off, oc_string arr_t, AstNode* init, bool at_rsp) {
     int32_t alen = ({ __auto_type _v = (ng_parse_array_len(arr_t)); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; });
     oc_string elem_t = ng_parse_array_elem(arr_t);
-    int32_t stride = ng_type_stride(elem_t);
+    int32_t stride = ng_stride(ng, elem_t);
     int32_t bytes = __OC_MUL(alen, stride);
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)49));
@@ -11945,16 +12004,7 @@ void ng_emit_array_init_at(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, in
     break;
     }
     ng_emit_expr_as(ng, code, data, el, elem_t);
-    int32_t el_off = __OC_ADD(off, __OC_MUL(k, stride));
-    if (__OC_SEQ(stride, ==, ((int32_t)1))) {
-    ng_emit_store_disp(code, ((uint8_t)0), ((int32_t)1), el_off, at_rsp);
-    }
-    else {
-    ng_emit_store_disp(code, ((uint8_t)0), ((int32_t)8), el_off, at_rsp);
-    if (__OC_SEQ(stride, ==, ((int32_t)16))) {
-    ng_emit_store_disp(code, ((uint8_t)2), ((int32_t)8), __OC_ADD(el_off, ((int32_t)8)), at_rsp);
-    }
-    }
+    ng_emit_store_value(ng, code, elem_t, __OC_ADD(off, __OC_MUL(k, stride)), at_rsp);
     k = __OC_ADD(k, ((int32_t)1));
     el = ((el)->next);
     }
@@ -12107,7 +12157,7 @@ void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstN
     buf_append_u8(code, ((uint8_t)131));
     elf_append_u32(code, ((uint32_t)0));
     }
-    int32_t stride = ng_type_stride(elem_t);
+    int32_t stride = ng_stride(ng, elem_t);
     if (__OC_SEQ(stride, ==, ((int32_t)8))) {
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)193));
@@ -12120,6 +12170,14 @@ void ng_emit_lvalue_addr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstN
     buf_append_u8(code, ((uint8_t)193));
     buf_append_u8(code, ((uint8_t)224));
     buf_append_u8(code, ((uint8_t)4));
+    }
+    else {
+    if (__OC_SEQ(stride, >, ((int32_t)1))) {
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)105));
+    buf_append_u8(code, ((uint8_t)192));
+    elf_append_i32(code, stride);
+    }
     }
     }
     buf_append_u8(code, ((uint8_t)72));
@@ -12687,6 +12745,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, ((uint8_t)0));
     return;
     }
+    if (ng_emit_load_struct_at_rax(ng, code, elem_t)) {
+    return;
+    }
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)139));
     buf_append_u8(code, ((uint8_t)0));
@@ -12738,7 +12799,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     }
     }
     if (is_array) {
-    size_t arr_bytes = __OC_MUL(ng_parse_array_len(base_t), ({ __auto_type _v = (ng_type_stride(ng_parse_array_elem(base_t))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
+    size_t arr_bytes = __OC_MUL(ng_parse_array_len(base_t), ({ __auto_type _v = (ng_stride(ng, ng_parse_array_elem(base_t))); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; }));
     ng_emit_lvalue_addr(ng, code, data, ((expr)->left));
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)199));
@@ -13005,7 +13066,7 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     int_rhs = false;
     }
     }
-    int32_t stride = ng_type_stride(ng_strip_ptr_type(lt));
+    int32_t stride = ng_stride(ng, ng_strip_ptr_type(lt));
     if (int_rhs) {
     if (__OC_SEQ(stride, >, ((int32_t)1))) {
     buf_append_u8(code, ((uint8_t)72));
@@ -13687,7 +13748,7 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     if (__OC_SEQ(__oc_index_str(t_name, 0), ==, ((uint8_t)91))) {
     size_t arr_len = ng_parse_array_len(t_name);
     oc_string elem_t = ng_parse_array_elem(t_name);
-    int32_t stride = ng_type_stride(elem_t);
+    int32_t stride = ng_stride(ng, elem_t);
     int32_t raw_bytes = __OC_MUL(({ __auto_type _v = (arr_len); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }), stride);
     int32_t qwords = __OC_DIV(__OC_ADD(raw_bytes, ((int32_t)7)), ((int32_t)8));
     int32_t aligned_bytes = __OC_MUL(qwords, ((int32_t)8));
@@ -13706,6 +13767,33 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     else {
     ng_fail(ng, (oc_string){ .ptr = (const uint8_t*)("native codegen error: too many variables in one function (256)"), .len = sizeof("native codegen error: too many variables in one function (256)") - 1 });
     }
+    if (__OC_SEQ(((stmt)->left), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((stmt)->left))->tag), ==, NODE_ARRAY_INIT)) {
+    ng_emit_array_init_at(ng, code, data, base_off, t_name, ((stmt)->left), false);
+    return;
+    }
+    if (__OC_SEQ(((((stmt)->left))->tag), ==, NODE_DEREF)) {
+    ng_emit_expr(ng, code, data, ((((stmt)->left))->left));
+    }
+    else {
+    ng_emit_lvalue_addr(ng, code, data, ((stmt)->left));
+    }
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)137));
+    buf_append_u8(code, ((uint8_t)198));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)141));
+    buf_append_u8(code, ((uint8_t)189));
+    elf_append_i32(code, base_off);
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)199));
+    buf_append_u8(code, ((uint8_t)193));
+    elf_append_u32(code, ({ __auto_type _v = (qwords); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; }));
+    buf_append_u8(code, ((uint8_t)243));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)165));
+    return;
+    }
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)141));
     buf_append_u8(code, ((uint8_t)189));
@@ -13719,55 +13807,6 @@ void ng_emit_stmt(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* st
     buf_append_u8(code, ((uint8_t)243));
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)171));
-    if (__OC_SEQ(((stmt)->left), !=, ((AstNode*)(0)))) {
-    if (__OC_SEQ(((((stmt)->left))->tag), ==, NODE_ARRAY_INIT)) {
-    AstNode* first_el = ((((stmt)->left))->left);
-    bool skip_init = false;
-    if (__OC_SEQ(first_el, !=, ((AstNode*)(0)))) {
-    if (__OC_SEQ(((first_el)->next), ==, ((AstNode*)(0)))) {
-    if (__OC_SEQ(((first_el)->tag), ==, NODE_INT)) {
-    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("0"), .len = sizeof("0") - 1 })) {
-    skip_init = true;
-    }
-    }
-    if (__OC_SEQ(((first_el)->tag), ==, NODE_STRING)) {
-    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("\042\042"), .len = sizeof("\042\042") - 1 })) {
-    skip_init = true;
-    }
-    }
-    if (__OC_SEQ(((first_el)->tag), ==, NODE_BOOL)) {
-    if (str_eq(((((first_el)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("false"), .len = sizeof("false") - 1 })) {
-    skip_init = true;
-    }
-    }
-    }
-    }
-    if ((!skip_init)) {
-    AstNode* el = first_el;
-    int32_t k = ((int32_t)0);
-    while (__OC_SEQ(el, !=, ((AstNode*)(0)))) {
-    ng_emit_expr_as(ng, code, data, el, elem_t);
-    int32_t el_off = __OC_ADD(base_off, __OC_MUL(k, stride));
-    if (__OC_SEQ(stride, ==, ((int32_t)1))) {
-    buf_append_u8(code, ((uint8_t)136));
-    buf_append_u8(code, ((uint8_t)133));
-    elf_append_i32(code, el_off);
-    }
-    else {
-    if (__OC_SEQ(stride, ==, ((int32_t)16))) {
-    ng_emit_disp_store_rax(code, el_off);
-    ng_emit_disp_store_rdx(code, __OC_ADD(el_off, ((int32_t)8)));
-    }
-    else {
-    ng_emit_disp_store_rax(code, el_off);
-    }
-    }
-    k = __OC_ADD(k, ((int32_t)1));
-    el = ((el)->next);
-    }
-    }
-    }
-    }
     return;
     }
     }
@@ -14201,7 +14240,7 @@ int32_t calc_locals_bytes_stmt(NativeGen* ng, AstNode* stmt) {
     if (__OC_SEQ(__oc_index_str(t_name, 0), ==, ((uint8_t)91))) {
     size_t arr_len = ng_parse_array_len(t_name);
     oc_string elem_t = ng_parse_array_elem(t_name);
-    int32_t stride = ng_type_stride(elem_t);
+    int32_t stride = ng_stride(ng, elem_t);
     int32_t raw_bytes = __OC_MUL(({ __auto_type _v = (arr_len); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }), stride);
     return __OC_MUL(__OC_DIV(__OC_ADD(raw_bytes, ((int32_t)7)), ((int32_t)8)), ((int32_t)8));
     }
@@ -14723,7 +14762,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     if (__OC_SEQ(__oc_index_str(ft, 0), ==, ((uint8_t)91))) {
     size_t alen = ng_parse_array_len(ft);
     oc_string ael = ng_parse_array_elem(ft);
-    int32_t astr = ng_type_stride(ael);
+    int32_t astr = ng_stride(ng, ael);
     f_sz = __OC_MUL(({ __auto_type _v = (alen); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }), astr);
     if ((!is_packed)) {
     f_sz = __OC_MUL(__OC_DIV(__OC_ADD(f_sz, ((int32_t)7)), ((int32_t)8)), ((int32_t)8));

@@ -456,6 +456,35 @@ fn ng_type_stride(t: string) -> i32 {
     return 8;
 }
 
+// Bytes between consecutive array elements: a struct takes its own (8-aligned) size.
+fn ng_stride(ng: *mut NativeGen, t: string) -> i32 {
+    let sz: i32 = ng_find_struct_size(ng, t);
+    if sz > 8 { return sz; }
+    return ng_type_stride(t);
+}
+
+// Stores the value of type t that is in %rax (and %rdx, %rcx, %r8 for a string or struct)
+// at disp(%rbp), or disp(%rsp) with at_rsp.
+fn ng_emit_store_value(ng: *mut NativeGen, code: *mut CodeBuffer, t: string, disp: i32, at_rsp: bool) {
+    let stride: i32 = ng_stride(ng, t);
+    if stride == 1 {
+        ng_emit_store_disp(code, 0, 1, disp, at_rsp);
+        return;
+    }
+    ng_emit_store_disp(code, 0, 8, disp, at_rsp);
+    if stride >= 16 { ng_emit_store_disp(code, 2, 8, disp + 8, at_rsp); }
+    if stride >= 24 { ng_emit_store_disp(code, 1, 8, disp + 16, at_rsp); }
+    if stride >= 32 { // mov %r8, disp
+        buf_append_u8(code, 76); buf_append_u8(code, 137);
+        if at_rsp {
+            buf_append_u8(code, 132); buf_append_u8(code, 36);
+        } else {
+            buf_append_u8(code, 133);
+        }
+        elf_append_i32(code, disp + 24);
+    }
+}
+
 fn ng_is_byte_type(t: string) -> bool {
     if str_eq(t, "u8") { return true; }
     if str_eq(t, "bool") { return true; }
@@ -1137,7 +1166,7 @@ fn ng_emit_store_disp(code: *mut CodeBuffer, reg: u8, width: i32, disp: i32, at_
 fn ng_emit_array_init_at(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer, off: i32, arr_t: string, init: *mut AstNode, at_rsp: bool) {
     let alen: i32 = ng_parse_array_len(arr_t).as(i32);
     let elem_t: string = ng_parse_array_elem(arr_t);
-    let stride: i32 = ng_type_stride(elem_t);
+    let stride: i32 = ng_stride(ng, elem_t);
     let bytes: i32 = alen * stride;
     buf_append_u8(code, 72); buf_append_u8(code, 49); buf_append_u8(code, 192); // xor %rax, %rax
     let mut z: i32 = 0;
@@ -1154,13 +1183,7 @@ fn ng_emit_array_init_at(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut C
     while el != (0).as(*mut AstNode) {
         if k >= alen { break; }
         ng_emit_expr_as(ng, code, data, el, elem_t);
-        let el_off: i32 = off + (k * stride);
-        if stride == 1 {
-            ng_emit_store_disp(code, 0, 1, el_off, at_rsp);
-        } else {
-            ng_emit_store_disp(code, 0, 8, el_off, at_rsp);
-            if stride == 16 { ng_emit_store_disp(code, 2, 8, el_off + 8, at_rsp); }
-        }
+        ng_emit_store_value(ng, code, elem_t, off + (k * stride), at_rsp);
         k = k + 1;
         el = el.next;
     }
@@ -1296,7 +1319,7 @@ fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut Cod
             buf_append_u8(code, 131); // jae
             elf_append_u32(code, 0);
         }
-        let stride: i32 = ng_type_stride(elem_t);
+        let stride: i32 = ng_stride(ng, elem_t);
         if stride == 8 {
             buf_append_u8(code, 72);
             buf_append_u8(code, 193);
@@ -1307,6 +1330,9 @@ fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut Cod
             buf_append_u8(code, 193);
             buf_append_u8(code, 224);
             buf_append_u8(code, 4);
+        } else if stride > 1 {
+            buf_append_u8(code, 72); buf_append_u8(code, 105); buf_append_u8(code, 192); // imul $stride, %rax, %rax
+            elf_append_i32(code, stride);
         }
         buf_append_u8(code, 72);
         buf_append_u8(code, 1);
@@ -1766,6 +1792,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             buf_append_u8(code, 72); buf_append_u8(code, 139); buf_append_u8(code, 0);
             return;
         }
+        if ng_emit_load_struct_at_rax(ng, code, elem_t) { return; }
         buf_append_u8(code, 72);
         buf_append_u8(code, 139);
         buf_append_u8(code, 0); // mov (%rax), %rax
@@ -1812,7 +1839,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         }
         if is_array {
             // Fixed-size array: slice { ptr: &a[0], len: N bytes }
-            let arr_bytes: usize = ng_parse_array_len(base_t) * ng_type_stride(ng_parse_array_elem(base_t)).as(usize);
+            let arr_bytes: usize = ng_parse_array_len(base_t) * ng_stride(ng, ng_parse_array_elem(base_t)).as(usize);
             ng_emit_lvalue_addr(ng, code, data, expr.left);
             buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 194); // mov $len, %rdx
             elf_append_u32(code, arr_bytes.as(u32));
@@ -2023,7 +2050,7 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 if rt1[0] == 42 { int_rhs = false; }
                 if rt1[0] == 38 { int_rhs = false; }
             }
-            let stride: i32 = ng_type_stride(ng_strip_ptr_type(lt));
+            let stride: i32 = ng_stride(ng, ng_strip_ptr_type(lt));
             if int_rhs {
                 if stride > 1 {
                     buf_append_u8(code, 72); buf_append_u8(code, 105); buf_append_u8(code, 219); // imul $stride, %rbx, %rbx
@@ -2570,7 +2597,7 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             if t_name[0] == 91 {
                 let arr_len: usize = ng_parse_array_len(t_name);
                 let elem_t: string = ng_parse_array_elem(t_name);
-                let stride: i32 = ng_type_stride(elem_t);
+                let stride: i32 = ng_stride(ng, elem_t);
                 let raw_bytes: i32 = (arr_len.as(i32)) * stride;
                 let qwords: i32 = (raw_bytes + 7) / 8;
                 let aligned_bytes: i32 = qwords * 8;
@@ -2590,7 +2617,26 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     ng_fail(ng, "native codegen error: too many variables in one function (256)");
                 }
 
-                // Zero-fill array using rep stosq
+                if stmt.left != (0).as(*mut AstNode) {
+                    if stmt.left.tag == NODE_ARRAY_INIT {
+                        ng_emit_array_init_at(ng, code, data, base_off, t_name, stmt.left, false);
+                        return;
+                    }
+                    // Any other initializer is an array value: copy it (let b = a, let b = *p).
+                    if stmt.left.tag == NODE_DEREF {
+                        ng_emit_expr(ng, code, data, stmt.left.left);
+                    } else {
+                        ng_emit_lvalue_addr(ng, code, data, stmt.left);
+                    }
+                    buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 198); // mov %rax, %rsi
+                    buf_append_u8(code, 72); buf_append_u8(code, 141); buf_append_u8(code, 189); // lea base_off(%rbp), %rdi
+                    elf_append_i32(code, base_off);
+                    buf_append_u8(code, 72); buf_append_u8(code, 199); buf_append_u8(code, 193); // mov $qwords, %rcx
+                    elf_append_u32(code, qwords.as(u32));
+                    buf_append_u8(code, 243); buf_append_u8(code, 72); buf_append_u8(code, 165); // rep movsq
+                    return;
+                }
+                // No initializer: zero-fill with rep stosq
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 141);
                 buf_append_u8(code, 189);
@@ -2604,46 +2650,6 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 243);
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 171);
-
-                if stmt.left != (0).as(*mut AstNode) {
-                    if stmt.left.tag == NODE_ARRAY_INIT {
-                        let first_el: *mut AstNode = stmt.left.left;
-                        let mut skip_init: bool = false;
-                        if first_el != (0).as(*mut AstNode) {
-                            if first_el.next == (0).as(*mut AstNode) {
-                                if first_el.tag == NODE_INT {
-                                    if str_eq(first_el.tok.slice, "0") { skip_init = true; }
-                                }
-                                if first_el.tag == NODE_STRING {
-                                    if str_eq(first_el.tok.slice, "\"\"") { skip_init = true; }
-                                }
-                                if first_el.tag == NODE_BOOL {
-                                    if str_eq(first_el.tok.slice, "false") { skip_init = true; }
-                                }
-                            }
-                        }
-                        if !skip_init {
-                            let mut el: *mut AstNode = first_el;
-                            let mut k: i32 = 0;
-                            while el != (0).as(*mut AstNode) {
-                                ng_emit_expr_as(ng, code, data, el, elem_t);
-                                let el_off: i32 = base_off + (k * stride);
-                                if stride == 1 {
-                                    buf_append_u8(code, 136);
-                                    buf_append_u8(code, 133);
-                                    elf_append_i32(code, el_off);
-                                } else if stride == 16 {
-                                    ng_emit_disp_store_rax(code, el_off);
-                                    ng_emit_disp_store_rdx(code, el_off + 8);
-                                } else {
-                                    ng_emit_disp_store_rax(code, el_off);
-                                }
-                                k = k + 1;
-                                el = el.next;
-                            }
-                        }
-                    }
-                }
                 return;
             }
         }
@@ -3033,7 +3039,7 @@ fn calc_locals_bytes_stmt(ng: *mut NativeGen, stmt: *mut AstNode) -> i32 {
             if t_name[0] == 91 {
                 let arr_len: usize = ng_parse_array_len(t_name);
                 let elem_t: string = ng_parse_array_elem(t_name);
-                let stride: i32 = ng_type_stride(elem_t);
+                let stride: i32 = ng_stride(ng, elem_t);
                 let raw_bytes: i32 = (arr_len.as(i32)) * stride;
                 return ((raw_bytes + 7) / 8) * 8;
             }
@@ -3522,7 +3528,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
                     if ft[0] == 91 {
                         let alen: usize = ng_parse_array_len(ft);
                         let ael: string = ng_parse_array_elem(ft);
-                        let astr: i32 = ng_type_stride(ael);
+                        let astr: i32 = ng_stride(ng, ael);
                         f_sz = (alen.as(i32)) * astr;
                         if !is_packed { f_sz = ((f_sz + 7) / 8) * 8; }
                     } else if is_packed {
