@@ -1,0 +1,14 @@
+// A function with a return type must return on every path (issue #76): the C backend
+// returned garbage, the native one 0.
+enum E { Bad }
+
+fn f(x: i32) -> i32!E {
+    if x < 0 { return Err(E.Bad); }
+}
+
+fn main() {
+    match f(1) {
+        Ok(v) => print(v),
+        Err(e) => print("err"),
+    }
+}

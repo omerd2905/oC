@@ -5155,8 +5155,69 @@ fn dz_lower_array_params(e: *mut Errs, f: *mut AstNode) {
     }
 }
 
+// A `break` that leaves this loop (not one of an inner loop).
+fn dz_has_break(n: *mut AstNode) -> bool {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        if cur.tag == NODE_BREAK { return true; }
+        if cur.tag != NODE_WHILE {
+            if dz_has_break(cur.left) { return true; }
+            if dz_has_break(cur.right) { return true; }
+        }
+        cur = cur.next;
+    }
+    return false;
+}
+
+// True if control cannot fall out of the end of statement s.
+fn dz_always_returns(s: *mut AstNode) -> bool {
+    if s == (0).as(*mut AstNode) { return false; }
+    if s.tag == NODE_RETURN { return true; }
+    if s.tag == NODE_BLOCK {
+        let mut cur: *mut AstNode = s.left;
+        while cur != (0).as(*mut AstNode) {
+            if dz_always_returns(cur) { return true; }
+            cur = cur.next;
+        }
+        return false;
+    }
+    if s.tag == NODE_IF {
+        if s.right == (0).as(*mut AstNode) { return false; }
+        if s.right.next == (0).as(*mut AstNode) { return false; } // no else
+        if !dz_always_returns(s.right) { return false; }
+        return dz_always_returns(s.right.next);
+    }
+    if s.tag == NODE_MATCH { // exhaustive (checked when it is lowered): every arm must return
+        let mut arm: *mut AstNode = s.right;
+        if arm == (0).as(*mut AstNode) { return false; }
+        while arm != (0).as(*mut AstNode) {
+            let body: *mut AstNode = arm.left;
+            if body == (0).as(*mut AstNode) { return false; }
+            let mut ret: bool = false;
+            if body.tag == NODE_BLOCK { ret = dz_always_returns(body); } else { ret = body.tag == NODE_RETURN; }
+            if !ret { return false; }
+            arm = arm.next;
+        }
+        return true;
+    }
+    if s.tag == NODE_WHILE { // while true { ... } with no break never ends
+        if s.left == (0).as(*mut AstNode) { return false; }
+        if s.left.tag != NODE_BOOL { return false; }
+        if !str_eq(s.left.tok.slice, "true") { return false; }
+        return !dz_has_break(s.right);
+    }
+    return false;
+}
+
 fn dz_fn(e: *mut Errs, f: *mut AstNode) {
     if f.right == (0).as(*mut AstNode) { return; }
+    let mut returns_value: bool = f.type_name.len > 0;
+    if str_eq(f.type_name, "void") { returns_value = false; }
+    if returns_value {
+        if !dz_always_returns(f.right) {
+            dz_err(e, f.tok, "missing return: ", f.tok.slice, str_concat(e.arena, str_concat(e.arena, " can reach its end without returning a value (it returns ", f.type_name), ")"));
+        }
+    }
     e.fn_ret = f.type_name;
     e.sym_count = 0;
     let mut p: *mut AstNode = f.left;

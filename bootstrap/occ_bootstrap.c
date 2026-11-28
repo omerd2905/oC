@@ -875,6 +875,8 @@ AstNode* dz_find_fn(Errs* e, oc_string name);
 bool dz_is_array_type(oc_string t);
 void dz_pass_array(Errs* e, AstNode* a, oc_string arr_t);
 void dz_lower_array_params(Errs* e, AstNode* f);
+bool dz_has_break(AstNode* n);
+bool dz_always_returns(AstNode* s);
 void dz_fn(Errs* e, AstNode* f);
 bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m);
 CodeBuffer buf_init(size_t capacity);
@@ -8626,9 +8628,105 @@ void dz_lower_array_params(Errs* e, AstNode* f) {
     }
 }
 
+bool dz_has_break(AstNode* n) {
+    AstNode* cur = n;
+    while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((cur)->tag), ==, NODE_BREAK)) {
+    return true;
+    }
+    if (__OC_SEQ(((cur)->tag), !=, NODE_WHILE)) {
+    if (dz_has_break(((cur)->left))) {
+    return true;
+    }
+    if (dz_has_break(((cur)->right))) {
+    return true;
+    }
+    }
+    cur = ((cur)->next);
+    }
+    return false;
+}
+
+bool dz_always_returns(AstNode* s) {
+    if (__OC_SEQ(s, ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if (__OC_SEQ(((s)->tag), ==, NODE_RETURN)) {
+    return true;
+    }
+    if (__OC_SEQ(((s)->tag), ==, NODE_BLOCK)) {
+    AstNode* cur = ((s)->left);
+    while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
+    if (dz_always_returns(cur)) {
+    return true;
+    }
+    cur = ((cur)->next);
+    }
+    return false;
+    }
+    if (__OC_SEQ(((s)->tag), ==, NODE_IF)) {
+    if (__OC_SEQ(((s)->right), ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if (__OC_SEQ(((((s)->right))->next), ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if ((!dz_always_returns(((s)->right)))) {
+    return false;
+    }
+    return dz_always_returns(((((s)->right))->next));
+    }
+    if (__OC_SEQ(((s)->tag), ==, NODE_MATCH)) {
+    AstNode* arm = ((s)->right);
+    if (__OC_SEQ(arm, ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    while (__OC_SEQ(arm, !=, ((AstNode*)(0)))) {
+    AstNode* body = ((arm)->left);
+    if (__OC_SEQ(body, ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    bool ret = false;
+    if (__OC_SEQ(((body)->tag), ==, NODE_BLOCK)) {
+    ret = dz_always_returns(body);
+    }
+    else {
+    ret = __OC_SEQ(((body)->tag), ==, NODE_RETURN);
+    }
+    if ((!ret)) {
+    return false;
+    }
+    arm = ((arm)->next);
+    }
+    return true;
+    }
+    if (__OC_SEQ(((s)->tag), ==, NODE_WHILE)) {
+    if (__OC_SEQ(((s)->left), ==, ((AstNode*)(0)))) {
+    return false;
+    }
+    if (__OC_SEQ(((((s)->left))->tag), !=, NODE_BOOL)) {
+    return false;
+    }
+    if ((!str_eq(((((((s)->left))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("true"), .len = sizeof("true") - 1 }))) {
+    return false;
+    }
+    return (!dz_has_break(((s)->right)));
+    }
+    return false;
+}
+
 void dz_fn(Errs* e, AstNode* f) {
     if (__OC_SEQ(((f)->right), ==, ((AstNode*)(0)))) {
     return;
+    }
+    bool returns_value = __OC_SEQ(((((f)->type_name)).len), >, ((size_t)0));
+    if (str_eq(((f)->type_name), (oc_string){ .ptr = (const uint8_t*)("void"), .len = sizeof("void") - 1 })) {
+    returns_value = false;
+    }
+    if (returns_value) {
+    if ((!dz_always_returns(((f)->right)))) {
+    dz_err(e, ((f)->tok), (oc_string){ .ptr = (const uint8_t*)("missing return: "), .len = sizeof("missing return: ") - 1 }, ((((f)->tok)).slice), str_concat(((e)->arena), str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)(" can reach its end without returning a value (it returns "), .len = sizeof(" can reach its end without returning a value (it returns ") - 1 }, ((f)->type_name)), (oc_string){ .ptr = (const uint8_t*)(")"), .len = sizeof(")") - 1 }));
+    }
     }
     ((e)->fn_ret) = ((f)->type_name);
     ((e)->sym_count) = ((size_t)0);

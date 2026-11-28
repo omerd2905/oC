@@ -1,0 +1,8 @@
+// A loop that can break out of `while true` can fall off the end (issue #76).
+fn g() -> i32 {
+    while true { break; }
+}
+
+fn main() {
+    print(g());
+}
