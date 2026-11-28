@@ -1,0 +1,8 @@
+// Missing return with a plain return type (issue #76).
+fn g(x: i32) -> i32 {
+    if x > 0 { return 1; }
+}
+
+fn main() {
+    print(g(1));
+}

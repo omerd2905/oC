@@ -1080,6 +1080,11 @@ IPv4 Header Initialized. TTL: 64</code></pre>
           Functions in <code>oC</code> are declared using the <code>fn</code> keyword. Return types are specified after an arrow <code>-&gt;</code>. Functions that do not return a value omit the return type (equivalent to returning <code>void</code>).
         </p>
 
+        <h3>Returning a Value on Every Path</h3>
+        <p>
+          A function with a return type must return a value on every path; one that can reach its end without a <code>return</code> is a compile error (<code>missing return: f can reach its end without returning a value</code>). An <code>if</code> counts only with an <code>else</code> whose branches both return, a <code>match</code> when every arm returns, and <code>while true</code> when its body has no <code>break</code>.
+        </p>
+
         <h3>Parameter Passing Semantics</h3>
         <ul>
           <li><strong>Primitives &amp; Structs:</strong> Passed by value (copied onto the call frame).</li>
