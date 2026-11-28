@@ -4,7 +4,7 @@ oC is a small, self-hosted systems programming language with explicit regional m
 
 Instead of relying on a general-purpose heap allocator (`malloc`/`free`) or a runtime garbage collector, oC uses regional arenas (`sys_mmap` / `VirtualAlloc`) and compile-time escape analysis to prevent common temporal memory bugs (use-after-free, double-free, and dangling stack pointers).
 
-Online documentation and language specification: [https://omerd2905.github.io/oC/](https://omerd2905.github.io/oC/)
+Online documentation and language specification: [https://quasiii29.github.io/oC/](https://quasiii29.github.io/oC/)
 
 ---
 
@@ -74,7 +74,7 @@ The `--target` option controls the target platform (defaults to host):
 ### 1. Download the Repository
 Clone with `git` or download and extract the repository ZIP:
 ```bash
-git clone https://github.com/omerd2905/oC.git
+git clone https://github.com/Quasiii29/oC.git
 cd oC
 ```
 *(On Windows without git: download the ZIP from GitHub and open the extracted folder in Command Prompt or PowerShell).*
