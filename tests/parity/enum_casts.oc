@@ -1,0 +1,25 @@
+// In-range enum casts on both backends (issue #75; out of range: probe_enum_cast_range.oc).
+enum Color { Red, Green, Blue }
+
+fn id(x: u32) -> u32 { return x; }
+fn wide(x: i64) -> i64 { return x; }
+
+fn name(c: Color) -> string {
+    match c {
+        Color.Red => { return "red"; }
+        Color.Green => { return "green"; }
+        Color.Blue => { return "blue"; }
+    }
+    return "?";
+}
+
+fn main() {
+    print(name(id(0).as(Color)));    // red
+    print(name(id(2).as(Color)));    // blue
+    print(name(wide(1).as(Color)));  // green
+    print(Color.Blue.as(u32));       // 2
+    match id(1).as(Color) {
+        Color.Green => print("matched green"),
+        _ => print("other"),
+    }
+}

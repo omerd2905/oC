@@ -1628,6 +1628,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     // --fp-trap: x - x is 0 for every finite x, and NaN for NaN and for either infinity.
     buf_append(out, "static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\n");
     buf_append(out, "static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } return i; }\n");
+    buf_append(out, "static inline uint32_t __oc_enum(uint64_t v, uint64_t n) { if (v >= n) { fprintf(stderr, \"panic: invalid enum value\\n\"); exit(1); } return (uint32_t)v; }\n");
     buf_append(out, "static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } return lo; }\n");
     buf_append(out, "#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \"panic: floating-point result is NaN or infinite at %s\\n\", loc); exit(1); } _r; })\n\n");
 

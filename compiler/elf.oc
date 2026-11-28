@@ -557,6 +557,7 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; }
         if str_eq(expr.tok.slice, "__oc_bound") { return "usize"; }
         if str_eq(expr.tok.slice, "__oc_range") { return "usize"; }
+        if str_eq(expr.tok.slice, "__oc_enum") { return "u32"; }
         if wrapping_op(expr.tok.slice).len > 0 {
             let mut lt: string = "";
             let mut rt: string = "";
@@ -2457,6 +2458,18 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
             elf_append_u32(code, 0);
             return;
         }
+        if str_eq(fn_name, "__oc_enum") { // x.as(E): %rax = v, trap unless v < number of variants
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax
+            ng_emit_expr(ng, code, data, expr.left.next);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx
+            buf_append_u8(code, 88); // pop %rax
+            buf_append_u8(code, 72); buf_append_u8(code, 57); buf_append_u8(code, 216); // cmp %rbx, %rax
+            ng_add_fixup(ng, code.len, "__trap_enum", true);
+            buf_append_u8(code, 15); buf_append_u8(code, 131); // jae (unsigned: a negative value too)
+            elf_append_u32(code, 0);
+            return;
+        }
         if str_eq(fn_name, "__oc_range") { // sub-slice: %rax = lo, trap unless lo <= hi <= n
             ng_emit_expr(ng, code, data, expr.left);
             buf_append_u8(code, 80); // push %rax (lo)
@@ -3933,7 +3946,7 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
 
     // Trap functions
     // Same panic texts as the C backend, so a trap reads the same whichever backend built it.
-    let mut traps: [8]string = [""];
+    let mut traps: [9]string = [""];
     traps[0] = "__trap_null_deref";
     traps[1] = "__trap_slice_bounds";
     traps[2] = "__trap_overflow";
@@ -3942,7 +3955,8 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     traps[5] = "__trap_cast_unsigned";
     traps[6] = "__trap_fp";
     traps[7] = "__trap_shift";
-    let mut trap_msgs: [8]string = [""];
+    traps[8] = "__trap_enum";
+    let mut trap_msgs: [9]string = [""];
     trap_msgs[0] = "panic: null pointer dereference\n";
     trap_msgs[1] = "panic: slice index out of bounds\n";
     trap_msgs[2] = "panic: integer overflow\n";
@@ -3951,8 +3965,9 @@ fn emit_native_image(root: *mut AstNode, out_file_str: string, target: i32, fp_t
     trap_msgs[5] = "panic: invalid unsigned cast\n";
     trap_msgs[6] = "panic: floating-point result is NaN or infinite at "; // + location from %rsi / %rdx
     trap_msgs[7] = "panic: shift count out of range\n";
+    trap_msgs[8] = "panic: invalid enum value\n";
     let mut ti: usize = 0;
-    while ti < 8 {
+    while ti < 9 {
         ng_define_helper(ng, has_offset, traps[ti], code.len);
         let tmsg: string = trap_msgs[ti];
         let t_data_off: usize = data.len;

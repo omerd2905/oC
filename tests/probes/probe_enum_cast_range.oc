@@ -1,0 +1,10 @@
+// x.as(E) panics unless x is one of E's variants (issue #75): 7 used to become a Color that
+// no match arm handles.
+enum Color { Red, Green, Blue }
+
+fn id(x: u32) -> u32 { return x; }
+
+fn main() {
+    let d: Color = id(7).as(Color);
+    print(d == Color.Red);
+}
