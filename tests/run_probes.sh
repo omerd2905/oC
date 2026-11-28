@@ -108,6 +108,7 @@ RUNTIME_TRAP=(
   "probe_array_ptr_bounds.oc"
   "probe_slice_index_bounds.oc"
   "probe_subslice_bounds.oc"
+  "probe_enum_cast_range.oc"
 )
 
 PASS=0

@@ -148,6 +148,7 @@ static inline oc_string __oc_slice_str(oc_string s, size_t start, size_t end) {
 
 static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }
 static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); } return i; }
+static inline uint32_t __oc_enum(uint64_t v, uint64_t n) { if (v >= n) { fprintf(stderr, "panic: invalid enum value\n"); exit(1); } return (uint32_t)v; }
 static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, "panic: slice index out of bounds\n"); exit(1); } return lo; }
 #define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, "panic: floating-point result is NaN or infinite at %s\n", loc); exit(1); } _r; })
 
@@ -4247,6 +4248,9 @@ bool is_builtin_fn(oc_string name) {
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
     return true;
     }
+    if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 })) {
+    return true;
+    }
     if (str_eq(name, (oc_string){ .ptr = (const uint8_t*)("wrapping_add"), .len = sizeof("wrapping_add") - 1 })) {
     return true;
     }
@@ -4488,6 +4492,9 @@ oc_string validator_expr_type(Validator* v, AstNode* expr) {
     }
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 };
     }
     AstNode* callee = validator_find_fn(v, ((((expr)->tok)).slice));
     if (__OC_SEQ(callee, ==, ((AstNode*)(0)))) {
@@ -7784,6 +7791,44 @@ void dz_expr(Errs* e, AstNode* x) {
     }
     return;
     }
+    if (__OC_SEQ(((x)->tag), ==, NODE_CAST)) {
+    AstNode* target = dz_enum(e, ((x)->type_name));
+    if (__OC_SEQ(target, !=, ((AstNode*)(0)))) {
+    dz_expr(e, ((x)->left));
+    bool checked = false;
+    if (__OC_SEQ(((x)->left), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((x)->left))->tag), ==, NODE_CALL)) {
+    checked = str_eq(((((((x)->left))->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 });
+    }
+    }
+    if ((!checked)) {
+    int32_t count = ((int32_t)0);
+    AstNode* v = ((target)->left);
+    while (__OC_SEQ(v, !=, ((AstNode*)(0)))) {
+    count = __OC_ADD(count, ((int32_t)1));
+    v = ((v)->next);
+    }
+    uint8_t digits[10] = {0};
+    size_t pos = ((size_t)10);
+    uint32_t val = ({ __auto_type _v = (count); if (_v < 0 || (uint64_t)_v > 4294967295ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint32_t)_v; });
+    while (__OC_SEQ(pos, >, ((size_t)0))) {
+    pos = __OC_SUB(pos, ((size_t)1));
+    __OC_AT((digits), (pos)) = ({ __auto_type _v = (__OC_ADD(((uint32_t)48), __OC_MOD(val, ((uint32_t)10)))); if (_v < 0 || (uint64_t)_v > 255ULL) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (uint8_t)_v; });
+    val = __OC_DIV(val, ((uint32_t)10));
+    if (__OC_SEQ(val, ==, ((uint32_t)0))) {
+    break;
+    }
+    }
+    StrBuf sb = strbuf_init(((e)->arena), ((size_t)12));
+    while (__OC_SEQ(pos, <, ((size_t)10))) {
+    strbuf_push((&(sb)), __OC_AT((digits), (pos)));
+    pos = __OC_ADD(pos, ((size_t)1));
+    }
+    ((x)->left) = dz_call2(e, (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 }, ((x)->left), dz_int(e, gx_done(sb), ((x)->tok)), ((x)->tok));
+    }
+    return;
+    }
+    }
     if (__OC_SEQ(((x)->tag), ==, NODE_SLICE)) {
     dz_expr(e, ((x)->left));
     if (__OC_SEQ(((x)->right), !=, ((AstNode*)(0)))) {
@@ -10655,6 +10700,7 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("}\012\012"), .len = sizeof("}\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012"), .len = sizeof("static inline uint64_t f64_to_bits(double x) { uint64_t u; memcpy(&u, &x, 8); return u; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return i; }\012"), .len = sizeof("static inline size_t __oc_bound(size_t i, size_t n) { if (i >= n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return i; }\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline uint32_t __oc_enum(uint64_t v, uint64_t n) { if (v >= n) { fprintf(stderr, \042panic: invalid enum value\134n\042); exit(1); } return (uint32_t)v; }\012"), .len = sizeof("static inline uint32_t __oc_enum(uint64_t v, uint64_t n) { if (v >= n) { fprintf(stderr, \042panic: invalid enum value\134n\042); exit(1); } return (uint32_t)v; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return lo; }\012"), .len = sizeof("static inline size_t __oc_range(size_t lo, size_t hi, size_t n) { if (lo > hi || hi > n) { fprintf(stderr, \042panic: slice index out of bounds\134n\042); exit(1); } return lo; }\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012"), .len = sizeof("#define __OC_FCHK(x, loc) ({ __auto_type _r = (x); if (!(_r - _r == 0)) { fprintf(stderr, \042panic: floating-point result is NaN or infinite at %s\134n\042, loc); exit(1); } _r; })\012\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012"), .len = sizeof("#define __OC_ARR(a) ((oc_string){ .ptr = (const uint8_t*)(a), .len = __builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), (void)0, sizeof(a)) })\012\012") - 1 });
@@ -11598,6 +11644,9 @@ oc_string ng_expr_type(NativeGen* ng, AstNode* expr) {
     }
     if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(((((expr)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("u32"), .len = sizeof("u32") - 1 };
     }
     if (__OC_SEQ(((wrapping_op(((((expr)->tok)).slice))).len), >, ((size_t)0))) {
     oc_string lt = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
@@ -14095,6 +14144,23 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     elf_append_u32(code, ((uint32_t)0));
     return;
     }
+    if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("__oc_enum"), .len = sizeof("__oc_enum") - 1 })) {
+    ng_emit_expr(ng, code, data, ((expr)->left));
+    buf_append_u8(code, ((uint8_t)80));
+    ng_emit_expr(ng, code, data, ((((expr)->left))->next));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)137));
+    buf_append_u8(code, ((uint8_t)195));
+    buf_append_u8(code, ((uint8_t)88));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)57));
+    buf_append_u8(code, ((uint8_t)216));
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_enum"), .len = sizeof("__trap_enum") - 1 }, true);
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)131));
+    elf_append_u32(code, ((uint32_t)0));
+    return;
+    }
     if (str_eq(fn_name, (oc_string){ .ptr = (const uint8_t*)("__oc_range"), .len = sizeof("__oc_range") - 1 })) {
     ng_emit_expr(ng, code, data, ((expr)->left));
     buf_append_u8(code, ((uint8_t)80));
@@ -15759,7 +15825,7 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     buf_append_u8(code, ((uint8_t)236));
     buf_append_u8(code, ((uint8_t)93));
     buf_append_u8(code, ((uint8_t)195));
-    oc_string traps[8] = {0};
+    oc_string traps[9] = {0};
     __OC_AT((traps), (0)) = (oc_string){ .ptr = (const uint8_t*)("__trap_null_deref"), .len = sizeof("__trap_null_deref") - 1 };
     __OC_AT((traps), (1)) = (oc_string){ .ptr = (const uint8_t*)("__trap_slice_bounds"), .len = sizeof("__trap_slice_bounds") - 1 };
     __OC_AT((traps), (2)) = (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 };
@@ -15768,7 +15834,8 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     __OC_AT((traps), (5)) = (oc_string){ .ptr = (const uint8_t*)("__trap_cast_unsigned"), .len = sizeof("__trap_cast_unsigned") - 1 };
     __OC_AT((traps), (6)) = (oc_string){ .ptr = (const uint8_t*)("__trap_fp"), .len = sizeof("__trap_fp") - 1 };
     __OC_AT((traps), (7)) = (oc_string){ .ptr = (const uint8_t*)("__trap_shift"), .len = sizeof("__trap_shift") - 1 };
-    oc_string trap_msgs[8] = {0};
+    __OC_AT((traps), (8)) = (oc_string){ .ptr = (const uint8_t*)("__trap_enum"), .len = sizeof("__trap_enum") - 1 };
+    oc_string trap_msgs[9] = {0};
     __OC_AT((trap_msgs), (0)) = (oc_string){ .ptr = (const uint8_t*)("panic: null pointer dereference\012"), .len = sizeof("panic: null pointer dereference\012") - 1 };
     __OC_AT((trap_msgs), (1)) = (oc_string){ .ptr = (const uint8_t*)("panic: slice index out of bounds\012"), .len = sizeof("panic: slice index out of bounds\012") - 1 };
     __OC_AT((trap_msgs), (2)) = (oc_string){ .ptr = (const uint8_t*)("panic: integer overflow\012"), .len = sizeof("panic: integer overflow\012") - 1 };
@@ -15777,8 +15844,9 @@ bool emit_native_image(AstNode* root, oc_string out_file_str, int32_t target, bo
     __OC_AT((trap_msgs), (5)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid unsigned cast\012"), .len = sizeof("panic: invalid unsigned cast\012") - 1 };
     __OC_AT((trap_msgs), (6)) = (oc_string){ .ptr = (const uint8_t*)("panic: floating-point result is NaN or infinite at "), .len = sizeof("panic: floating-point result is NaN or infinite at ") - 1 };
     __OC_AT((trap_msgs), (7)) = (oc_string){ .ptr = (const uint8_t*)("panic: shift count out of range\012"), .len = sizeof("panic: shift count out of range\012") - 1 };
+    __OC_AT((trap_msgs), (8)) = (oc_string){ .ptr = (const uint8_t*)("panic: invalid enum value\012"), .len = sizeof("panic: invalid enum value\012") - 1 };
     size_t ti = ((size_t)0);
-    while (__OC_SEQ(ti, <, ((size_t)8))) {
+    while (__OC_SEQ(ti, <, ((size_t)9))) {
     ng_define_helper(ng, has_offset, __OC_AT((traps), (ti)), ((code)->len));
     oc_string tmsg = __OC_AT((trap_msgs), (ti));
     size_t t_data_off = ((data)->len);

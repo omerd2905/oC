@@ -581,7 +581,7 @@ fn main() {
       <section id="errors">
         <h2>Enums &amp; Error Unions</h2>
         <p>
-          An <code>enum</code> is a set of named constants with their own type: <code>Color.Red</code>, <code>Color.Green</code>, … (numbered from 0, stored as a <code>u32</code>). A value of one enum cannot be passed where another is expected, and a plain number cannot be used as one. <code>match</code> runs one arm per variant and must handle all of them, or end with <code>_ =&gt;</code>; a missing variant is a compile error.
+          An <code>enum</code> is a set of named constants with their own type: <code>Color.Red</code>, <code>Color.Green</code>, … (numbered from 0, stored as a <code>u32</code>). A value of one enum cannot be passed where another is expected, and a plain number cannot be used as one; <code>x.as(Color)</code> converts a number and panics with <code>invalid enum value</code> unless it is one of the variants, so every <code>Color</code> matches an arm. <code>match</code> runs one arm per variant and must handle all of them, or end with <code>_ =&gt;</code>; a missing variant is a compile error.
         </p>
         <p>
           A function that can fail in an <em>expected</em> way (bad input, a missing file) returns an <strong>error union</strong> <code>T!E</code>: either a <code>T</code>, built with <code>Ok(value)</code>, or an error of enum type <code>E</code>, built with <code>Err(E.Variant)</code>. The value inside can only be reached in one of three ways, so a caller cannot forget the error case:

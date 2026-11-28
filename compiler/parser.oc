@@ -1503,6 +1503,7 @@ fn is_builtin_fn(name: string) -> bool {
     if str_eq(name, "f64_to_bits") { return true; }
     if str_eq(name, "__oc_bound") { return true; } // slices: i < len, else panic; returns i
     if str_eq(name, "__oc_range") { return true; } // slices: lo <= hi <= len, else panic; returns lo
+    if str_eq(name, "__oc_enum") { return true; }  // x.as(E): v < variants, else panic; returns v
     if str_eq(name, "wrapping_add") { return true; }
     if str_eq(name, "wrapping_sub") { return true; }
     if str_eq(name, "wrapping_mul") { return true; }
@@ -1681,6 +1682,7 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; } // built-in
         if str_eq(expr.tok.slice, "__oc_bound") { return "usize"; }
         if str_eq(expr.tok.slice, "__oc_range") { return "usize"; }
+        if str_eq(expr.tok.slice, "__oc_enum") { return "u32"; }
         let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
         if callee == (0).as(*mut AstNode) {
             if wrapping_op(expr.tok.slice).len > 0 {
@@ -4442,6 +4444,41 @@ fn dz_expr(e: *mut Errs, x: *mut AstNode) {
             el = el.next;
         }
         return;
+    }
+    if x.tag == NODE_CAST {
+        let target: *mut AstNode = dz_enum(e, x.type_name);
+        if target != (0).as(*mut AstNode) {
+            // x.as(E) keeps its type E, but checks that the value is one of E's variants.
+            dz_expr(e, x.left);
+            let mut checked: bool = false;
+            if x.left != (0).as(*mut AstNode) {
+                if x.left.tag == NODE_CALL { checked = str_eq(x.left.tok.slice, "__oc_enum"); }
+            }
+            if !checked {
+                let mut count: i32 = 0;
+                let mut v: *mut AstNode = target.left;
+                while v != (0).as(*mut AstNode) {
+                    count = count + 1;
+                    v = v.next;
+                }
+                let mut digits: [10]u8 = [0];
+                let mut pos: usize = 10;
+                let mut val: u32 = count.as(u32);
+                while pos > 0 {
+                    pos = pos - 1;
+                    digits[pos] = (48 + (val % 10)).as(u8);
+                    val = val / 10;
+                    if val == 0 { break; }
+                }
+                let mut sb: StrBuf = strbuf_init(e.arena, 12);
+                while pos < 10 {
+                    strbuf_push(&mut sb, digits[pos]);
+                    pos = pos + 1;
+                }
+                x.left = dz_call2(e, "__oc_enum", x.left, dz_int(e, gx_done(sb), x.tok), x.tok);
+            }
+            return;
+        }
     }
     if x.tag == NODE_SLICE {
         dz_expr(e, x.left);
