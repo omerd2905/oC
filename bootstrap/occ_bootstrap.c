@@ -10745,17 +10745,29 @@ int32_t ng_find_field_offset(NativeGen* ng, oc_string s_name, oc_string f_name) 
 }
 
 oc_string ng_find_field_type(NativeGen* ng, oc_string s_name, oc_string f_name) {
+    bool builtin = str_eq(s_name, (oc_string){ .ptr = (const uint8_t*)("string"), .len = sizeof("string") - 1 });
+    if (__OC_SEQ(((s_name).len), ==, ((size_t)0))) {
+    builtin = true;
+    }
+    if (builtin) {
     if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
     }
     if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
     return (oc_string){ .ptr = (const uint8_t*)("*u8"), .len = sizeof("*u8") - 1 };
     }
-    int32_t idx = ng_find_field_idx(ng, s_name, f_name);
-    if (__OC_SEQ(idx, <, ((int32_t)0))) {
-    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
     }
+    int32_t idx = ng_find_field_idx(ng, s_name, f_name);
+    if (__OC_SEQ(idx, >=, ((int32_t)0))) {
     return __OC_AT((((ng)->field_types)), (({ __auto_type _v = (idx); if (_v < 0) { fprintf(stderr, "panic: invalid unsigned cast\n"); exit(1); } (size_t)_v; })));
+    }
+    if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("len"), .len = sizeof("len") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("usize"), .len = sizeof("usize") - 1 };
+    }
+    if (str_eq(f_name, (oc_string){ .ptr = (const uint8_t*)("ptr"), .len = sizeof("ptr") - 1 })) {
+    return (oc_string){ .ptr = (const uint8_t*)("*u8"), .len = sizeof("*u8") - 1 };
+    }
+    return (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
 }
 
 int32_t ng_scalar_width(oc_string t) {
@@ -12980,6 +12992,27 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, ((uint8_t)133));
     elf_append_u32(code, ((uint32_t)0));
     return;
+    }
+    }
+    if (is_ptr_arith) {
+    oc_string rt1 = ng_expr_type(ng, ((expr)->right));
+    bool int_rhs = true;
+    if (__OC_SEQ(((rt1).len), >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(rt1, 0), ==, ((uint8_t)42))) {
+    int_rhs = false;
+    }
+    if (__OC_SEQ(__oc_index_str(rt1, 0), ==, ((uint8_t)38))) {
+    int_rhs = false;
+    }
+    }
+    int32_t stride = ng_type_stride(ng_strip_ptr_type(lt));
+    if (int_rhs) {
+    if (__OC_SEQ(stride, >, ((int32_t)1))) {
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)105));
+    buf_append_u8(code, ((uint8_t)219));
+    elf_append_i32(code, stride);
+    }
     }
     }
     if (__OC_SEQ(((((expr)->tok)).tag), ==, TOK_PLUS)) {
