@@ -1,0 +1,7 @@
+// s[i] on a slice []T is checked against s.len (issue #74).
+fn get(s: []i32, i: usize) -> i32 { return s[i]; }
+
+fn main() {
+    let a: [3]i32 = [1, 2, 3];
+    print(get(a[0..2], 2));
+}

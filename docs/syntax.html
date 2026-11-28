@@ -899,6 +899,35 @@ panic: integer overflow
         <pre><code>let mut stack_buf: [64]u8 = [0]; // 64 bytes zeroed out
 let primes: [4]i32 = [2, 3, 5, 7];</code></pre>
 
+        <h3>Slices of Any Type: <code>[]T</code></h3>
+        <p>
+          <code>[]T</code> is a view of consecutive values of type <code>T</code>: a pointer and a length, 16 bytes, passed and returned by value. <code>[]u8</code> is the same type as <code>string</code>. A slice comes from slicing an array <code>a[lo..hi]</code>, an array behind a pointer <code>p[lo..hi]</code> (<code>p: *[N]T</code>) or another slice; either bound may be left out (<code>a[1..]</code>, <code>a[..2]</code>, <code>a[..]</code>). Writing <code>s[i] = v</code> writes the underlying array. A slice of a local array cannot leave the function, like a reference to it. A raw pointer has no length, so it cannot be sliced.
+        </p>
+        <pre><code>fn total(xs: []i32) -&gt; i32 {
+    let mut s: i32 = 0;
+    let mut i: usize = 0;
+    while i &lt; xs.len {
+        s = s + xs[i];
+        i = i + 1;
+    }
+    return s;
+}
+
+fn sum3(a: [3]i32) -&gt; i32 { return a[0] + a[1] + a[2]; }   // a copy of the caller's array
+fn bump(a: *mut [3]i32) { a[0] = a[0] + 1; }                 // the caller's array itself
+
+fn main() {
+    let mut a: [3]i32 = [1, 2, 3];
+    print(total(a[0..3]));   // 6
+    print(total(a[1..]));    // 5
+    print(sum3(a));          // 6
+    bump(&amp;mut a);
+    print(a[0]);             // 2
+}</code></pre>
+        <p>
+          A fixed-size array <code>[N]T</code> is passed by value: the function works on a copy. Through a pointer <code>p: *[N]T</code>, <code>p[i]</code> is element <code>i</code> of the array, checked against <code>N</code>. A function cannot return an array (return a struct that holds it), and arrays of arrays (<code>[N][M]T</code>) are not supported yet.
+        </p>
+
         <h3>Index Bounds Verification</h3>
         <p>
           Reading or writing an array or slice element <code>s[i]</code> automatically verifies that <code>i &lt; s.len</code>. If the index is equal to or exceeds the slice length, execution immediately halts via <code>__trap_slice_bounds</code> (preventing CWE-125 Out-of-bounds Read and CWE-787 Out-of-bounds Write):

@@ -555,6 +555,8 @@ fn ng_expr_type(ng: *mut NativeGen, expr: *mut AstNode) -> string {
     if expr.tag == NODE_CALL {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; }
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; }
+        if str_eq(expr.tok.slice, "__oc_bound") { return "usize"; }
+        if str_eq(expr.tok.slice, "__oc_range") { return "usize"; }
         if wrapping_op(expr.tok.slice).len > 0 {
             let mut lt: string = "";
             let mut rt: string = "";
@@ -2441,6 +2443,38 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 ng_fail(ng, "native codegen error: system calls and win32_* imports take at most 6 register words");
                 return;
             }
+        }
+
+        if str_eq(fn_name, "__oc_bound") { // slice index: %rax = i, trap unless i < n
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax
+            ng_emit_expr(ng, code, data, expr.left.next);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx
+            buf_append_u8(code, 88); // pop %rax
+            buf_append_u8(code, 72); buf_append_u8(code, 57); buf_append_u8(code, 216); // cmp %rbx, %rax
+            ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+            buf_append_u8(code, 15); buf_append_u8(code, 131); // jae
+            elf_append_u32(code, 0);
+            return;
+        }
+        if str_eq(fn_name, "__oc_range") { // sub-slice: %rax = lo, trap unless lo <= hi <= n
+            ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 80); // push %rax (lo)
+            ng_emit_expr(ng, code, data, expr.left.next);
+            buf_append_u8(code, 80); // push %rax (hi)
+            ng_emit_expr(ng, code, data, expr.left.next.next);
+            buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 195); // mov %rax, %rbx (n)
+            buf_append_u8(code, 89); // pop %rcx (hi)
+            buf_append_u8(code, 88); // pop %rax (lo)
+            buf_append_u8(code, 72); buf_append_u8(code, 57); buf_append_u8(code, 217); // cmp %rbx, %rcx
+            ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+            buf_append_u8(code, 15); buf_append_u8(code, 135); // ja: hi > n
+            elf_append_u32(code, 0);
+            buf_append_u8(code, 72); buf_append_u8(code, 57); buf_append_u8(code, 200); // cmp %rcx, %rax
+            ng_add_fixup(ng, code.len, "__trap_slice_bounds", true);
+            buf_append_u8(code, 15); buf_append_u8(code, 135); // ja: lo > hi
+            elf_append_u32(code, 0);
+            return;
         }
 
         if str_eq(fn_name, "sys_arena_poison") {

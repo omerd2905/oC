@@ -1,0 +1,7 @@
+// a[lo..hi] needs lo <= hi <= the length (issue #74).
+fn main() {
+    let a: [3]i32 = [1, 2, 3];
+    let hi: usize = 4;
+    let s: []i32 = a[1..hi];
+    print(s.len);
+}

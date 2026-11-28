@@ -1,0 +1,9 @@
+// A slice of a local array cannot outlive the function (issue #74).
+fn bad() -> []i32 {
+    let a: [3]i32 = [1, 2, 3];
+    return a[0..3];
+}
+
+fn main() {
+    print(bad().len);
+}

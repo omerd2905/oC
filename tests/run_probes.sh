@@ -69,6 +69,7 @@ COMPILE_REJECT=(
   "probe_undefined_variable.oc|probe_undefined_variable.oc:3:11: error: undefined variable 'nope'"
   "probe_array_return.oc|probe_array_return.oc:3:4: error: a function cannot return an array ([3]i32)"
   "probe_nested_array.oc|probe_nested_array.oc:3:9: error: arrays of arrays ([2][2]u8) are not supported yet"
+  "probe_slice_escape.oc|error: cannot return reference to local stack variable 'a'"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
@@ -105,6 +106,8 @@ RUNTIME_TRAP=(
   "probe_min_div_i64.oc"
   "probe_min_mod_i64.oc"
   "probe_array_ptr_bounds.oc"
+  "probe_slice_index_bounds.oc"
+  "probe_subslice_bounds.oc"
 )
 
 PASS=0

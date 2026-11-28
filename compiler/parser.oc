@@ -1501,6 +1501,8 @@ fn validator_find_fn(v: *mut Validator, name: string) -> *mut AstNode {
 fn is_builtin_fn(name: string) -> bool {
     if str_eq(name, "sqrt_f64") { return true; }
     if str_eq(name, "f64_to_bits") { return true; }
+    if str_eq(name, "__oc_bound") { return true; } // slices: i < len, else panic; returns i
+    if str_eq(name, "__oc_range") { return true; } // slices: lo <= hi <= len, else panic; returns lo
     if str_eq(name, "wrapping_add") { return true; }
     if str_eq(name, "wrapping_sub") { return true; }
     if str_eq(name, "wrapping_mul") { return true; }
@@ -1677,6 +1679,8 @@ fn validator_expr_type(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr.tag == NODE_CALL {
         if str_eq(expr.tok.slice, "sqrt_f64") { return "f64"; } // built-in
         if str_eq(expr.tok.slice, "f64_to_bits") { return "u64"; } // built-in
+        if str_eq(expr.tok.slice, "__oc_bound") { return "usize"; }
+        if str_eq(expr.tok.slice, "__oc_range") { return "usize"; }
         let callee: *mut AstNode = validator_find_fn(v, expr.tok.slice);
         if callee == (0).as(*mut AstNode) {
             if wrapping_op(expr.tok.slice).len > 0 {
@@ -4155,6 +4159,10 @@ fn dz_type_of(e: *mut Errs, x: *mut AstNode) -> string {
             let mut st: string = dz_type_of(e, x.left);
             if starts_with(st, "*mut ") { st = st[5..st.len]; }
             if starts_with(st, "*") { st = st[1..st.len]; }
+            if dz_is_slice_type(st) {
+                if str_eq(x.tok.slice, "len") { return "usize"; }
+                if str_eq(x.tok.slice, "ptr") { return str_concat(e.arena, "*mut ", trim(st[2..st.len])); }
+            }
             let mut d: *mut AstNode = e.root.left;
             while d != (0).as(*mut AstNode) {
                 if d.tag == NODE_STRUCT_DECL {
@@ -4171,6 +4179,17 @@ fn dz_type_of(e: *mut Errs, x: *mut AstNode) -> string {
         }
     }
     if x.tag == NODE_CAST { return x.type_name; }
+    if x.tag == NODE_INDEX { return dz_elem_type(dz_type_of(e, x.left)); }
+    if x.tag == NODE_SLICE {
+        let bt: string = dz_type_of(e, x.left);
+        let el: string = dz_elem_type(bt);
+        if el.len == 0 { return ""; }
+        if str_eq(el, "u8") { return "string"; }
+        return str_concat(e.arena, "[]", el);
+    }
+    if x.tag == NODE_STRUCT_INIT {
+        if str_eq(x.tok.slice, "__Slice") { return str_concat(e.arena, "[]", x.type_name); }
+    }
     return "";
 }
 
@@ -4424,8 +4443,18 @@ fn dz_expr(e: *mut Errs, x: *mut AstNode) {
         }
         return;
     }
+    if x.tag == NODE_SLICE {
+        dz_expr(e, x.left);
+        if x.right != (0).as(*mut AstNode) {
+            dz_expr(e, x.right.left);
+            dz_expr(e, x.right.right);
+        }
+        dz_lower_slice(e, x);
+        return;
+    }
     dz_expr(e, x.left);
     dz_expr(e, x.right);
+    if x.tag == NODE_INDEX { dz_lower_index(e, x); }
 }
 
 // The statements of a match arm body (a block or a single statement), lowered.
@@ -4666,7 +4695,7 @@ fn dz_stmt_in(e: *mut Errs, s: *mut AstNode) -> *mut AstNode {
     if s.tag == NODE_WHILE {
         dz_expr(e, s.left);
         if e.pre != (0).as(*mut AstNode) {
-            dz_err(e, s.left.tok, "try and catch cannot be used in a while condition (it is evaluated again on every iteration): compute the value in the loop body", "", "");
+            dz_err(e, s.left.tok, "try and catch cannot be used in a while condition, nor can indexing or slicing the result of a call (it is evaluated again on every iteration): compute the value in the loop body", "", "");
         }
         if s.right != (0).as(*mut AstNode) { s.right.left = dz_stmts(e, s.right.left); }
         return s;
@@ -4771,7 +4800,7 @@ fn dz_type(e: *mut Errs, t: string) -> string {
     }
     let s1: string = gx_done(sb);
     let b: i64 = dz_bang(s1);
-    if b < 0 { return s1; }
+    if b < 0 { return dz_slice_types(e, s1); }
     let mut u: StrBuf = strbuf_init(e.arena, s1.len + 24);
     strbuf_push_str(&mut u, "__ErrorUnion<");
     strbuf_push_str(&mut u, dz_type(e, trim(s1[0..b.as(usize)])));
@@ -4779,6 +4808,197 @@ fn dz_type(e: *mut Errs, t: string) -> string {
     strbuf_push_str(&mut u, dz_type(e, trim(s1[b.as(usize) + 1..s1.len])));
     strbuf_push_str(&mut u, ">");
     return gx_done(u);
+}
+
+// Slice types: "[]u8" is string; any other "[]T" is the struct __Slice<T> { ptr, len }.
+// Rewrites every "[]X" in t, X up to the end of its type ("Pair<[]i32, u8>" too).
+fn dz_slice_types(e: *mut Errs, t: string) -> string {
+    let mut cur: string = t;
+    let mut from: usize = 0;
+    while from + 1 < cur.len {
+        if cur[from] == 91 {
+            if cur[from + 1] == 93 {
+                let mut j: usize = from + 2;
+                let mut depth: i32 = 0;
+                while j < cur.len {
+                    if cur[j] == 60 { depth = depth + 1; }
+                    if cur[j] == 62 {
+                        if depth == 0 { break; }
+                        depth = depth - 1;
+                    }
+                    if cur[j] == 44 { if depth == 0 { break; } }
+                    j = j + 1;
+                }
+                let elem: string = dz_slice_types(e, trim(cur[from + 2..j]));
+                let mut repl: string = "string";
+                if !str_eq(elem, "u8") {
+                    repl = str_concat(e.arena, str_concat(e.arena, "__Slice<", elem), ">");
+                }
+                cur = str_concat(e.arena, str_concat(e.arena, cur[0..from], repl), cur[j..cur.len]);
+                from = from + repl.len;
+                continue;
+            }
+        }
+        from = from + 1;
+    }
+    return cur;
+}
+
+// "[]T" with T other than u8 (a __Slice); "[]u8" is a string and needs no lowering.
+fn dz_is_slice_type(t: string) -> bool {
+    if !starts_with(t, "[]") { return false; }
+    return !str_eq(trim(t[2..t.len]), "u8");
+}
+
+// Element type of "[N]T", "[]T", "*[N]T", "*mut [N]T", "*T", string; "" otherwise.
+fn dz_elem_type(t: string) -> string {
+    let mut u: string = t;
+    if starts_with(u, "*mut ") { u = u[5..u.len]; } else if starts_with(u, "*") { u = u[1..u.len]; }
+    if str_eq(u, "string") { return "u8"; }
+    if starts_with(u, "[") {
+        let mut close: usize = 1;
+        while close < u.len {
+            if u[close] == 93 { break; }
+            close = close + 1;
+        }
+        if close + 1 <= u.len { return trim(u[close + 1..u.len]); }
+        return "";
+    }
+    if u.len < t.len { return u; } // *T
+    return "";
+}
+
+// N of "[N]T" or "*[N]T" ("" for anything else).
+fn dz_array_len(t: string) -> string {
+    let mut u: string = t;
+    if starts_with(u, "*mut ") { u = u[5..u.len]; } else if starts_with(u, "*") { u = u[1..u.len]; }
+    if !dz_is_array_type(u) { return ""; }
+    let mut close: usize = 1;
+    while close < u.len {
+        if u[close] == 93 { break; }
+        close = close + 1;
+    }
+    return trim(u[1..close]);
+}
+
+// An expression with no effects that can be evaluated twice: a variable, a literal, or a
+// field of one.
+fn dz_pure(x: *mut AstNode) -> bool {
+    if x == (0).as(*mut AstNode) { return false; }
+    if x.tag == NODE_IDENT { return true; }
+    if x.tag == NODE_INT { return true; }
+    if x.tag == NODE_FIELD_ACCESS { return dz_pure(x.left); }
+    return false;
+}
+
+fn dz_copy(e: *mut Errs, x: *mut AstNode) -> *mut AstNode {
+    if x.tag == NODE_FIELD_ACCESS { return dz_field(e, dz_copy(e, x.left), x.tok.slice, x.tok); }
+    let c: *mut AstNode = ast_alloc_node(e.arena, x.tag, x.tok);
+    c.type_name = x.type_name;
+    return c;
+}
+
+// x itself if it can be evaluated twice, else a temporary of type t holding it.
+fn dz_reusable(e: *mut Errs, x: *mut AstNode, t: string) -> *mut AstNode {
+    if dz_pure(x) { return x; }
+    let tmp: string = dz_tmp(e);
+    let init: *mut AstNode = ast_alloc_node(e.arena, x.tag, x.tok);
+    init.type_name = x.type_name;
+    init.left = x.left;
+    init.right = x.right;
+    e.pre = dz_append(e.pre, dz_let(e, tmp, t, init, false, x.tok));
+    return dz_ident(e, tmp, x.tok);
+}
+
+fn dz_call2(e: *mut Errs, name: string, a: *mut AstNode, b: *mut AstNode, at: Token) -> *mut AstNode {
+    let c: *mut AstNode = ast_alloc_node(e.arena, NODE_CALL, dz_tok(at, TOK_IDENT, name));
+    c.left = a;
+    a.next = b;
+    return c;
+}
+
+// The length N of an array type as an expression (a literal, or a const parameter).
+fn dz_len_expr(e: *mut Errs, n: string, at: Token) -> *mut AstNode {
+    if n.len > 0 {
+        if is_digit(n[0]) { return dz_int(e, n, at); }
+    }
+    return dz_ident(e, n, at);
+}
+
+// s[i] on a slice s: []T is s.ptr[__oc_bound(i, s.len)].
+fn dz_lower_index(e: *mut Errs, x: *mut AstNode) {
+    let bt: string = dz_type_of(e, x.left);
+    if !dz_is_slice_type(bt) { return; }
+    let base: *mut AstNode = dz_reusable(e, x.left, bt);
+    let idx: *mut AstNode = x.right;
+    x.right = dz_call2(e, "__oc_bound", idx, dz_field(e, dz_copy(e, base), "len", x.tok), x.tok);
+    x.left = dz_field(e, base, "ptr", x.tok);
+}
+
+// a[lo..hi] on a: [N]T, p: *[N]T or s: []T (T not u8) is the slice
+// __Slice<T> { ptr: <first element> + __oc_range(lo, hi, len), len: hi - lo }.
+fn dz_lower_slice(e: *mut Errs, x: *mut AstNode) {
+    let bt: string = dz_type_of(e, x.left);
+    let elem: string = dz_elem_type(bt);
+    if elem.len == 0 { return; }
+    if str_eq(elem, "u8") { return; } // a string: both backends slice it
+    let n: string = dz_array_len(bt);
+    let is_slice: bool = dz_is_slice_type(bt);
+    let mut is_ptr: bool = starts_with(bt, "*");
+    if n.len == 0 {
+        if !is_slice { return; }
+        is_ptr = false;
+    }
+    let at: Token = x.tok;
+    let base: *mut AstNode = dz_reusable(e, x.left, bt);
+    let mut lo: *mut AstNode = (0).as(*mut AstNode);
+    let mut hi: *mut AstNode = (0).as(*mut AstNode);
+    if x.right != (0).as(*mut AstNode) {
+        lo = x.right.left;
+        hi = x.right.right;
+    }
+    if lo == (0).as(*mut AstNode) { lo = dz_int(e, "0", at); }
+    if hi == (0).as(*mut AstNode) {
+        if is_slice { hi = dz_field(e, dz_copy(e, base), "len", at); } else { hi = dz_len_expr(e, n, at); }
+    }
+    lo = dz_reusable(e, lo, "usize");
+    hi = dz_reusable(e, hi, "usize");
+    let mut first: *mut AstNode = (0).as(*mut AstNode);
+    let mut total: *mut AstNode = (0).as(*mut AstNode);
+    if is_slice {
+        first = dz_field(e, base, "ptr", at);
+        total = dz_field(e, dz_copy(e, base), "len", at);
+    } else {
+        first = ast_alloc_node(e.arena, NODE_CAST, dz_tok(at, TOK_IDENT, "as"));
+        first.type_name = str_concat(e.arena, "*mut ", elem);
+        if is_ptr {
+            first.left = base;
+        } else {
+            let addr: *mut AstNode = ast_alloc_node(e.arena, NODE_ADDRESS_OF, dz_tok(at, TOK_AMP, "&"));
+            addr.left = base;
+            first.left = addr;
+        }
+        total = dz_len_expr(e, n, at);
+    }
+    let range: *mut AstNode = ast_alloc_node(e.arena, NODE_CALL, dz_tok(at, TOK_IDENT, "__oc_range"));
+    range.left = lo;
+    lo.next = hi;
+    hi.next = total;
+    let ptr_val: *mut AstNode = dz_bin(e, TOK_PLUS, "+", first, range, at);
+    let len_val: *mut AstNode = dz_bin(e, TOK_MINUS, "-", dz_copy(e, hi), dz_copy(e, lo), at);
+    let lit: *mut AstNode = ast_alloc_node(e.arena, NODE_STRUCT_INIT, dz_tok(at, TOK_IDENT, "__Slice"));
+    lit.type_name = elem;
+    let fp: *mut AstNode = ast_alloc_node(e.arena, NODE_PARAM, dz_tok(at, TOK_IDENT, "ptr"));
+    fp.left = ptr_val;
+    let fl: *mut AstNode = ast_alloc_node(e.arena, NODE_PARAM, dz_tok(at, TOK_IDENT, "len"));
+    fl.left = len_val;
+    fp.next = fl;
+    lit.left = fp;
+    x.tag = NODE_STRUCT_INIT;
+    x.tok = lit.tok;
+    x.type_name = lit.type_name;
+    x.left = lit.left;
+    x.right = (0).as(*mut AstNode);
 }
 
 // "[2][3]u8" (also behind a pointer): an array whose elements are arrays.
@@ -4945,6 +5165,20 @@ fn desugar_errors(root: *mut AstNode, arena: *mut Arena, m: *SourceMap) -> bool 
         d = nxt;
     }
     last = prev;
+    // struct __Slice<T> { ptr: *mut T, len: usize }: the slice type []T for T other than u8.
+    let sl_at: Token = root.tok;
+    let sl_tmpl: *mut AstNode = ast_alloc_node(arena, NODE_GENERIC, dz_tok(sl_at, sl_at.tag, "__Slice"));
+    sl_tmpl.left = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, sl_at.tag, "T"));
+    let sl_decl: *mut AstNode = ast_alloc_node(arena, NODE_STRUCT_DECL, dz_tok(sl_at, sl_at.tag, "__Slice"));
+    let sl_ptr: *mut AstNode = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, sl_at.tag, "ptr"));
+    sl_ptr.type_name = "*mut T";
+    let sl_len: *mut AstNode = ast_alloc_node(arena, NODE_PARAM, dz_tok(sl_at, sl_at.tag, "len"));
+    sl_len.type_name = "usize";
+    sl_ptr.next = sl_len;
+    sl_decl.left = sl_ptr;
+    sl_tmpl.right = sl_decl;
+    if last == (0).as(*mut AstNode) { root.left = sl_tmpl; } else { last.next = sl_tmpl; }
+    last = sl_tmpl;
     // struct __ErrorUnion<T, E> { code: u64, value: T }, for expand_generics.
     let at: Token = root.tok;
     let tmpl: *mut AstNode = ast_alloc_node(arena, NODE_GENERIC, dz_tok(at, at.tag, "__ErrorUnion"));
