@@ -1,0 +1,18 @@
+// expect: panic panic: invalid enum value
+// Arithmetic generator, enum casts (#75, generator added for #78): a value outside the
+// variants panics on both backends instead of making a FzE that no arm matches.
+enum FzE { A, B, C }
+
+fn fz_enum_name(e: FzE) -> u32 {
+    match e {
+        FzE.A => { return 10; }
+        FzE.B => { return 20; }
+        FzE.C => { return 30; }
+    }
+}
+
+fn main() {
+    let v: u32 = 2;
+    print(fz_enum_name((v).as(FzE)));
+    print(fz_enum_name((v + 1).as(FzE)));
+}

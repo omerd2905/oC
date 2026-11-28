@@ -1,0 +1,35 @@
+// expect: run
+// Lifetime generator shape (#78): arena strings in a [2]string, passed as a slice, by value
+// and by pointer, before the arena is reset.
+import "std/str.oc";
+
+fn fz_total(ws: []string) -> usize {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < ws.len {
+        n = n + ws[i].len;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn fz_firsts(ws: [2]string) -> string {
+    return ws[0];
+}
+
+fn fz_ptrs(p: *[2]string) -> usize {
+    return p[1].len;
+}
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let mut a1: Arena = arena_init(4096);
+    let mut s0: string = str_concat(&mut a0, "ab", "cd");
+    let mut s1: string = str_concat(&mut a1, "xyz", "");
+    let mut q0: [2]string = [s0, s1];
+    print(fz_total(q0[0..2]));
+    print(fz_firsts(q0));
+    print(fz_ptrs(&q0));
+    arena_deinit(&mut a0);
+    arena_deinit(&mut a1);
+}

@@ -149,7 +149,7 @@ This runs:
 `make fuzz` (`tools/fuzz/run.py`, Python 3) checks the compiler against generated programs whose correct answer is known:
 
 - **Arena lifetimes:** random programs with arenas, helpers that allocate or reset, structs, arrays, branches and loops. Each is also run abstractly, so the fuzzer knows whether it is safe. An accepted unsafe program is a soundness hole; a rejected safe one a false positive. Every accepted program then runs with `--arena-poison` (memory given up by an arena faults when touched) on both backends and must print exactly the predicted output.
-- **Backend differential:** random integer, float, shift, cast, `wrapping_*` and string-escape expressions; the C and native backends must agree on output, panics and exit status.
+- **Backend differential:** random integer, float, shift, cast, `wrapping_*`, `MIN / -1`, enum-cast and string-escape expressions, and calls passing arrays as slices (`[]T`), by value (`[N]T`) and by pointer (`*[N]T`); the C and native backends must agree on output, panics and exit status. The lifetime mode also passes arrays of arena strings to functions in those three ways.
 
 Findings are minimized to a few lines; fixed ones live in `tests/fuzz_regressions/` and run on every build. A nightly CI job runs 10,000 programs per mode with a fresh seed.
 

@@ -1,10 +1,12 @@
 """Random arithmetic programs for the C-vs-native differential.
 
 Each program declares a few variables and prints a list of random, well-typed expressions:
-integer arithmetic in every width (overflow, division by zero and failed casts must panic the
-same way on both backends), shifts, ~ and unary minus, checked casts, wrapping_* operations,
-f32/f64 arithmetic and conversions, comparisons, and string literals with every escape. The
-first panic ends the program; stdout, stderr and the exit status must match between backends.
+integer arithmetic in every width (overflow, division by zero, MIN / -1 and failed casts must
+panic the same way on both backends), shifts, ~ and unary minus, checked casts, wrapping_*
+operations, f32/f64 arithmetic and conversions, comparisons, string literals with every escape,
+and calls passing arrays by value ([3]T), by pointer (*[3]T) and as slices ([]T, with bounds
+that are sometimes out of range), and casts to an enum (out of range: a panic). The first
+panic ends the program; stdout, stderr and the exit status must match between backends.
 """
 
 import random
@@ -20,7 +22,10 @@ FLOAT_LITS = ["0.0", "0.5", "1.0", "2.5", "3.0", "10.0", "0.1", "1000000.0", "1.
 
 def int_lit(rng, t):
     lo, hi = INTS[t]
-    v = rng.choice([0, 1, 2, 3, 7, 10, 100, hi, hi - 1, lo, lo + 1, rng.randint(0, 50), rng.randint(lo, hi)])
+    pool = [0, 1, 2, 3, 7, 10, 100, hi, hi - 1, lo, lo + 1, rng.randint(0, 50), rng.randint(lo, hi)]
+    if lo < 0:
+        pool += [-1, -1]   # with lo in the pool: MIN / -1 and MIN % -1
+    v = rng.choice(pool)
     v = max(lo, min(hi, v))
     if v > 2**63 - 1:   # an untyped literal above the i64 maximum is a u64 only on its own
         return "(%d).as(u64)" % v
@@ -35,6 +40,7 @@ class Arith:
     def __init__(self, rng):
         self.rng = rng
         self.vars = {}          # name -> type
+        self.arrays = {}        # name -> element type of a [3]T variable
 
     def var_of(self, t):
         names = [n for n, vt in self.vars.items() if vt == t]
@@ -117,7 +123,25 @@ class Arith:
         if k == 8:
             t = r.choice(FLOATS)
             return "print(%s %s %s);" % (self.float_expr(t, 2), r.choice(["<", "<=", ">", ">="]), self.float_expr(t, 2))
+        if k == 9 and self.arrays and r.random() < 0.6:
+            return self.array_call()
+        if k == 9 and r.random() < 0.4:   # a checked enum cast, in range or not
+            return "print(fz_enum_name((%s).as(FzE)));" % self.int_expr("u32", 1)
         return "print(%s);" % self.string_lit()
+
+    def array_call(self):
+        """A call passing a [3]T variable as a slice, by value or by pointer (see HELPERS)."""
+        r = self.rng
+        a = r.choice(sorted(self.arrays))
+        t = self.arrays[a]
+        k = r.randint(0, 2)
+        if k == 0:   # a[lo..hi], sometimes out of range
+            lo = r.choice([0, 0, 1, 2, 3])
+            hi = r.choice([lo, 3, 3, min(lo + 1, 3), 4])
+            return "print(fz_sum_%s(%s[%d..%d]));" % (t, a, lo, hi)
+        if k == 1:
+            return "print(fz_first_%s(%s));" % (t, a)
+        return "print(fz_at_%s(&%s, %d));" % (t, a, r.choice([0, 1, 2, 2, 3]))
 
     def program(self):
         """(declaration lines, statement lines)."""
@@ -131,12 +155,37 @@ class Arith:
                 value = "2.0"
             decls.append("let %s: %s = %s;" % (name, t, value))
             self.vars[name] = t
+        for i in range(r.randint(0, 2)):
+            t = r.choice(list(INTS))
+            name = "arr%d" % i
+            decls.append("let %s: [3]%s = [%s, %s, %s];" % (name, t, int_lit(r, t), int_lit(r, t), int_lit(r, t)))
+            self.arrays[name] = t
         stmts = [self.statement() for _ in range(r.randint(4, 10))]
         return decls, stmts
 
 
+# Functions taking arrays, emitted for the element types a program uses.
+HELPERS = {
+    "fz_sum_%s": "fn fz_sum_%s(a: []%s) -> %s {\n    let mut s: %s = 0;\n    let mut i: usize = 0;\n"
+                 "    while i < a.len {\n        s = s + a[i];\n        i = i + 1;\n    }\n    return s;\n}\n",
+    "fz_first_%s": "fn fz_first_%s(a: [3]%s) -> %s {\n    return a[0];\n}\n",
+    "fz_at_%s": "fn fz_at_%s(p: *[3]%s, i: usize) -> %s {\n    return p[i];\n}\n",
+}
+
+
+ENUM_HELPER = ("enum FzE { A, B, C }\n\nfn fz_enum_name(e: FzE) -> u32 {\n    match e {\n"
+               "        FzE.A => { return 10; }\n        FzE.B => { return 20; }\n        FzE.C => { return 30; }\n"
+               "    }\n}\n\n")
+
+
 def render(decls, stmts):
-    return "fn main() {\n" + "".join("    %s\n" % line for line in decls + stmts) + "}\n"
+    body = "".join("    %s\n" % line for line in decls + stmts)
+    helpers = ENUM_HELPER if "fz_enum_name(" in body else ""
+    for t in INTS:
+        for pattern, text in HELPERS.items():
+            if (pattern % t) + "(" in body:
+                helpers += text.replace("%s", t) + "\n"
+    return helpers + "fn main() {\n" + body + "}\n"
 
 
 def generate(seed):
