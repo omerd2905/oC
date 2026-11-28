@@ -1065,6 +1065,10 @@ struct FnEffects {
     // outs[f * 16 + m]: f stores into what its pointer parameter m points to a view of
     // another parameter (split_once's out), so that target then borrows those arguments too.
     outs: [16384]bool,
+    // names of the function being summarized whose elements are numbers (s: string, p: *u8,
+    // buf: [64]u8): s[i] reads a number, never a view
+    scalar_names: [256]string,
+    scalar_count: usize,
     count: usize,
 }
 
@@ -1291,6 +1295,52 @@ fn fx_can_point(t: string) -> bool {
     return t.len > 0;
 }
 
+fn fx_scalar_container(fx: *mut FnEffects, name: string) -> bool {
+    if name.len == 0 { return false; }
+    let mut i: usize = 0;
+    while i < fx.scalar_count {
+        if str_eq(fx.scalar_names[i], name) { return true; }
+        i = i + 1;
+    }
+    return false;
+}
+
+fn fx_elem_is_number(t: string) -> bool {
+    if str_eq(t, "string") { return true; }
+    let mut el: string = "";
+    if starts_with(t, "*mut ") { el = t[5..t.len]; } else if starts_with(t, "*") { el = t[1..t.len]; }
+    if starts_with(t, "[") {
+        let mut close: usize = 1;
+        while close < t.len {
+            if t[close] == 93 { break; }
+            close = close + 1;
+        }
+        if close + 1 < t.len { el = t[close + 1..t.len]; }
+    }
+    if el.len == 0 { return false; }
+    if is_scalar_value_type(el) { return true; }
+    return is_float_type_name(el);
+}
+
+fn fx_collect_scalars(fx: *mut FnEffects, n: *mut AstNode) {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        let mut decl: bool = cur.tag == NODE_LET;
+        if cur.tag == NODE_PARAM { decl = true; }
+        if decl {
+            if fx_elem_is_number(cur.type_name) {
+                if fx.scalar_count < 256 {
+                    fx.scalar_names[fx.scalar_count] = cur.tok.slice;
+                    fx.scalar_count = fx.scalar_count + 1;
+                }
+            }
+        }
+        fx_collect_scalars(fx, cur.left);
+        fx_collect_scalars(fx, cur.right);
+        cur = cur.next;
+    }
+}
+
 // True if expr may point into memory reached from one of the names in `names`: through
 // slicing, casts, fields (but not .len), elements, pointer arithmetic, literals that hold it,
 // or calls whose result is a view of such an argument.
@@ -1332,9 +1382,13 @@ fn fx_view_of(fx: *mut FnEffects, expr: *mut AstNode, names: *string, count: usi
         }
         return false;
     }
+    if expr.tag == NODE_INDEX {
+        // s[i] of a string, *u8 or [N]u8 (any container of numbers) is a number, not a view.
+        if fx_scalar_container(fx, fx_root_name(expr.left)) { return false; }
+        return fx_view_of(fx, expr.left, names, count);
+    }
     let mut passes: bool = expr.tag == NODE_SLICE;
     if expr.tag == NODE_CAST { passes = true; }
-    if expr.tag == NODE_INDEX { passes = true; }
     if expr.tag == NODE_ADDRESS_OF { passes = true; }
     if expr.tag == NODE_DEREF { passes = true; }
     if expr.tag == NODE_UNARY { passes = true; }
@@ -1360,9 +1414,8 @@ fn fx_taint(fx: *mut FnEffects, n: *mut AstNode, names: *mut string, count: *mut
             rhs = cur.left;
         }
         if cur.tag == NODE_ASSIGN {
-            if cur.left != (0).as(*mut AstNode) {
-                if cur.left.tag == NODE_IDENT { lhs = cur.left.tok.slice; }
-            }
+            // x = view, and also parts[k] = view / h.s = view: the whole local holds it.
+            lhs = fx_root_name(cur.left);
             rhs = cur.right;
         }
         if lhs.len > 0 {
@@ -1446,6 +1499,9 @@ fn fx_root_name(e: *mut AstNode) -> string {
 // another pointer parameter. True if the summary grew.
 fn fx_views(fx: *mut FnEffects, slot: usize, f: *mut AstNode, ret_ptr: bool) -> bool {
     let mut changed: bool = false;
+    fx.scalar_count = 0;
+    fx_collect_scalars(fx, f.left);
+    fx_collect_scalars(fx, f.right);
     let mut prm: *mut AstNode = f.left;
     let mut n: usize = 0;
     while prm != (0).as(*mut AstNode) {
@@ -3549,6 +3605,8 @@ fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
         borrows: [false],
         views: [false],
         outs: [false],
+        scalar_names: [""],
+        scalar_count: 0,
         count: 0,
     };
     let mut decl: *mut AstNode = root.left;

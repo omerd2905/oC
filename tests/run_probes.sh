@@ -77,6 +77,10 @@ COMPILE_REJECT=(
   "probe_err_wrong_type.oc|probe_err_wrong_type.oc:5:16: error: Err(...) expects E, got string"
   "probe_kind_mismatch_arg.oc|probe_kind_mismatch_arg.oc:7:17: error: expected i64, got string in a function argument"
   "probe_kind_mismatch_bool.oc|probe_kind_mismatch_bool.oc:4:19: error: expected bool, got i32 in a variable initializer"
+  "probe_str2_split_after_reset.oc|use-after-free: variable 'parts' used after arena 'a' was reset"
+  "probe_str2_lines_after_reset.oc|use-after-free: variable 'ls' used after arena 'a' was reset"
+  "probe_str2_pad_after_reset.oc|use-after-free: variable 'p' used after arena 'a' was reset"
+  "probe_str2_join_after_reset.oc|use-after-free: variable 'j' used after arena 'a' was reset"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
@@ -116,6 +120,7 @@ RUNTIME_TRAP=(
   "probe_slice_index_bounds.oc"
   "probe_subslice_bounds.oc"
   "probe_enum_cast_range.oc"
+  "probe_str2_split_empty_sep.oc"
 )
 
 PASS=0

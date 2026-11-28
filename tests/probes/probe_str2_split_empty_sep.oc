@@ -1,0 +1,8 @@
+// An empty separator is a caller bug: str_split panics (#79).
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let parts: []string = str_split(&mut a, "abc", "");
+    print(parts.len);
+}

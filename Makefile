@@ -14,3 +14,10 @@ fuzz: bin/occ
 	python3 tools/fuzz/run.py --budget $(FUZZ_BUDGET) $(if $(FUZZ_SEED),--seed $(FUZZ_SEED))
 
 .PHONY: fuzz
+
+# The full test suite: self-hosting fixed point, every probe, parity test and fuzz regression
+# on both backends (./showcase.sh).
+test: bin/occ
+	./showcase.sh
+
+.PHONY: test

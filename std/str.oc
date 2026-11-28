@@ -567,3 +567,287 @@ fn print_int_text(neg: bool, mag: u64, radix: u64) {
 fn print_u64(n: u64) { print_int_text(false, n, 10); }
 fn print_i64(n: i64) { print_int_text(n < 0, i64_magnitude(n), 10); }
 fn print_hex(n: u64) { print_int_text(false, n, 16); }
+
+// ---------------------------------------------------------------------------------------
+// Round 2 (#79): splitting into many parts, more search, ordering, padding, builder
+// formatting, UTF-8.
+//
+// Functions that allocate take the arena first; the strings they return are views of their
+// input where they can be (str_split's parts, pad_left when no padding is needed), so they
+// live as long as the input does, and the validator tracks both.
+// ---------------------------------------------------------------------------------------
+
+// A caller bug (as for substr out of range): stop with the message.
+fn str_panic(msg: string) {
+    sys_write(2, "panic: ".ptr, 7);
+    sys_write(2, msg.ptr, msg.len);
+    sys_write(2, "\n".ptr, 1);
+    sys_exit(1);
+}
+
+// Room for n strings in the arena (16 bytes each on both backends), the backing of a
+// []string. An empty slice still gets a valid pointer.
+fn str_parts(arena: *mut Arena, n: usize) -> *mut string {
+    let mut bytes: usize = n * 16;
+    if bytes == 0 { bytes = 16; }
+    return str_alloc(arena, bytes).as(*mut string);
+}
+
+// The parts of s between occurrences of sep, left to right without overlaps:
+// "a,b,,c" at "," is ["a", "b", "", "c"]. A separator at either end gives an empty first
+// or last part, a string without one gives [s], and "" gives [""]. An empty separator is a
+// caller bug and panics. The parts are views of s; only the slice is in the arena.
+fn str_split(arena: *mut Arena, s: string, sep: string) -> []string {
+    if sep.len == 0 { str_panic("str_split: empty separator"); }
+    let mut n: usize = 1;
+    let mut i: usize = 0;
+    while i + sep.len <= s.len {
+        if str_eq(s[i..i + sep.len], sep) {
+            n = n + 1;
+            i = i + sep.len;
+        } else {
+            i = i + 1;
+        }
+    }
+    let parts: *mut string = str_parts(arena, n);
+    let mut k: usize = 0;
+    let mut start: usize = 0;
+    i = 0;
+    while i + sep.len <= s.len {
+        if str_eq(s[i..i + sep.len], sep) {
+            parts[k] = s[start..i];
+            k = k + 1;
+            i = i + sep.len;
+            start = i;
+        } else {
+            i = i + 1;
+        }
+    }
+    parts[k] = s[start..s.len];
+    return __Slice<string> { ptr: parts, len: n };
+}
+
+// The lines of s without their line breaks ("\n" or "\r\n"). A final line break ends the
+// last line rather than starting an empty one, so "a\nb\n" and "a\nb" are both ["a", "b"];
+// "" has no lines, and "\n" has one empty line. Views of s, like str_split.
+fn str_lines(arena: *mut Arena, s: string) -> []string {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        if s[i] == 10 { n = n + 1; }
+        i = i + 1;
+    }
+    if s.len > 0 {
+        if s[s.len - 1] != 10 { n = n + 1; }
+    }
+    let parts: *mut string = str_parts(arena, n);
+    let mut k: usize = 0;
+    let mut start: usize = 0;
+    i = 0;
+    while i < s.len {
+        if s[i] == 10 {
+            let mut end: usize = i;
+            if end > start {
+                if s[end - 1] == 13 { end = end - 1; }
+            }
+            parts[k] = s[start..end];
+            k = k + 1;
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    if start < s.len {
+        let mut end: usize = s.len;
+        if s[end - 1] == 13 { end = end - 1; }
+        parts[k] = s[start..end];
+    }
+    return __Slice<string> { ptr: parts, len: n };
+}
+
+// parts[0], sep, parts[1], ... in one new string: str_join_slice(&mut a, words[0..3], ", ").
+fn str_join_slice(arena: *mut Arena, parts: []string, sep: string) -> string {
+    return str_join(arena, parts.ptr.as(*string), parts.len, sep);
+}
+
+// Index of the first occurrence of needle at or after start, or -1 (also when start is past
+// the end). An empty needle is found at start.
+fn find_from(s: string, needle: string, start: usize) -> i64 {
+    if start > s.len { return -1; }
+    let at: i64 = find(s[start..s.len], needle);
+    if at < 0 { return -1; }
+    return at + start.as(i64);
+}
+
+// Index of the last occurrence of needle, or -1. An empty needle is found at s.len.
+fn find_last(s: string, needle: string) -> i64 {
+    if needle.len > s.len { return -1; }
+    let mut i: usize = s.len - needle.len + 1;
+    while i > 0 {
+        i = i - 1;
+        if str_eq(s[i..i + needle.len], needle) { return i.as(i64); }
+    }
+    return -1;
+}
+
+// Number of non-overlapping occurrences of needle, scanning left to right ("aaa" has one
+// "aa"). An empty needle occurs s.len + 1 times (before each byte and at the end).
+fn str_count(s: string, needle: string) -> usize {
+    if needle.len == 0 { return s.len + 1; }
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i + needle.len <= s.len {
+        if str_eq(s[i..i + needle.len], needle) {
+            n = n + 1;
+            i = i + needle.len;
+        } else {
+            i = i + 1;
+        }
+    }
+    return n;
+}
+
+// Bytewise order: -1 if a sorts before b, 0 if equal, 1 if after. A prefix sorts first
+// ("ab" before "abc"); bytes compare as unsigned ("Z" before "a", ASCII before UTF-8).
+fn str_cmp(a: string, b: string) -> i32 {
+    let mut n: usize = a.len;
+    if b.len < n { n = b.len; }
+    let mut i: usize = 0;
+    while i < n {
+        if a[i] < b[i] { return -1; }
+        if a[i] > b[i] { return 1; }
+        i = i + 1;
+    }
+    if a.len < b.len { return -1; }
+    if a.len > b.len { return 1; }
+    return 0;
+}
+
+// s padded on the left (pad_left) or right (pad_right) with `fill` to `width` bytes, for
+// columns. A string already that wide is returned as it is (a view of s, nothing allocated).
+fn pad_left(arena: *mut Arena, s: string, width: usize, fill: u8) -> string {
+    if s.len >= width { return s; }
+    let buf: *mut u8 = str_alloc(arena, width);
+    let pad: usize = width - s.len;
+    let mut i: usize = 0;
+    while i < pad {
+        buf[i] = fill;
+        i = i + 1;
+    }
+    while i < width {
+        buf[i] = s[i - pad];
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: width };
+}
+
+fn pad_right(arena: *mut Arena, s: string, width: usize, fill: u8) -> string {
+    if s.len >= width { return s; }
+    let buf: *mut u8 = str_alloc(arena, width);
+    let mut i: usize = 0;
+    while i < s.len {
+        buf[i] = s[i];
+        i = i + 1;
+    }
+    while i < width {
+        buf[i] = fill;
+        i = i + 1;
+    }
+    return string { ptr: buf.as(*u8), len: width };
+}
+
+// Builder helpers: numbers go straight into the buffer (no temporary string per number).
+fn strbuf_push_u64(b: *mut StrBuf, n: u64) {
+    let mut tmp: [24]u8 = [0];
+    let start: usize = fmt_digits_back((&mut tmp).as(*mut u8), 24, n, 10);
+    let mut i: usize = start;
+    while i < 24 {
+        strbuf_push(b, tmp[i]);
+        i = i + 1;
+    }
+}
+
+fn strbuf_push_i64(b: *mut StrBuf, n: i64) {
+    if n < 0 { strbuf_push(b, 45); }
+    strbuf_push_u64(b, i64_magnitude(n));
+}
+
+fn strbuf_len(b: *StrBuf) -> usize {
+    return b.len;
+}
+
+// Empties the buffer and keeps its memory. A view taken earlier with strbuf_to_string now
+// shows whatever is pushed next: take a copy first (str_concat) if it must stay.
+fn strbuf_clear(b: *mut StrBuf) {
+    b.len = 0;
+}
+
+// UTF-8. A string is bytes: s.len counts bytes and s[i] is a byte; these functions read the
+// code points explicitly, and never re-index by code point behind the caller's back.
+enum Utf8Error {
+    Truncated,  // the string ends inside a sequence
+    BadByte,    // a byte that cannot start a sequence, or a missing continuation byte
+    Overlong,   // a code point written with more bytes than it needs
+    Surrogate,  // U+D800 to U+DFFF, which UTF-8 does not allow
+    TooLarge,   // above U+10FFFF
+}
+
+// A code point and the bytes it takes.
+struct Utf8Char {
+    code: u32,
+    width: usize,
+}
+
+// The code point starting at byte i of s. Panics if i is not inside s (a caller bug).
+fn utf8_decode(s: string, i: usize) -> Utf8Char!Utf8Error {
+    let b0: u32 = s[i];
+    if b0 < 128 { return Ok(Utf8Char { code: b0, width: 1 }); }
+    let mut width: usize = 0;
+    let mut code: u32 = 0;
+    if b0 < 192 { return Err(Utf8Error.BadByte); } // a continuation byte
+    if b0 < 224 {
+        width = 2;
+        code = b0 & 31;
+    } else if b0 < 240 {
+        width = 3;
+        code = b0 & 15;
+    } else if b0 < 248 {
+        width = 4;
+        code = b0 & 7;
+    } else {
+        return Err(Utf8Error.BadByte);
+    }
+    if i + width > s.len { return Err(Utf8Error.Truncated); }
+    let mut k: usize = 1;
+    while k < width {
+        let c: u32 = s[i + k];
+        if c < 128 { return Err(Utf8Error.BadByte); }
+        if c >= 192 { return Err(Utf8Error.BadByte); }
+        code = (code << 6) | (c & 63);
+        k = k + 1;
+    }
+    if width == 2 { if code < 128 { return Err(Utf8Error.Overlong); } }
+    if width == 3 { if code < 2048 { return Err(Utf8Error.Overlong); } }
+    if width == 4 { if code < 65536 { return Err(Utf8Error.Overlong); } }
+    if code > 1114111 { return Err(Utf8Error.TooLarge); }
+    if code >= 55296 { if code <= 57343 { return Err(Utf8Error.Surrogate); } }
+    return Ok(Utf8Char { code: code, width: width });
+}
+
+// Number of code points in s, or the first error.
+fn utf8_len(s: string) -> usize!Utf8Error {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < s.len {
+        let c: Utf8Char = try utf8_decode(s, i);
+        i = i + c.width;
+        n = n + 1;
+    }
+    return Ok(n);
+}
+
+fn utf8_valid(s: string) -> bool {
+    match utf8_len(s) {
+        Ok(_) => { return true; }
+        Err(_) => { return false; }
+    }
+}

@@ -81,7 +81,7 @@
         <pre><code>// Importing modules into oC source units
 import "std/mem.oc"   // OC-MEM(3):   Arena, arena_init, arena_alloc, arena_reset, arena_deinit
 import "std/fs.oc"    // OC-FS(3):    cstr_path, file_read, file_write, chmod_exec, unlink_file (read_file, write_file: deprecated)
-import "std/str.oc"   // OC-STR(3):   trim, find, split_once, substr, is_digit, str_concat, str_join, str_replace, StrBuf, str_to_i64
+import "std/str.oc"   // OC-STR(3):   trim, find, str_split, str_lines, str_cmp, pad_left, utf8_len, str_concat, str_join, StrBuf, str_to_i64
 import "std/io.oc"    // OC-IO(3):    stdin_line, stdin_all, stdin_i64, sys_read (read_line, read_all, read_i64, read_int: deprecated)
 import "std/net.oc"   // OC-NET(3):   sockaddr_in, htons, probe_port
 import "std/math.oc"  // OC-MATH(3):  min/max/clamp, gcd, pow, isqrt, bit ops, saturating and Q15 math, CRCs
@@ -583,6 +583,25 @@ fn main() {
         </div>
 
         <div class="fn-box">
+          <h3>Splitting into many parts, search, ordering</h3>
+          <div class="fn-sig">fn str_split(arena: *mut Arena, s: string, sep: string) -&gt; []string &nbsp; fn str_lines(arena: *mut Arena, s: string) -&gt; []string<br>fn str_join_slice(arena: *mut Arena, parts: []string, sep: string) -&gt; string<br>fn find_from(s: string, needle: string, start: usize) -&gt; i64 &nbsp; fn find_last(s: string, needle: string) -&gt; i64 &nbsp; fn str_count(s: string, needle: string) -&gt; usize<br>fn str_cmp(a: string, b: string) -&gt; i32<br>fn pad_left(arena: *mut Arena, s: string, width: usize, fill: u8) -&gt; string &nbsp; fn pad_right(arena: *mut Arena, s: string, width: usize, fill: u8) -&gt; string</div>
+          <p>
+            <code>str_split</code> returns the parts between separators, left to right without overlaps: <code>"a,b,,c"</code> at <code>","</code> is <code>["a", "b", "", "c"]</code>; a separator at either end gives an empty first or last part, a string without one gives <code>[s]</code>, and <code>""</code> gives <code>[""]</code>. An empty separator is a caller bug and panics. <code>str_lines</code> splits at <code>"\n"</code> and <code>"\r\n"</code>; a final line break does not start an empty line (<code>"a\nb\n"</code> is <code>["a", "b"]</code>) and <code>""</code> has no lines. The parts are views of <code>s</code> and only the <code>[]string</code> itself is allocated in the arena, so the result is usable while both <code>s</code> and the arena are: the validator rejects it once either is reset. <code>str_join_slice</code> is <code>str_join</code> for a slice (<code>str_join_slice(&amp;mut a, words[0..3], ", ")</code>).
+          </p>
+          <p>
+            Search keeps <code>find</code>'s convention, an <code>i64</code> index or -1: <code>find_from</code> starts at <code>start</code> (past the end: -1), <code>find_last</code> finds the last occurrence (an empty needle at <code>s.len</code>), and <code>str_count</code> counts non-overlapping occurrences (<code>"aaaa"</code> has two <code>"aa"</code>; an empty needle occurs <code>s.len + 1</code> times). <code>str_cmp</code> orders bytewise for sorting: -1, 0 or 1, bytes compared as unsigned, a prefix before the longer string. <code>pad_left</code> / <code>pad_right</code> fill to <code>width</code> bytes for column output; a string already that wide is returned as is (a view, nothing allocated).
+          </p>
+        </div>
+
+        <div class="fn-box">
+          <h3>UTF-8</h3>
+          <div class="fn-sig">fn utf8_decode(s: string, i: usize) -&gt; Utf8Char!Utf8Error &nbsp; struct Utf8Char { code: u32, width: usize }<br>fn utf8_len(s: string) -&gt; usize!Utf8Error &nbsp; fn utf8_valid(s: string) -&gt; bool<br>enum Utf8Error { Truncated, BadByte, Overlong, Surrogate, TooLarge }</div>
+          <p>
+            A <code>string</code> stays bytes: <code>s.len</code> counts bytes and <code>s[i]</code> is a byte. These functions read code points explicitly. <code>utf8_decode</code> reads the code point that starts at byte <code>i</code> and its width; <code>utf8_len</code> counts code points (<code>"été"</code> is 3, in 5 bytes) or returns the first error: <code>Truncated</code> (the string ends inside a sequence), <code>BadByte</code> (a stray continuation byte, an impossible lead byte, or a missing continuation), <code>Overlong</code>, <code>Surrogate</code> (U+D800 to U+DFFF) or <code>TooLarge</code> (above U+10FFFF).
+          </p>
+        </div>
+
+        <div class="fn-box">
           <h3>ASCII classification</h3>
           <div class="fn-sig">fn is_digit(c: u8) -&gt; bool &nbsp; fn is_alpha(c: u8) -&gt; bool &nbsp; fn is_space(c: u8) -&gt; bool &nbsp; fn is_upper(c: u8) -&gt; bool &nbsp; fn is_lower(c: u8) -&gt; bool<br>fn to_upper(c: u8) -&gt; u8 &nbsp; fn to_lower(c: u8) -&gt; u8</div>
           <p>
@@ -594,15 +613,15 @@ fn main() {
           <h3>Building strings in an arena</h3>
           <div class="fn-sig">fn str_concat(arena: *mut Arena, a: string, b: string) -&gt; string<br>fn str_repeat(arena: *mut Arena, s: string, n: usize) -&gt; string<br>fn str_join(arena: *mut Arena, parts: *string, count: usize, sep: string) -&gt; string<br>fn str_replace(arena: *mut Arena, s: string, from: string, to: string) -&gt; string<br>fn str_to_upper(arena: *mut Arena, s: string) -&gt; string &nbsp; fn str_to_lower(arena: *mut Arena, s: string) -&gt; string<br>fn str_alloc(arena: *mut Arena, n: usize) -&gt; *mut u8</div>
           <p>
-            <code>str_join</code> takes a pointer to an array of strings: <code>str_join(&amp;mut a, (&amp;words).as(*string), 3, ", ")</code>. <code>str_replace</code> replaces every non-overlapping occurrence from left to right; an empty <code>from</code> matches nothing. An empty result is <code>""</code> and allocates nothing.
+            <code>str_join</code> takes a pointer to an array of strings, <code>str_join(&amp;mut a, (&amp;words).as(*string), 3, ", ")</code>; with a slice, use <code>str_join_slice</code>. <code>str_replace</code> replaces every non-overlapping occurrence from left to right; an empty <code>from</code> matches nothing. An empty result is <code>""</code> and allocates nothing.
           </p>
         </div>
 
         <div class="fn-box">
           <h3>StrBuf: building a string piece by piece</h3>
-          <div class="fn-sig">struct StrBuf { arena: *mut Arena, buf: *mut u8, len: usize, cap: usize }<br>fn strbuf_init(arena: *mut Arena, cap: usize) -&gt; StrBuf<br>fn strbuf_push(b: *mut StrBuf, c: u8) &nbsp; fn strbuf_push_str(b: *mut StrBuf, s: string)<br>fn strbuf_to_string(b: *StrBuf) -&gt; string</div>
+          <div class="fn-sig">struct StrBuf { arena: *mut Arena, buf: *mut u8, len: usize, cap: usize }<br>fn strbuf_init(arena: *mut Arena, cap: usize) -&gt; StrBuf<br>fn strbuf_push(b: *mut StrBuf, c: u8) &nbsp; fn strbuf_push_str(b: *mut StrBuf, s: string)<br>fn strbuf_to_string(b: *StrBuf) -&gt; string &nbsp; fn strbuf_len(b: *StrBuf) -&gt; usize &nbsp; fn strbuf_clear(b: *mut StrBuf)<br>fn strbuf_push_i64(b: *mut StrBuf, n: i64) &nbsp; fn strbuf_push_u64(b: *mut StrBuf, n: u64) &nbsp; fn strbuf_push_f64(b: *mut StrBuf, x: f64, digits: u32) (<code>std/fmt.oc</code>)</div>
           <p>
-            A growable buffer in an arena (at least 16 bytes to start). When full it doubles, in place if it is the arena's latest allocation, so pushing <em>n</em> bytes costs O(<em>n</em>) in total; a chain of <code>str_concat</code> calls copies the whole string every time. <code>strbuf_to_string</code> is a view of the bytes pushed so far, not a copy. The validator treats a <code>StrBuf</code> like any arena string: using it after <code>arena_reset</code> is a compile error.
+            The <code>strbuf_push_*</code> number functions write digits straight into the buffer, with no temporary string per number (<code>strbuf_push_f64</code> uses the format of <code>print_f64</code>). <code>strbuf_clear</code> empties the buffer and keeps its memory, so a view taken earlier with <code>strbuf_to_string</code> shows whatever is pushed next; copy it with <code>str_concat</code> first if it must stay. A growable buffer in an arena (at least 16 bytes to start). When full it doubles, in place if it is the arena's latest allocation, so pushing <em>n</em> bytes costs O(<em>n</em>) in total; a chain of <code>str_concat</code> calls copies the whole string every time. <code>strbuf_to_string</code> is a view of the bytes pushed so far, not a copy. The validator treats a <code>StrBuf</code> like any arena string: using it after <code>arena_reset</code> is a compile error.
           </p>
         </div>
 

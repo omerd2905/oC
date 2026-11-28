@@ -1,0 +1,12 @@
+// pad_left returns s itself when it is already wide enough, so the result also borrows
+// s's arena (#79).
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut b: Arena = arena_init(4096);
+    let s: string = str_concat(&mut a, "wide", "");
+    let p: string = pad_left(&mut b, s, 2, 32);
+    arena_reset(&mut a);
+    print(p);
+}

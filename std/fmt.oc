@@ -286,6 +286,17 @@ fn print_f64(x: f64, digits: u32) {
     sys_write(1, o.as(*u8), n + 1);
 }
 
+// Pushes the text of print_f64(x, digits), without the newline, onto a string builder.
+fn strbuf_push_f64(b: *mut StrBuf, x: f64, digits: u32) {
+    let mut out: [64]u8 = [0];
+    let n: usize = fmt_format_f64((&mut out).as(*mut u8), x, digits);
+    let mut i: usize = 0;
+    while i < n {
+        strbuf_push(b, out[i]);
+        i = i + 1;
+    }
+}
+
 // The text of print_f64(x, digits), without the newline, in the arena.
 fn f64_to_str(arena: *mut Arena, x: f64, digits: u32) -> string {
     let mut out: [64]u8 = [0];

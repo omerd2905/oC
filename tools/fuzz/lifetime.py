@@ -89,6 +89,13 @@ class LetView(Stmt):
     def render(self, ind): return [ind + "let mut %s: string = fz_view(%s);" % (self.v, self.src)]
 
 
+class LetSplit(Stmt):
+    """let mut t: []string = str_split(&mut fzj, src, "a");  its parts are views of src, so it
+    lives as long as src's arena (fzj, which holds only the slice, is never reset)."""
+    def __init__(self, t, src): self.t, self.src = t, src
+    def render(self, ind): return [ind + 'let mut %s: []string = str_split(&mut fzj, %s, "a");' % (self.t, self.src)]
+
+
 class LetStrArr(Stmt):
     """let mut q: [2]string = [s0, s1];  (strings that may come from different arenas)"""
     def __init__(self, q, cells): self.q, self.cells = q, cells
@@ -105,6 +112,8 @@ class UseArr(Stmt):
             return [ind + "print(fz_total(%s[0..2]));" % self.q]
         if self.via == "fz_firsts":
             return [ind + "print(fz_firsts(%s));" % self.q]
+        if self.via == "str_join_slice":
+            return [ind + 'print(str_join_slice(&mut fzj, %s[0..2], "-"));' % self.q]
         return [ind + "print(fz_ptrs(&%s));" % self.q]
 
 
@@ -132,6 +141,8 @@ class Use(Stmt):
             return [ind + "print(fz_first(&%s));" % self.cell.split(".")[0]]
         if self.via == "fz_len":
             return [ind + "print(fz_len(%s));" % self.cell]
+        if self.kind == "parts":
+            return [ind + "print(%s.len);" % self.cell]
         if self.kind == "ptr":
             return [ind + "print(%s[0]);" % self.cell]
         return [ind + "print(%s);" % self.cell]
@@ -219,6 +230,8 @@ def render(body):
         if name in used:
             out += [HELPERS[name], ""]
     out.append("fn main() {")
+    if any(isinstance(s, LetSplit) or (isinstance(s, UseArr) and s.via == "str_join_slice") for s in walk(body)):
+        out.append("    let mut fzj: Arena = arena_init(65536); // never reset: holds only slices and joins")
     for s in body:
         out += s.render("    ")
     out.append("}")
@@ -299,6 +312,10 @@ def step(s, st, static, trace):
         a, epoch, content = st.cells[s.src]
         st.use(s.src)
         st.cells[s.v] = (a, epoch, content[:1])
+    elif isinstance(s, LetSplit):
+        a, epoch, content = st.cells[s.src]
+        st.use(s.src)
+        st.cells[s.t] = (a, epoch, str(content.count("a") + 1))
     elif isinstance(s, LetStrArr):
         for i, c in enumerate(s.cells):
             st.use(c)
@@ -310,6 +327,8 @@ def step(s, st, static, trace):
             trace[id(s)] = st.cells[s.q + "[0]"][0]
         if s.via == "fz_total":
             st.emit(str(len(a) + len(b)))
+        elif s.via == "str_join_slice":
+            st.emit(a + "-" + b)
         elif s.via == "fz_firsts":
             st.emit(a)
         else:
@@ -462,6 +481,8 @@ class Gen:
         return out
 
     def kind_of(self, cell):
+        if cell.startswith("t"):
+            return "parts"
         if cell.endswith(".s") or cell.startswith("s") or cell.startswith("q"):
             return "str"
         return "ptr"
@@ -474,7 +495,7 @@ class Gen:
             if top:
                 choices += ["ptr", "str"]
                 if self.phase != "A":
-                    choices += ["holder", "array", "strarray", "strarray", "str", "view", "view"]
+                    choices += ["holder", "array", "strarray", "strarray", "str", "view", "view", "split"]
             if self.phase != "A":
                 choices += ["store"]
             if self.phase == "C" and depth < 2:
@@ -498,6 +519,16 @@ class Gen:
             self.valid[v] = "str"
         return LetView(v, src)
 
+    def gen_split(self, depth):
+        src = self.pick_cell("str")
+        if src is None or "." in src or "[" in src:
+            return None
+        t = self.name("t")
+        self.arena_of[t] = self.arena_of[src]
+        if src in self.valid:
+            self.valid[t] = "parts"
+        return LetSplit(t, src)
+
     def gen_strarray(self, depth):
         a, b = self.pick_cell("str"), self.pick_cell("str")
         if a is None or b is None or "." in a + b or "[" in a + b:
@@ -511,7 +542,7 @@ class Gen:
     def gen_use(self, depth):
         if self.str_arrays and self.rng.random() < 0.25:
             q = self.rng.choice(self.str_arrays)
-            return UseArr(q, self.rng.choice(["fz_total", "fz_firsts", "fz_ptrs"]))
+            return UseArr(q, self.rng.choice(["fz_total", "fz_firsts", "fz_ptrs", "str_join_slice"]))
         cell = self.pick_cell()
         if cell is None:
             return None
