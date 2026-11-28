@@ -1,0 +1,7 @@
+// p[i] through p: *[N]T is checked against N (issue #74).
+fn get(a: *[3]i32, i: usize) -> i32 { return a[i]; }
+
+fn main() {
+    let a: [3]i32 = [1, 2, 3];
+    print(get(&a, 3));
+}
