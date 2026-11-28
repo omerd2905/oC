@@ -82,6 +82,25 @@ class LetArr(Stmt):
     def render(self, ind): return [ind + "let mut %s: [2]*mut u8 = [%s, %s];" % (self.r, self.cells[0], self.cells[1])]
 
 
+class LetStrArr(Stmt):
+    """let mut q: [2]string = [s0, s1];  (strings that may come from different arenas)"""
+    def __init__(self, q, cells): self.q, self.cells = q, cells
+    def render(self, ind): return [ind + "let mut %s: [2]string = [%s, %s];" % (self.q, self.cells[0], self.cells[1])]
+
+
+class UseArr(Stmt):
+    """A [2]string array passed to a function: as a slice, by value, or by pointer. Any
+    mention of the array uses both elements (the validator tracks it as a whole)."""
+    def __init__(self, q, via): self.q, self.via = q, via
+
+    def render(self, ind):
+        if self.via == "fz_total":
+            return [ind + "print(fz_total(%s[0..2]));" % self.q]
+        if self.via == "fz_firsts":
+            return [ind + "print(fz_firsts(%s));" % self.q]
+        return [ind + "print(fz_ptrs(&%s));" % self.q]
+
+
 class Reset(Stmt):
     """arena_reset(&mut a), or fz_reset_if(&mut a, cond) when cond is set."""
     def __init__(self, a, cond=None): self.a, self.cond = a, cond
@@ -154,6 +173,10 @@ HELPERS = {
     "fz_str": 'fn fz_str(a: *mut Arena, x: string) -> string {\n    return str_concat(a, x, "+");\n}',
     "fz_first": "fn fz_first(h: *FzHolder) -> u8 {\n    return h.p[0];\n}",
     "fz_len": "fn fz_len(s: string) -> usize {\n    return s.len;\n}",
+    "fz_total": "fn fz_total(ws: []string) -> usize {\n    let mut n: usize = 0;\n    let mut i: usize = 0;\n"
+                "    while i < ws.len {\n        n = n + ws[i].len;\n        i = i + 1;\n    }\n    return n;\n}",
+    "fz_firsts": "fn fz_firsts(ws: [2]string) -> string {\n    return ws[0];\n}",
+    "fz_ptrs": "fn fz_ptrs(p: *[2]string) -> usize {\n    return p[1].len;\n}",
 }
 HELPER_DEPS = {"fz_alloc2": ["fz_alloc"], "fz_alloc3": ["fz_alloc2", "fz_alloc"]}
 
@@ -171,6 +194,9 @@ def render(body):
     holder = False
     for s in walk(body):
         for name in (getattr(s, "via", None), "fz_reset_if" if isinstance(s, Reset) and s.cond else None):
+            if isinstance(s, UseArr) and name == s.via:
+                used.add(name)
+                continue
             if name:
                 used.add(name)
                 used.update(HELPER_DEPS.get(name, []))
@@ -259,6 +285,21 @@ def step(s, st, static, trace):
         for i, c in enumerate(s.cells):
             st.use(c)
             st.cells["%s[%d]" % (s.r, i)] = st.cells[c]
+    elif isinstance(s, LetStrArr):
+        for i, c in enumerate(s.cells):
+            st.use(c)
+            st.cells["%s[%d]" % (s.q, i)] = st.cells[c]
+    elif isinstance(s, UseArr):
+        a = st.use(s.q + "[0]")
+        b = st.use(s.q + "[1]")
+        if trace is not None and not static:
+            trace[id(s)] = st.cells[s.q + "[0]"][0]
+        if s.via == "fz_total":
+            st.emit(str(len(a) + len(b)))
+        elif s.via == "fz_firsts":
+            st.emit(a)
+        else:
+            st.emit(str(len(b)))
     elif isinstance(s, Reset):
         if s.cond and static:
             other = st.copy()
@@ -333,6 +374,7 @@ class Gen:
         self.arena_of = {}        # ptr/str variable -> its arena (fixed for the variable's life)
         self.valid = {}           # cell -> kind, for cells believed usable here (a guide only)
         self.ptr_vars, self.holders, self.arrays, self.conds = [], [], [], []
+        self.str_arrays = []
 
     def name(self, prefix):
         k = self.n.get(prefix, 0)
@@ -401,12 +443,12 @@ class Gen:
         out = list(self.arena_of)
         for h in self.holders:
             out += [h + ".p", h + ".s"]
-        for a in self.arrays:
+        for a in self.arrays + self.str_arrays:
             out += [a + "[0]", a + "[1]"]
         return out
 
     def kind_of(self, cell):
-        if cell.endswith(".s") or cell.startswith("s"):
+        if cell.endswith(".s") or cell.startswith("s") or cell.startswith("q"):
             return "str"
         return "ptr"
 
@@ -418,7 +460,7 @@ class Gen:
             if top:
                 choices += ["ptr", "str"]
                 if self.phase != "A":
-                    choices += ["holder", "array"]
+                    choices += ["holder", "array", "strarray", "strarray", "str"]
             if self.phase != "A":
                 choices += ["store"]
             if self.phase == "C" and depth < 2:
@@ -432,7 +474,20 @@ class Gen:
     def gen_ptr(self, depth): return self.new_ptr()
     def gen_str(self, depth): return self.new_str()
 
+    def gen_strarray(self, depth):
+        a, b = self.pick_cell("str"), self.pick_cell("str")
+        if a is None or b is None or "." in a + b or "[" in a + b:
+            return None
+        q = self.name("q")
+        self.str_arrays.append(q)
+        self.arena_of[q + "[0]"], self.arena_of[q + "[1]"] = self.arena_of[a], self.arena_of[b]
+        self.valid[q + "[0]"], self.valid[q + "[1]"] = "str", "str"
+        return LetStrArr(q, [a, b])
+
     def gen_use(self, depth):
+        if self.str_arrays and self.rng.random() < 0.25:
+            q = self.rng.choice(self.str_arrays)
+            return UseArr(q, self.rng.choice(["fz_total", "fz_firsts", "fz_ptrs"]))
         cell = self.pick_cell()
         if cell is None:
             return None
@@ -480,7 +535,7 @@ class Gen:
 
     def gen_store(self, depth):
         dsts = [h + ".p" for h in self.holders] + [h + ".s" for h in self.holders] + \
-               ["%s[%d]" % (a, i) for a in self.arrays for i in (0, 1)]
+               ["%s[%d]" % (a, i) for a in self.arrays + self.str_arrays for i in (0, 1)]
         if not dsts:
             return None
         dst = self.rng.choice(dsts)
@@ -518,7 +573,7 @@ def find_uses(body, trace):
 
     def visit(block):
         for i, s in enumerate(block):
-            if isinstance(s, Use) and id(s) in trace:
+            if isinstance(s, (Use, UseArr)) and id(s) in trace:
                 out.append((block, i))
             for b in s.children():
                 visit(b)

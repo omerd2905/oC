@@ -1,0 +1,26 @@
+// expect: reject use-after-free: variable 'q0' used after arena 'a1' was reset
+// Lifetime generator shape (#78): the array holds a string from a1, so after a1 is reset no
+// use of it is allowed, also through a slice.
+import "std/str.oc";
+
+fn fz_total(ws: []string) -> usize {
+    let mut n: usize = 0;
+    let mut i: usize = 0;
+    while i < ws.len {
+        n = n + ws[i].len;
+        i = i + 1;
+    }
+    return n;
+}
+
+fn main() {
+    let mut a0: Arena = arena_init(4096);
+    let mut a1: Arena = arena_init(4096);
+    let s0: string = str_concat(&mut a0, "ab", "cd");
+    let s1: string = str_concat(&mut a1, "xyz", "");
+    let q0: [2]string = [s0, s1];
+    arena_reset(&mut a1);
+    print(fz_total(q0[0..2]));
+    arena_deinit(&mut a0);
+    arena_deinit(&mut a1);
+}

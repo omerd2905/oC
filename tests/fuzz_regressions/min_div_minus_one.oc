@@ -1,0 +1,8 @@
+// expect: panic panic: integer overflow
+// Arithmetic generator, MIN / -1 (issue #73, generator added for #78): both backends must
+// panic the same way (C used to die with SIGFPE, native printed 2147483648).
+fn id(x: i32) -> i32 { return x; }
+
+fn main() {
+    print(id(-2147483647 - 1) / id(-1));
+}

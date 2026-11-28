@@ -363,6 +363,7 @@ rm -rf "$WORK"
 echo "=== Fuzzer regressions (tests/fuzz_regressions): each finding stays fixed ==="
 # "// expect: reject <text>": rejected with <text>, on both backends.
 # "// expect: run": accepted, and with --arena-poison exits 0 and prints the same on both.
+# "// expect: panic <text>": accepted, and stops with <text> and a non-zero exit on both.
 for t in "$ROOT"/tests/fuzz_regressions/*.oc; do
   base="$(basename "$t")"
   expect="$(sed -n '1s|^// expect: ||p' "$t")"
@@ -402,8 +403,25 @@ for t in "$ROOT"/tests/fuzz_regressions/*.oc; do
       fi
     done
     echo "  [PASS] $base runs cleanly under --arena-poison on both backends"
+  elif [ "${expect%% *}" = "panic" ]; then
+    want="${expect#panic }"
+    for backend in c native; do
+      if ! out="$("$OCC" build "$t" -o /tmp/oc_fz_bin --backend "$backend" --arena-poison 2>&1)"; then
+        echo "  [FAIL] $base (--backend $backend) was rejected: $out"
+        exit 1
+      fi
+      set +e
+      got="$(/tmp/oc_fz_bin 2>&1)"
+      RC=$?
+      set -e
+      if [ "$RC" -eq 0 ] || ! grep -qF -- "$want" <<<"$got"; then
+        echo "  [FAIL] $base (--backend $backend): exit $RC, printed '$got', expected: $want"
+        exit 1
+      fi
+    done
+    echo "  [PASS] $base panics on both backends: $want"
   else
-    echo "  [FAIL] $base: first line must be '// expect: reject <text>' or '// expect: run'"
+    echo "  [FAIL] $base: first line must be '// expect: reject <text>', '// expect: run' or '// expect: panic <text>'"
     exit 1
   fi
   rm -f /tmp/oc_fz_bin

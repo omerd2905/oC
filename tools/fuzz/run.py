@@ -83,7 +83,7 @@ def lifetime_verdict(body, work):
             return "gen-error", first_error(msg), lab, ok
         if lab == lifetime.SAFE:
             err = first_error(msg)
-            if "variable 'h" in err or "variable 'r" in err:
+            if "variable 'h" in err or "variable 'r" in err or "variable 'q" in err:
                 return "false-positive-aggregate", err, lab, ok
             return "false-positive", err, lab, ok
         return None, "", lab, ok
