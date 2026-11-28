@@ -1,0 +1,30 @@
+// Arrays hold what was put in them (found while working on #74):
+// - `let b: [N]T = a;` copies a; both backends used to zero-fill b instead;
+// - on the native backend, array elements of a struct larger than 8 bytes overlapped
+//   (every element took 8 bytes), so a[1].y read 0 and writing a[0].y changed a[1].x.
+struct P { x: i64, y: i64 }
+struct Q { a: i64, b: i64, c: i64 }
+
+fn main() {
+    let a: [3]i32 = [1, 2, 3];
+    let mut b: [3]i32 = a;
+    b[0] = 9;
+    print(a[0]);            // 1
+    print(b[0]);            // 9
+    print(b[2]);            // 3
+    let s: [2]string = ["x", "yz"];
+    let t: [2]string = s;
+    print(t[1]);            // yz
+
+    let mut ps: [2]P = [P { x: 1, y: 2 }, P { x: 3, y: 4 }];
+    print(ps[1].y);         // 4
+    ps[0].y = 9;
+    print(ps[0].y);         // 9
+    print(ps[1].x);         // 3
+    let p1: P = ps[1];
+    print(p1.y);            // 4
+    let qs: [3]Q = [Q { a: 1, b: 2, c: 3 }, Q { a: 4, b: 5, c: 6 }, Q { a: 7, b: 8, c: 9 }];
+    print(qs[2].c);         // 9
+    let copy: [3]Q = qs;
+    print(copy[1].b);       // 5
+}
