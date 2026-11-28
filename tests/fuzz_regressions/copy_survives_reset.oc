@@ -1,0 +1,19 @@
+// expect: run
+// A copy is not a view: str_concat into another arena stays usable after the first one
+// is reset (no false positive from the view tracking).
+import "std/str.oc";
+
+fn first(s: string) -> string { return s[0..1]; }
+
+fn main() {
+    let mut scratch: Arena = arena_init(4096);
+    let mut keep: Arena = arena_init(4096);
+    let line: string = str_concat(&mut scratch, " word ", "");
+    let kept: string = str_concat(&mut keep, trim(line), "!");
+    let initial: string = first(kept);
+    arena_reset(&mut scratch);
+    print(kept);
+    print(initial);
+    arena_deinit(&mut scratch);
+    arena_deinit(&mut keep);
+}

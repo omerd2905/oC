@@ -1,0 +1,12 @@
+// expect: reject use-after-free: variable 'kv' used after arena 'a' was reset
+// The same through an out parameter: split_once stores views of `line` into kv.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let line: string = str_concat(&mut a, "key=", "value");
+    let mut kv: Split = Split { head: "", tail: "" };
+    split_once(line, "=", &mut kv);
+    arena_reset(&mut a);
+    print(kv.tail);
+}

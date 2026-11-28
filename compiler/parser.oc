@@ -1054,11 +1054,17 @@ struct VarInfo {
 // Call summaries: effect of each function on the arena behind its pointer parameters
 // (0 = none, 1 = may reset, 2 = may deinit). 16 parameter slots per function.
 struct FnEffects {
-    names: [256]string,
-    effects: [4096]u8,
+    names: [1024]string,
+    effects: [16384]u8,
     // borrows[f * 16 + n]: the value returned by function f may point into the arena behind
     // its parameter n (f allocates from it, directly or through its callees).
-    borrows: [4096]bool,
+    borrows: [16384]bool,
+    // views[f * 16 + n]: the value returned by f may point into the memory its parameter n
+    // points to (a view such as trim(s) or s[1..]): it borrows whatever argument n borrows.
+    views: [16384]bool,
+    // outs[f * 16 + m]: f stores into what its pointer parameter m points to a view of
+    // another parameter (split_once's out), so that target then borrows those arguments too.
+    outs: [16384]bool,
     count: usize,
 }
 
@@ -1249,6 +1255,241 @@ fn fx_param_borrows(fx: *mut FnEffects, fn_name: string, idx: usize) -> bool {
     return false;
 }
 
+fn fx_lookup(fx: *mut FnEffects, fn_name: string) -> i32 {
+    let mut i: usize = 0;
+    while i < fx.count {
+        if str_eq(fx.names[i], fn_name) { return i.as(i32); }
+        i = i + 1;
+    }
+    return -1;
+}
+
+// True if the value returned by `fn_name` may be a view of its argument `idx`.
+fn fx_param_views(fx: *mut FnEffects, fn_name: string, idx: usize) -> bool {
+    if idx >= 16 { return false; }
+    let f: i32 = fx_lookup(fx, fn_name);
+    if f < 0 { return false; }
+    return fx.views[f.as(usize) * 16 + idx];
+}
+
+// True if `fn_name` stores a view of another argument into what argument `idx` points to.
+fn fx_param_outs(fx: *mut FnEffects, fn_name: string, idx: usize) -> bool {
+    if idx >= 16 { return false; }
+    let f: i32 = fx_lookup(fx, fn_name);
+    if f < 0 { return false; }
+    return fx.outs[f.as(usize) * 16 + idx];
+}
+
+// A parameter whose value can point to memory: not a number or bool, and not an arena
+// (whose memory is tracked by allocation instead).
+fn fx_can_point(t: string) -> bool {
+    if is_scalar_value_type(t) { return false; }
+    if is_float_type_name(t) { return false; }
+    if str_eq(t, "Arena") { return false; }
+    if str_eq(t, "*mut Arena") { return false; }
+    if str_eq(t, "*Arena") { return false; }
+    return t.len > 0;
+}
+
+// True if expr may point into memory reached from one of the names in `names`: through
+// slicing, casts, fields (but not .len), elements, pointer arithmetic, literals that hold it,
+// or calls whose result is a view of such an argument.
+fn fx_view_of(fx: *mut FnEffects, expr: *mut AstNode, names: *string, count: usize) -> bool {
+    if expr == (0).as(*mut AstNode) { return false; }
+    if expr.tag == NODE_IDENT {
+        let mut i: usize = 0;
+        while i < count {
+            if str_eq(names[i], expr.tok.slice) { return true; }
+            i = i + 1;
+        }
+        return false;
+    }
+    if expr.tag == NODE_FIELD_ACCESS {
+        if str_eq(expr.tok.slice, "len") { return false; }
+        return fx_view_of(fx, expr.left, names, count);
+    }
+    if expr.tag == NODE_CALL {
+        let mut a: *mut AstNode = expr.left;
+        let mut ai: usize = 0;
+        while a != (0).as(*mut AstNode) {
+            if fx_param_views(fx, expr.tok.slice, ai) {
+                if fx_view_of(fx, a, names, count) { return true; }
+            }
+            a = a.next;
+            ai = ai + 1;
+        }
+        return false;
+    }
+    let mut list: bool = expr.tag == NODE_STRUCT_INIT;
+    if expr.tag == NODE_ARRAY_INIT { list = true; }
+    if list {
+        let mut el: *mut AstNode = expr.left;
+        while el != (0).as(*mut AstNode) {
+            if expr.tag == NODE_STRUCT_INIT {
+                if fx_view_of(fx, el.left, names, count) { return true; }
+            } else if fx_view_of(fx, el, names, count) { return true; }
+            el = el.next;
+        }
+        return false;
+    }
+    let mut passes: bool = expr.tag == NODE_SLICE;
+    if expr.tag == NODE_CAST { passes = true; }
+    if expr.tag == NODE_INDEX { passes = true; }
+    if expr.tag == NODE_ADDRESS_OF { passes = true; }
+    if expr.tag == NODE_DEREF { passes = true; }
+    if expr.tag == NODE_UNARY { passes = true; }
+    if passes { return fx_view_of(fx, expr.left, names, count); }
+    if expr.tag == NODE_BINARY {
+        if is_comparison_tok(expr.tok.tag) { return false; }
+        if fx_view_of(fx, expr.left, names, count) { return true; }
+        return fx_view_of(fx, expr.right, names, count);
+    }
+    return false;
+}
+
+// Adds to `names` every local (not of a number type) set from a view of a name already in it.
+fn fx_taint(fx: *mut FnEffects, n: *mut AstNode, names: *mut string, count: *mut usize) {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        let mut lhs: string = "";
+        let mut rhs: *mut AstNode = (0).as(*mut AstNode);
+        let mut lhs_t: string = "";
+        if cur.tag == NODE_LET {
+            lhs = cur.tok.slice;
+            lhs_t = cur.type_name;
+            rhs = cur.left;
+        }
+        if cur.tag == NODE_ASSIGN {
+            if cur.left != (0).as(*mut AstNode) {
+                if cur.left.tag == NODE_IDENT { lhs = cur.left.tok.slice; }
+            }
+            rhs = cur.right;
+        }
+        if lhs.len > 0 {
+            let mut scalar: bool = is_scalar_value_type(lhs_t);
+            if is_float_type_name(lhs_t) { scalar = true; }
+            if !scalar {
+                if fx_view_of(fx, rhs, names.as(*string), count[0]) {
+                    let mut known: bool = false;
+                    let mut i: usize = 0;
+                    while i < count[0] {
+                        if str_eq(names[i], lhs) { known = true; }
+                        i = i + 1;
+                    }
+                    if !known {
+                        if count[0] < 64 {
+                            names[count[0]] = lhs;
+                            count[0] = count[0] + 1;
+                        }
+                    }
+                }
+            }
+        }
+        fx_taint(fx, cur.left, names, count);
+        fx_taint(fx, cur.right, names, count);
+        cur = cur.next;
+    }
+}
+
+// Sets out (when a return statement under n returns a view of names) and out_ptr[m] (when
+// a store through pointer parameter m stores one) .
+fn fx_find_escapes(fx: *mut FnEffects, n: *mut AstNode, names: *string, count: usize, params: *mut AstNode, rets: *mut bool, outs: *mut bool) {
+    let mut cur: *mut AstNode = n;
+    while cur != (0).as(*mut AstNode) {
+        if cur.tag == NODE_RETURN {
+            if fx_view_of(fx, cur.left, names, count) { rets[0] = true; }
+        }
+        if cur.tag == NODE_ASSIGN {
+            if cur.left != (0).as(*mut AstNode) {
+                if cur.left.tag != NODE_IDENT {
+                    let target: string = fx_root_name(cur.left);
+                    if fx_view_of(fx, cur.right, names, count) {
+                        let mut prm: *mut AstNode = params;
+                        let mut pi: usize = 0;
+                        while prm != (0).as(*mut AstNode) {
+                            if pi < 16 {
+                                if str_eq(prm.tok.slice, target) {
+                                    if starts_with(prm.type_name, "*") { outs[pi] = true; }
+                                }
+                            }
+                            prm = prm.next;
+                            pi = pi + 1;
+                        }
+                    }
+                }
+            }
+        }
+        fx_find_escapes(fx, cur.left, names, count, params, rets, outs);
+        fx_find_escapes(fx, cur.right, names, count, params, rets, outs);
+        cur = cur.next;
+    }
+}
+
+// The variable at the root of a place: out.head, *p, p[i], &mut kv -> out, p, p, kv.
+fn fx_root_name(e: *mut AstNode) -> string {
+    let mut cur: *mut AstNode = e;
+    while cur != (0).as(*mut AstNode) {
+        if cur.tag == NODE_IDENT { return cur.tok.slice; }
+        let mut step: bool = cur.tag == NODE_FIELD_ACCESS;
+        if cur.tag == NODE_INDEX { step = true; }
+        if cur.tag == NODE_DEREF { step = true; }
+        if cur.tag == NODE_ADDRESS_OF { step = true; }
+        if cur.tag == NODE_CAST { step = true; }
+        if !step { return ""; }
+        cur = cur.left;
+    }
+    return "";
+}
+
+// The views/outs summary of function f (slot): for each parameter that can point to
+// memory, the names holding a view of it, and whether one is returned or stored through
+// another pointer parameter. True if the summary grew.
+fn fx_views(fx: *mut FnEffects, slot: usize, f: *mut AstNode, ret_ptr: bool) -> bool {
+    let mut changed: bool = false;
+    let mut prm: *mut AstNode = f.left;
+    let mut n: usize = 0;
+    while prm != (0).as(*mut AstNode) {
+        if n < 16 {
+            if fx_can_point(prm.type_name) {
+                let mut names: [64]string = [""];
+                names[0] = prm.tok.slice;
+                let mut count: usize = 1;
+                let mut before: usize = 0;
+                while before != count { // locals set from locals set from the parameter, ...
+                    before = count;
+                    fx_taint(fx, f.right, (&mut names).as(*mut string), &mut count);
+                }
+                let mut rets: [1]bool = [false];
+                let mut outs: [16]bool = [false];
+                fx_find_escapes(fx, f.right, (&names).as(*string), count, f.left, (&mut rets).as(*mut bool), (&mut outs).as(*mut bool));
+                if ret_ptr {
+                    if rets[0] {
+                        if !fx.views[slot * 16 + n] {
+                            fx.views[slot * 16 + n] = true;
+                            changed = true;
+                        }
+                    }
+                }
+                let mut m: usize = 0;
+                while m < 16 {
+                    if outs[m] {
+                        if m != n {
+                            if !fx.outs[slot * 16 + m] {
+                                fx.outs[slot * 16 + m] = true;
+                                changed = true;
+                            }
+                        }
+                    }
+                    m = m + 1;
+                }
+            }
+        }
+        prm = prm.next;
+        n = n + 1;
+    }
+    return changed;
+}
+
 // Arena (or arena-owning variable) named by a call argument: `&mut a`, `a`, `p.arena`, ...
 fn get_arena_arg_name(arg: *mut AstNode) -> string {
     let u: string = get_underlying_address_of(arg);
@@ -1331,6 +1572,20 @@ fn get_arena_source(fx: *mut FnEffects, expr: *mut AstNode) -> string {
 fn get_expr_arena_borrow(v: *mut Validator, expr: *mut AstNode) -> string {
     if expr == (0).as(*mut AstNode) { return ""; }
     let direct: string = get_arena_source(v.fx, expr);
+    if expr.tag == NODE_CALL {
+        // trim(s), s2 = substr(s, ...): a view of an argument borrows what that argument does.
+        let mut all: string = direct;
+        let mut a: *mut AstNode = expr.left;
+        let mut ai: usize = 0;
+        while a != (0).as(*mut AstNode) {
+            if fx_param_views(v.fx, expr.tok.slice, ai) {
+                all = arena_list_union(v, all, get_expr_arena_borrow(v, a));
+            }
+            a = a.next;
+            ai = ai + 1;
+        }
+        return all;
+    }
     if direct.len > 0 { return direct; }
     if expr.tag == NODE_IDENT {
         let idx: i32 = validator_find_var(v, expr.tok.slice);
@@ -2459,6 +2714,27 @@ fn check_expr_use(v: *mut Validator, expr: *mut AstNode) -> bool {
                 }
             }
         }
+        let mut out_arg: *mut AstNode = expr.left;
+        let mut oi: usize = 0;
+        while out_arg != (0).as(*mut AstNode) {
+            if fx_param_outs(v.fx, expr.tok.slice, oi) {
+                // split_once(line, "=", &mut kv): kv now holds views of line.
+                let tgt_name: string = fx_root_name(out_arg);
+                let tgt_idx: i32 = validator_find_var(v, tgt_name);
+                if tgt_idx >= 0 {
+                    let mut src: *mut AstNode = expr.left;
+                    while src != (0).as(*mut AstNode) {
+                        if src != out_arg {
+                            let b: string = get_expr_arena_borrow(v, src);
+                            v.vars[tgt_idx.as(usize)].borrowed_from_arena = arena_list_union(v, v.vars[tgt_idx.as(usize)].borrowed_from_arena, b);
+                        }
+                        src = src.next;
+                    }
+                }
+            }
+            out_arg = out_arg.next;
+            oi = oi + 1;
+        }
         let mut mut_arg: *mut AstNode = expr.left;
         while mut_arg != (0).as(*mut AstNode) {
             if mut_arg.tag == NODE_ADDRESS_OF {
@@ -3271,15 +3547,20 @@ fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
         names: [""],
         effects: [0],
         borrows: [false],
+        views: [false],
+        outs: [false],
         count: 0,
     };
     let mut decl: *mut AstNode = root.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
             if decl.right != (0).as(*mut AstNode) {
-                if fx.count < 256 {
+                if fx.count < 1024 {
                     fx.names[fx.count] = decl.tok.slice;
                     fx.count = fx.count + 1;
+                } else {
+                    print("security error: validator function summary capacity (1024) exceeded");
+                    return false;
                 }
             }
         }
@@ -3294,10 +3575,12 @@ fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
         while decl != (0).as(*mut AstNode) {
             if decl.tag == NODE_FN {
                 if decl.right != (0).as(*mut AstNode) {
-                    if slot < 256 {
+                    if slot < 1024 {
                         let mut ret_ptr: bool = decl.type_name.len > 0;
                         if is_scalar_value_type(decl.type_name) { ret_ptr = false; }
+                        if is_float_type_name(decl.type_name) { ret_ptr = false; }
                         if fx_scan(&mut fx, slot, decl.left, ret_ptr, decl.right) { changed = true; }
+                        if fx_views(&mut fx, slot, decl, ret_ptr) { changed = true; }
                     }
                     slot = slot + 1;
                 }

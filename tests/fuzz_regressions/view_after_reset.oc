@@ -1,0 +1,13 @@
+// expect: reject use-after-free: variable 't' used after arena 'a' was reset
+// Fuzzer hole (lifetime, view helpers): a function returning a view of its string argument
+// (trim, substr, or any user function) gave a result the validator did not tie to the
+// argument's arena, so it was usable after the reset.
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let s: string = str_concat(&mut a, " ab", "c ");
+    let t: string = trim(s);
+    arena_reset(&mut a);
+    print(t);
+}
