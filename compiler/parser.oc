@@ -3860,7 +3860,8 @@ fn gx_arg_type(g: *mut Generics, v: *mut Validator, arg: *mut AstNode) -> string
 }
 
 // Type arguments of a call to template `t` without explicit ones, from its argument types.
-// An untyped integer literal only decides a parameter nothing else decides (then i64).
+// An untyped integer literal only decides a parameter nothing else decides (then i64), and
+// an untyped float literal likewise (then f64).
 fn gx_infer(g: *mut Generics, v: *mut Validator, t: *mut AstNode, call: *mut AstNode) -> GArgs {
     let fail: GArgs = GArgs { n: 0, items: [""] };
     let mut b: GBind = GBind { n: 0, b_name: [""], b_val: [""], conflict: "" };
@@ -3875,6 +3876,12 @@ fn gx_infer(g: *mut Generics, v: *mut Validator, t: *mut AstNode, call: *mut Ast
         if arg == (0).as(*mut AstNode) { break; }
         pat = gx_canon(g, prm.type_name);
         con = gx_canon(g, gx_arg_type(g, v, arg));
+        if is_untyped_float(arg) {
+            // Like an integer literal: 0.5 takes T from another argument (scale(f32_var, 0.5)),
+            // and is an f64 only if nothing else decides T.
+            con = "";
+            if gx_param_index(t.left, pat) >= 0 { gx_bind(&mut defaults, pat, "f64"); }
+        }
         if con.len == 0 {
             if is_int_literal(arg) {
                 if gx_param_index(t.left, pat) >= 0 { gx_bind(&mut defaults, pat, "i64"); }
