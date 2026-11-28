@@ -96,6 +96,12 @@ RUNTIME_TRAP=(
   "probe_str_bad_radix.oc"
   "probe_shift_count.oc"
   "probe_int_literal_expr_overflow.oc"
+  "probe_min_div_i8.oc"
+  "probe_min_mod_i16.oc"
+  "probe_min_div_i32.oc"
+  "probe_min_mod_i32.oc"
+  "probe_min_div_i64.oc"
+  "probe_min_mod_i64.oc"
 )
 
 PASS=0

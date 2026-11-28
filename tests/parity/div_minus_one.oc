@@ -1,0 +1,21 @@
+// Division and remainder by -1 in every signed width (issue #73). Only MIN / -1 and MIN % -1
+// overflow (tests/probes/probe_min_*); everything else gives the ordinary result.
+fn id8(x: i8) -> i8 { return x; }
+fn id16(x: i16) -> i16 { return x; }
+fn id32(x: i32) -> i32 { return x; }
+fn id64(x: i64) -> i64 { return x; }
+
+fn main() {
+    print(id8(-127) / id8(-1));                    // 127
+    print(id8(-127) % id8(-1));                    // 0
+    print(id8(100) / id8(-1));                     // -100
+    print(id16(-32767) / id16(-1));                // 32767
+    print(id16(-32767) % id16(-1));                // 0
+    print(id32(-2147483647) / id32(-1));           // 2147483647
+    print(id32(-2147483647) % id32(-1));           // 0
+    print(id32(-7) / id32(2));                     // -3
+    print(id32(-7) % id32(2));                     // -1
+    print(id64(-9223372036854775807) / id64(-1));  // 9223372036854775807
+    print(id64(-9223372036854775807) % id64(-1));  // 0
+    print(id64(9) / id64(-3));                     // -3
+}

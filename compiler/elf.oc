@@ -713,6 +713,34 @@ fn ng_append_unescaped_str(data: *mut CodeBuffer, raw: string) -> usize {
 }
 
 // Traps to `trap` unless the value in %rax fits type `t`.
+// Signed %rax / %rbx (or %, when `rem`) into %rax. A divisor of -1 never reaches idiv,
+// which faults on MIN / -1: the quotient is 0 - a, checked like any subtraction (so MIN of
+// the result type overflows), and the remainder is 0, but MIN % -1 panics too, as in C.
+fn ng_emit_signed_div(ng: *mut NativeGen, code: *mut CodeBuffer, res_type: string, rem: bool) {
+    buf_append_u8(code, 72); buf_append_u8(code, 131); buf_append_u8(code, 251); buf_append_u8(code, 255); // cmp $-1, %rbx
+    buf_append_u8(code, 15); buf_append_u8(code, 133); // jne .divide
+    let jne_pos: usize = code.len;
+    elf_append_u32(code, 0);
+    buf_append_u8(code, 72); buf_append_u8(code, 247); buf_append_u8(code, 216); // neg %rax
+    ng_add_fixup(ng, code.len, "__trap_overflow", true);
+    buf_append_u8(code, 15); buf_append_u8(code, 128); // jo (64-bit MIN)
+    elf_append_u32(code, 0);
+    ng_emit_range_check(ng, code, res_type, "__trap_overflow"); // narrower MIN
+    if rem {
+        buf_append_u8(code, 49); buf_append_u8(code, 192); // xor %eax, %eax
+    }
+    buf_append_u8(code, 233); // jmp .done
+    let jmp_pos: usize = code.len;
+    elf_append_u32(code, 0);
+    elf_patch_i32(code, jne_pos, (code.len - (jne_pos + 4)).as(i32));
+    buf_append_u8(code, 72); buf_append_u8(code, 153); // cqo
+    buf_append_u8(code, 72); buf_append_u8(code, 247); buf_append_u8(code, 251); // idiv %rbx
+    if rem {
+        buf_append_u8(code, 72); buf_append_u8(code, 137); buf_append_u8(code, 208); // mov %rdx, %rax
+    }
+    elf_patch_i32(code, jmp_pos, (code.len - (jmp_pos + 4)).as(i32));
+}
+
 fn ng_emit_range_check(ng: *mut NativeGen, code: *mut CodeBuffer, t: string, trap: string) {
     if t.len == 0 { return; }
     if str_eq(t, "u8") {
@@ -2134,12 +2162,9 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 247);
                 buf_append_u8(code, 243); // div %rbx
             } else {
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 153); // cqo
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 247);
-                buf_append_u8(code, 251); // idiv %rbx
+                ng_emit_signed_div(ng, code, res_type, false);
             }
+            ng_emit_range_check(ng, code, res_type, "__trap_overflow"); // i8 / u8 must fit u8
             return;
         }
         if expr.tok.tag == TOK_PERCENT {
@@ -2156,16 +2181,13 @@ fn ng_emit_expr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                 buf_append_u8(code, 72);
                 buf_append_u8(code, 247);
                 buf_append_u8(code, 243); // div %rbx
+                buf_append_u8(code, 72);
+                buf_append_u8(code, 137);
+                buf_append_u8(code, 208); // mov %rdx, %rax
             } else {
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 153); // cqo
-                buf_append_u8(code, 72);
-                buf_append_u8(code, 247);
-                buf_append_u8(code, 251); // idiv %rbx
+                ng_emit_signed_div(ng, code, res_type, true);
             }
-            buf_append_u8(code, 72);
-            buf_append_u8(code, 137);
-            buf_append_u8(code, 208); // mov %rdx, %rax
+            ng_emit_range_check(ng, code, res_type, "__trap_overflow");
             return;
         }
         if expr.tok.tag == TOK_AMP {
