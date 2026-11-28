@@ -67,6 +67,8 @@ COMPILE_REJECT=(
   "probe_int_narrowing_arg.oc|probe_int_narrowing_arg.oc:7:16: error: implicit conversion from i32 to u8 in a function argument can lose information"
   "probe_int_literal_operand.oc|probe_int_literal_operand.oc:4:15: error: integer literal 300 in an operation does not fit u8"
   "probe_undefined_variable.oc|probe_undefined_variable.oc:3:11: error: undefined variable 'nope'"
+  "probe_array_return.oc|probe_array_return.oc:3:4: error: a function cannot return an array ([3]i32)"
+  "probe_nested_array.oc|probe_nested_array.oc:3:9: error: arrays of arrays ([2][2]u8) are not supported yet"
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"

@@ -1,0 +1,9 @@
+// A function cannot return an array by value (issue #74): the C backend emitted invalid C
+// and the native one returned 0.
+fn mk() -> [3]i32 {
+    return [4, 5, 6];
+}
+
+fn main() {
+    print(1);
+}

@@ -855,7 +855,12 @@ AstNode* dz_stmt_in(Errs* e, AstNode* s);
 AstNode* dz_stmt(Errs* e, AstNode* s);
 AstNode* dz_stmts(Errs* e, AstNode* first);
 oc_string dz_type(Errs* e, oc_string t);
+bool dz_has_nested_array(oc_string t);
 void dz_types(Errs* e, AstNode* n);
+AstNode* dz_find_fn(Errs* e, oc_string name);
+bool dz_is_array_type(oc_string t);
+void dz_pass_array(Errs* e, AstNode* a, oc_string arr_t);
+void dz_lower_array_params(Errs* e, AstNode* f);
 void dz_fn(Errs* e, AstNode* f);
 bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m);
 CodeBuffer buf_init(size_t capacity);
@@ -7686,7 +7691,7 @@ void dz_expr(Errs* e, AstNode* x) {
     dz_expect(e, x, (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 });
     return;
     }
-    AstNode* f = program_find_fn(((e)->root), ((((x)->tok)).slice));
+    AstNode* f = dz_find_fn(e, ((((x)->tok)).slice));
     AstNode* prm = ((AstNode*)(0));
     if (__OC_SEQ(f, !=, ((AstNode*)(0)))) {
     prm = ((f)->left);
@@ -7694,7 +7699,13 @@ void dz_expr(Errs* e, AstNode* x) {
     AstNode* a = ((x)->left);
     while (__OC_SEQ(a, !=, ((AstNode*)(0)))) {
     if (__OC_SEQ(prm, !=, ((AstNode*)(0)))) {
+    if (starts_with(((((prm)->tok)).slice), (oc_string){ .ptr = (const uint8_t*)("__arg_"), .len = sizeof("__arg_") - 1 })) {
+    dz_expr(e, a);
+    dz_pass_array(e, a, __oc_slice_str(((prm)->type_name), 1, ((((prm)->type_name)).len)));
+    }
+    else {
     dz_expect(e, a, ((prm)->type_name));
+    }
     prm = ((prm)->next);
     }
     else {
@@ -8131,6 +8142,23 @@ oc_string dz_type(Errs* e, oc_string t) {
     return gx_done(u);
 }
 
+bool dz_has_nested_array(oc_string t) {
+    size_t i = ((size_t)0);
+    while (__OC_SEQ(__OC_ADD(i, ((size_t)1)), <, ((t).len))) {
+    if (__OC_SEQ(__oc_index_str(t, i), ==, ((uint8_t)93))) {
+    if (__OC_SEQ(__oc_index_str(t, __OC_ADD(i, ((size_t)1))), ==, ((uint8_t)91))) {
+    if (__OC_SEQ(i, >, ((size_t)0))) {
+    if (__OC_SEQ(__oc_index_str(t, __OC_SUB(i, ((size_t)1))), !=, ((uint8_t)91))) {
+    return true;
+    }
+    }
+    }
+    }
+    i = __OC_ADD(i, ((size_t)1));
+    }
+    return false;
+}
+
 void dz_types(Errs* e, AstNode* n) {
     AstNode* cur = n;
     while (__OC_SEQ(cur, !=, ((AstNode*)(0)))) {
@@ -8143,12 +8171,103 @@ void dz_types(Errs* e, AstNode* n) {
     is_type = false;
     }
     if (is_type) {
+    if (dz_has_nested_array(((cur)->type_name))) {
+    dz_err(e, ((cur)->tok), (oc_string){ .ptr = (const uint8_t*)("arrays of arrays ("), .len = sizeof("arrays of arrays (") - 1 }, ((cur)->type_name), (oc_string){ .ptr = (const uint8_t*)(") are not supported yet; use a struct holding the inner array, or one array of N * M elements"), .len = sizeof(") are not supported yet; use a struct holding the inner array, or one array of N * M elements") - 1 });
+    }
     ((cur)->type_name) = dz_type(e, ((cur)->type_name));
     }
     }
     dz_types(e, ((cur)->left));
     dz_types(e, ((cur)->right));
     cur = ((cur)->next);
+    }
+}
+
+AstNode* dz_find_fn(Errs* e, oc_string name) {
+    AstNode* d = ((((e)->root))->left);
+    while (__OC_SEQ(d, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((d)->tag), ==, NODE_FN)) {
+    if (str_eq(((((d)->tok)).slice), name)) {
+    return d;
+    }
+    }
+    if (__OC_SEQ(((d)->tag), ==, NODE_GENERIC)) {
+    if (__OC_SEQ(((d)->right), !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((((d)->right))->tag), ==, NODE_FN)) {
+    if (str_eq(((((((d)->right))->tok)).slice), name)) {
+    return ((d)->right);
+    }
+    }
+    }
+    }
+    d = ((d)->next);
+    }
+    return ((AstNode*)(0));
+}
+
+bool dz_is_array_type(oc_string t) {
+    if (__OC_SEQ(((t).len), <, ((size_t)3))) {
+    return false;
+    }
+    if (__OC_SEQ(__oc_index_str(t, 0), !=, ((uint8_t)91))) {
+    return false;
+    }
+    return __OC_SEQ(__oc_index_str(t, 1), !=, ((uint8_t)93));
+}
+
+void dz_pass_array(Errs* e, AstNode* a, oc_string arr_t) {
+    Token at = ((a)->tok);
+    AstNode* inner = ast_alloc_node(((e)->arena), ((a)->tag), ((a)->tok));
+    ((inner)->type_name) = ((a)->type_name);
+    ((inner)->left) = ((a)->left);
+    ((inner)->right) = ((a)->right);
+    bool place = __OC_SEQ(((a)->tag), ==, NODE_IDENT);
+    if (__OC_SEQ(((a)->tag), ==, NODE_FIELD_ACCESS)) {
+    place = true;
+    }
+    if (__OC_SEQ(((a)->tag), ==, NODE_INDEX)) {
+    place = true;
+    }
+    if (place) {
+    ((a)->left) = inner;
+    }
+    else {
+    oc_string tmp = dz_tmp(e);
+    ((e)->pre) = dz_append(((e)->pre), dz_let(e, tmp, arr_t, inner, false, at));
+    ((a)->left) = dz_ident(e, tmp, at);
+    }
+    ((a)->tag) = NODE_ADDRESS_OF;
+    ((a)->type_name) = (oc_string){ .ptr = (const uint8_t*)(""), .len = sizeof("") - 1 };
+    ((a)->right) = ((AstNode*)(0));
+}
+
+void dz_lower_array_params(Errs* e, AstNode* f) {
+    if (dz_is_array_type(((f)->type_name))) {
+    dz_err(e, ((f)->tok), (oc_string){ .ptr = (const uint8_t*)("a function cannot return an array ("), .len = sizeof("a function cannot return an array (") - 1 }, ((f)->type_name), (oc_string){ .ptr = (const uint8_t*)("); return a struct that holds it, or fill one passed as *mut [N]T"), .len = sizeof("); return a struct that holds it, or fill one passed as *mut [N]T") - 1 });
+    }
+    if (__OC_SEQ(((f)->right), ==, ((AstNode*)(0)))) {
+    return;
+    }
+    AstNode* copies = ((AstNode*)(0));
+    AstNode* p = ((f)->left);
+    while (__OC_SEQ(p, !=, ((AstNode*)(0)))) {
+    if (dz_is_array_type(((p)->type_name))) {
+    oc_string name = ((((p)->tok)).slice);
+    oc_string arr_t = ((p)->type_name);
+    oc_string hidden = str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("__arg_"), .len = sizeof("__arg_") - 1 }, name);
+    ((((p)->tok)).slice) = hidden;
+    ((p)->type_name) = str_concat(((e)->arena), (oc_string){ .ptr = (const uint8_t*)("*"), .len = sizeof("*") - 1 }, arr_t);
+    AstNode* deref = ast_alloc_node(((e)->arena), NODE_DEREF, ((p)->tok));
+    ((deref)->left) = dz_ident(e, hidden, ((p)->tok));
+    AstNode* copy = ast_alloc_node(((e)->arena), NODE_LET, dz_tok(((p)->tok), TOK_IDENT, name));
+    ((copy)->type_name) = arr_t;
+    ((copy)->left) = deref;
+    copies = dz_append(copies, copy);
+    }
+    p = ((p)->next);
+    }
+    if (__OC_SEQ(copies, !=, ((AstNode*)(0)))) {
+    ((((f)->right))->left) = dz_append(copies, ((((f)->right))->left));
     }
 }
 
@@ -8214,6 +8333,18 @@ bool desugar_errors(AstNode* root, Arena* arena, SourceMap* m) {
     }
     else {
     ((last)->next) = tmpl;
+    }
+    d = ((root)->left);
+    while (__OC_SEQ(d, !=, ((AstNode*)(0)))) {
+    if (__OC_SEQ(((d)->tag), ==, NODE_FN)) {
+    dz_lower_array_params((&(e)), d);
+    }
+    if (__OC_SEQ(((d)->tag), ==, NODE_GENERIC)) {
+    if (__OC_SEQ(((((d)->right))->tag), ==, NODE_FN)) {
+    dz_lower_array_params((&(e)), ((d)->right));
+    }
+    }
+    d = ((d)->next);
     }
     d = ((root)->left);
     while (__OC_SEQ(d, !=, ((AstNode*)(0)))) {
