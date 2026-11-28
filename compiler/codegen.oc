@@ -1621,10 +1621,11 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#define __OC_RANK(a, b) __typeof__(__builtin_choose_expr(sizeof(a) > sizeof(b), (a), __builtin_choose_expr(sizeof(b) > sizeof(a), (b), __builtin_choose_expr((__typeof__(a))-1 > 0, (a), (b)))))\n");
     buf_append(out, "#define __OC_SHL(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \"panic: shift count out of range\\n\"); exit(1); } (T)((uint64_t)_a << _b); })\n");
     buf_append(out, "#define __OC_SHR(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \"panic: shift count out of range\\n\"); exit(1); } (T)(_a >> _b); })\n");
-    // / % & | ^ give a result of the same type as + - * (C would give a narrow one int).
-    // -128 / -1 in i8 does not fit: an overflow, as on the native backend.
-    buf_append(out, "#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
-    buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } (__OC_RANK(_a, _b))(_a % _b); })\n");
+    // / % & | ^ give a result of the same type as + - * (C would give a narrow one int), and
+    // it must fit. A divisor of -1 is 0 - a (MIN / -1 overflows instead of faulting in C), and
+    // MIN % -1 overflows too.
+    buf_append(out, "#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 ? __builtin_sub_overflow(0, _a, &_r) : __builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");
+    buf_append(out, "#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 ? __builtin_sub_overflow(0, _a, &_r) && (__OC_RANK(_a, _b))-1 < 0 : __builtin_add_overflow(_a % _b, 0, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } if ((__typeof__(_b))-1 < 0 && _b == -1) { _r = 0; } _r; })\n");
     buf_append(out, "#define __OC_SEQ(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); _a op _b; })\n");
     buf_append(out, "#define __OC_BIT(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); (__OC_RANK(_a, _b))(_a op _b); })\n");
     buf_append(out, "#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \"panic: integer overflow\\n\"); exit(1); } _r; })\n");

@@ -172,8 +172,8 @@ static inline int64_t __oc_mod_check(int64_t a, int64_t b) {
 #define __OC_RANK(a, b) __typeof__(__builtin_choose_expr(sizeof(a) > sizeof(b), (a), __builtin_choose_expr(sizeof(b) > sizeof(a), (b), __builtin_choose_expr((__typeof__(a))-1 > 0, (a), (b)))))
 #define __OC_SHL(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, "panic: shift count out of range\n"); exit(1); } (T)((uint64_t)_a << _b); })
 #define __OC_SHR(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, "panic: shift count out of range\n"); exit(1); } (T)(_a >> _b); })
-#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, "panic: division by zero\n"); exit(1); } __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
-#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, "panic: division by zero\n"); exit(1); } (__OC_RANK(_a, _b))(_a % _b); })
+#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, "panic: division by zero\n"); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 ? __builtin_sub_overflow(0, _a, &_r) : __builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
+#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, "panic: division by zero\n"); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 ? __builtin_sub_overflow(0, _a, &_r) && (__OC_RANK(_a, _b))-1 < 0 : __builtin_add_overflow(_a % _b, 0, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } if ((__typeof__(_b))-1 < 0 && _b == -1) { _r = 0; } _r; })
 #define __OC_SEQ(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); _a op _b; })
 #define __OC_BIT(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); (__OC_RANK(_a, _b))(_a op _b); })
 #define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, "panic: integer overflow\n"); exit(1); } _r; })
@@ -949,6 +949,7 @@ void ng_emit_disp_load_rcx(CodeBuffer* code, int32_t off);
 void ng_emit_disp_load_r8(CodeBuffer* code, int32_t off);
 void ng_emit_disp_lea_rax(CodeBuffer* code, int32_t off);
 size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw);
+void ng_emit_signed_div(NativeGen* ng, CodeBuffer* code, oc_string res_type, bool rem);
 void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string trap);
 void ng_emit_load_at_rax(CodeBuffer* code, oc_string t, int32_t width);
 int32_t ng_value_words(NativeGen* ng, oc_string t);
@@ -10164,8 +10165,8 @@ void codegen_program(AstNode* root, CodeBuffer* out) {
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_RANK(a, b) __typeof__(__builtin_choose_expr(sizeof(a) > sizeof(b), (a), __builtin_choose_expr(sizeof(b) > sizeof(a), (b), __builtin_choose_expr((__typeof__(a))-1 > 0, (a), (b)))))\012"), .len = sizeof("#define __OC_RANK(a, b) __typeof__(__builtin_choose_expr(sizeof(a) > sizeof(b), (a), __builtin_choose_expr(sizeof(b) > sizeof(a), (b), __builtin_choose_expr((__typeof__(a))-1 > 0, (a), (b)))))\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SHL(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \042panic: shift count out of range\134n\042); exit(1); } (T)((uint64_t)_a << _b); })\012"), .len = sizeof("#define __OC_SHL(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \042panic: shift count out of range\134n\042); exit(1); } (T)((uint64_t)_a << _b); })\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SHR(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \042panic: shift count out of range\134n\042); exit(1); } (T)(_a >> _b); })\012"), .len = sizeof("#define __OC_SHR(T, a, b) ({ T _a = (T)(a); __auto_type _b = (b); if ((uint64_t)_b >= sizeof(T) * 8) { fprintf(stderr, \042panic: shift count out of range\134n\042); exit(1); } (T)(_a >> _b); })\012") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
-    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } (__OC_RANK(_a, _b))(_a % _b); })\012"), .len = sizeof("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } (__OC_RANK(_a, _b))(_a % _b); })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 \077 __builtin_sub_overflow(0, _a, &_r) : __builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_DIV(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 \077 __builtin_sub_overflow(0, _a, &_r) : __builtin_add_overflow(_a / _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
+    buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 \077 __builtin_sub_overflow(0, _a, &_r) && (__OC_RANK(_a, _b))-1 < 0 : __builtin_add_overflow(_a % _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } if ((__typeof__(_b))-1 < 0 && _b == -1) { _r = 0; } _r; })\012"), .len = sizeof("#define __OC_MOD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); if (_b == 0) { fprintf(stderr, \042panic: division by zero\134n\042); exit(1); } __OC_RANK(_a, _b) _r; if ((__typeof__(_b))-1 < 0 && _b == -1 \077 __builtin_sub_overflow(0, _a, &_r) && (__OC_RANK(_a, _b))-1 < 0 : __builtin_add_overflow(_a % _b, 0, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } if ((__typeof__(_b))-1 < 0 && _b == -1) { _r = 0; } _r; })\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_SEQ(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); _a op _b; })\012"), .len = sizeof("#define __OC_SEQ(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); _a op _b; })\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_BIT(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); (__OC_RANK(_a, _b))(_a op _b); })\012"), .len = sizeof("#define __OC_BIT(a, op, b) ({ __auto_type _a = (a); __auto_type _b = (b); (__OC_RANK(_a, _b))(_a op _b); })\012") - 1 });
     buf_append(out, (oc_string){ .ptr = (const uint8_t*)("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012"), .len = sizeof("#define __OC_ADD(a, b) ({ __auto_type _a = (a); __auto_type _b = (b); __OC_RANK(_a, _b) _r; if (__builtin_add_overflow(_a, _b, &_r)) { fprintf(stderr, \042panic: integer overflow\134n\042); exit(1); } _r; })\012") - 1 });
@@ -11281,6 +11282,44 @@ size_t ng_append_unescaped_str(CodeBuffer* data, oc_string raw) {
     k = ((lb).next);
     }
     return emitted;
+}
+
+void ng_emit_signed_div(NativeGen* ng, CodeBuffer* code, oc_string res_type, bool rem) {
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)131));
+    buf_append_u8(code, ((uint8_t)251));
+    buf_append_u8(code, ((uint8_t)255));
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)133));
+    size_t jne_pos = ((code)->len);
+    elf_append_u32(code, ((uint32_t)0));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)247));
+    buf_append_u8(code, ((uint8_t)216));
+    ng_add_fixup(ng, ((code)->len), (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 }, true);
+    buf_append_u8(code, ((uint8_t)15));
+    buf_append_u8(code, ((uint8_t)128));
+    elf_append_u32(code, ((uint32_t)0));
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
+    if (rem) {
+    buf_append_u8(code, ((uint8_t)49));
+    buf_append_u8(code, ((uint8_t)192));
+    }
+    buf_append_u8(code, ((uint8_t)233));
+    size_t jmp_pos = ((code)->len);
+    elf_append_u32(code, ((uint32_t)0));
+    elf_patch_i32(code, jne_pos, ({ __auto_type _v = (__OC_SUB(((code)->len), __OC_ADD(jne_pos, ((size_t)4)))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)153));
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)247));
+    buf_append_u8(code, ((uint8_t)251));
+    if (rem) {
+    buf_append_u8(code, ((uint8_t)72));
+    buf_append_u8(code, ((uint8_t)137));
+    buf_append_u8(code, ((uint8_t)208));
+    }
+    elf_patch_i32(code, jmp_pos, ({ __auto_type _v = (__OC_SUB(((code)->len), __OC_ADD(jmp_pos, ((size_t)4)))); if ((_v < 0 && (int64_t)_v < -2147483648LL) || (!(_v < 0) && (uint64_t)_v > 2147483647ULL)) { fprintf(stderr, "panic: invalid signed cast\n"); exit(1); } (int32_t)_v; }));
 }
 
 void ng_emit_range_check(NativeGen* ng, CodeBuffer* code, oc_string t, oc_string trap) {
@@ -13106,12 +13145,9 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, ((uint8_t)243));
     }
     else {
-    buf_append_u8(code, ((uint8_t)72));
-    buf_append_u8(code, ((uint8_t)153));
-    buf_append_u8(code, ((uint8_t)72));
-    buf_append_u8(code, ((uint8_t)247));
-    buf_append_u8(code, ((uint8_t)251));
+    ng_emit_signed_div(ng, code, res_type, false);
     }
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     return;
     }
     if (__OC_SEQ(((((expr)->tok)).tag), ==, TOK_PERCENT)) {
@@ -13128,17 +13164,14 @@ void ng_emit_expr(NativeGen* ng, CodeBuffer* code, CodeBuffer* data, AstNode* ex
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)247));
     buf_append_u8(code, ((uint8_t)243));
-    }
-    else {
-    buf_append_u8(code, ((uint8_t)72));
-    buf_append_u8(code, ((uint8_t)153));
-    buf_append_u8(code, ((uint8_t)72));
-    buf_append_u8(code, ((uint8_t)247));
-    buf_append_u8(code, ((uint8_t)251));
-    }
     buf_append_u8(code, ((uint8_t)72));
     buf_append_u8(code, ((uint8_t)137));
     buf_append_u8(code, ((uint8_t)208));
+    }
+    else {
+    ng_emit_signed_div(ng, code, res_type, true);
+    }
+    ng_emit_range_check(ng, code, res_type, (oc_string){ .ptr = (const uint8_t*)("__trap_overflow"), .len = sizeof("__trap_overflow") - 1 });
     return;
     }
     if (__OC_SEQ(((((expr)->tok)).tag), ==, TOK_AMP)) {

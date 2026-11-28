@@ -1,0 +1,6 @@
+// MIN % -1 overflows (issue #73): it used to be SIGFPE on the C backend and a wrong value natively.
+fn id(x: i16) -> i16 { return x; }
+
+fn main() {
+    print(id(-32768) % id(-1));
+}
