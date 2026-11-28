@@ -1,0 +1,14 @@
+fn touch(p: &mut i32) {
+    *p = *p + 1;
+}
+
+fn main() {
+    let mut x: i32 = 10;
+    let mut y: i32 = 20;
+    let mut r: *i32 = &x;
+    if false {
+        r = &y;
+    }
+    touch(&mut x);
+    print(*r);
+}

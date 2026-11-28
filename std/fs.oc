@@ -7,18 +7,30 @@ extern fn sys_write(fd: i32, buf: *u8, count: usize) -> i64;
 extern fn sys_chmod(path: *u8, mode: u32) -> i32;
 extern fn sys_unlink(path: *u8) -> i32;
 
+fn cstr_path_checked(path: string, out_buf: *mut u8) -> bool {
+    if path.len == 0 {
+        return false;
+    }
+    if path.len > 4095 {
+        return false;
+    }
+    let mut i: usize = 0;
+    while i < path.len {
+        if path[i] == 0 {
+            return false;
+        }
+        out_buf[i] = path[i];
+        i = i + 1;
+    }
+    out_buf[path.len] = 0;
+    return true;
+}
+
 fn cstr_path(path: string, out_buf: *mut u8) -> *u8 {
-    let mut len: usize = path.len
-    if len > 4095 {
-        len = 4095
+    if !cstr_path_checked(path, out_buf) {
+        out_buf[0] = 0;
     }
-    let mut i: usize = 0
-    while i < len {
-        out_buf[i] = path[i]
-        i = i + 1
-    }
-    out_buf[len] = 0
-    return out_buf.as(*u8)
+    return out_buf.as(*u8);
 }
 
 // Why a file operation failed.
@@ -31,7 +43,10 @@ enum FsError {
 // Reads up to max_len bytes of the file into out_buf; Ok(number of bytes read).
 fn file_read(path: string, out_buf: *mut u8, max_len: usize) -> usize!FsError {
     let mut pbuf: [4096]u8 = [0]
-    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    if !cstr_path_checked(path, (&mut pbuf).as(*mut u8)) {
+        return Err(FsError.OpenFailed)
+    }
+    let p: *u8 = (&pbuf).as(*u8)
     let fd: i32 = sys_open(p, OC_O_SAFE_READ, 0)
     if fd < 0 {
         return Err(FsError.OpenFailed)
@@ -47,7 +62,10 @@ fn file_read(path: string, out_buf: *mut u8, max_len: usize) -> usize!FsError {
 // Creates or truncates the file and writes content; Ok(content.len).
 fn file_write(path: string, content: string) -> usize!FsError {
     let mut pbuf: [4096]u8 = [0]
-    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
+    if !cstr_path_checked(path, (&mut pbuf).as(*mut u8)) {
+        return Err(FsError.OpenFailed)
+    }
+    let p: *u8 = (&pbuf).as(*u8)
     let fd: i32 = sys_open(p, OC_O_SAFE_WRITE_TRUNC, OC_MODE_FILE)
     if fd < 0 {
         return Err(FsError.OpenFailed)
@@ -80,12 +98,16 @@ fn write_file(path: string, content: string) -> bool {
 
 fn chmod_exec(path: string) -> bool {
     let mut pbuf: [4096]u8 = [0]
-    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
-    return sys_chmod(p, OC_MODE_EXEC) == 0
+    if !cstr_path_checked(path, (&mut pbuf).as(*mut u8)) {
+        return false
+    }
+    return sys_chmod((&pbuf).as(*u8), OC_MODE_EXEC) == 0
 }
 
 fn unlink_file(path: string) -> bool {
     let mut pbuf: [4096]u8 = [0]
-    let p: *u8 = cstr_path(path, (&mut pbuf).as(*mut u8))
-    return sys_unlink(p) == 0
+    if !cstr_path_checked(path, (&mut pbuf).as(*mut u8)) {
+        return false
+    }
+    return sys_unlink((&pbuf).as(*u8)) == 0
 }

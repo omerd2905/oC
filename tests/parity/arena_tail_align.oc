@@ -1,0 +1,24 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(13);
+    let p1: *mut u8 = arena_alloc(&mut a, 8);
+    print(p1.as(usize) != 0);
+    print((p1.as(usize) % 8) == 0);
+
+    let p2: *mut u8 = arena_alloc(&mut a, 3);
+    print(p2.as(usize) != 0);
+    print((p2.as(usize) % 8) == 0);
+
+    let p3: *mut u8 = arena_alloc(&mut a, 2);
+    print(p3.as(usize) == 0);
+
+    let p4: *mut u8 = arena_alloc(&mut a, 0);
+    print(p4.as(usize) == 0);
+
+    arena_reset(&mut a);
+    let p5: *mut u8 = arena_alloc(&mut a, 8);
+    print(p5.as(usize) != 0);
+    print((p5.as(usize) % 8) == 0);
+    arena_deinit(&mut a);
+}

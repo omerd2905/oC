@@ -1,0 +1,9 @@
+struct Big {
+    pad: [8192]i64,
+    val: i64,
+}
+
+fn main() {
+    let p: *mut Big = (0).as(*mut Big);
+    print(p.val);
+}

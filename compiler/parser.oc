@@ -1067,8 +1067,9 @@ struct FnEffects {
     outs: [16384]bool,
     // names of the function being summarized whose elements are numbers (s: string, p: *u8,
     // buf: [64]u8): s[i] reads a number, never a view
-    scalar_names: [256]string,
+    scalar_names: [512]string,
     scalar_count: usize,
+    overflow: bool,
     count: usize,
 }
 
@@ -1204,11 +1205,34 @@ fn validator_invalidate_arena(v: *mut Validator, arena_name: string) {
     }
 }
 
+fn arena_list_subset(a: string, b: string) -> bool {
+    let mut start: usize = 0;
+    let mut i: usize = 0;
+    while i <= a.len {
+        let mut at_end: bool = i == a.len;
+        if !at_end { at_end = a[i] == 44; }
+        if at_end {
+            if i > start {
+                if !arena_list_has(b, a[start..i]) { return false; }
+            }
+            start = i + 1;
+        }
+        i = i + 1;
+    }
+    return true;
+}
+
+fn arena_list_eq(a: string, b: string) -> bool {
+    if !arena_list_subset(a, b) { return false; }
+    return arena_list_subset(b, a);
+}
+
 fn validator_invalidate_var(v: *mut Validator, var_name: string) {
     let mut i: usize = 0;
     while i < v.vars_count {
-        if str_eq(v.vars[i].borrowed_from_var, var_name) {
+        if arena_list_has(v.vars[i].borrowed_from_var, var_name) {
             v.vars[i].is_invalidated = true;
+            v.vars[i].borrowed_from_var = var_name;
         }
         i = i + 1;
     }
@@ -1329,9 +1353,11 @@ fn fx_collect_scalars(fx: *mut FnEffects, n: *mut AstNode) {
         if cur.tag == NODE_PARAM { decl = true; }
         if decl {
             if fx_elem_is_number(cur.type_name) {
-                if fx.scalar_count < 256 {
+                if fx.scalar_count < 512 {
                     fx.scalar_names[fx.scalar_count] = cur.tok.slice;
                     fx.scalar_count = fx.scalar_count + 1;
+                } else {
+                    fx.overflow = true;
                 }
             }
         }
@@ -1430,9 +1456,11 @@ fn fx_taint(fx: *mut FnEffects, n: *mut AstNode, names: *mut string, count: *mut
                         i = i + 1;
                     }
                     if !known {
-                        if count[0] < 64 {
+                        if count[0] < 512 {
                             names[count[0]] = lhs;
                             count[0] = count[0] + 1;
+                        } else {
+                            fx.overflow = true;
                         }
                     }
                 }
@@ -1507,7 +1535,7 @@ fn fx_views(fx: *mut FnEffects, slot: usize, f: *mut AstNode, ret_ptr: bool) -> 
     while prm != (0).as(*mut AstNode) {
         if n < 16 {
             if fx_can_point(prm.type_name) {
-                let mut names: [64]string = [""];
+                let mut names: [512]string = [""];
                 names[0] = prm.tok.slice;
                 let mut count: usize = 1;
                 let mut before: usize = 0;
@@ -3026,6 +3054,7 @@ fn validator_type_int_operands(v: *mut Validator, expr: *mut AstNode) -> bool {
 struct VSnap {
     inv: [512]bool,
     arenas: [512]string,
+    vars: [512]string,
     deinit: [128]string,
     deinit_count: usize,
 }
@@ -3035,6 +3064,7 @@ fn vsnap_take(v: *mut Validator, s: *mut VSnap) {
     while i < v.vars_count {
         s.inv[i] = v.vars[i].is_invalidated;
         s.arenas[i] = v.vars[i].borrowed_from_arena;
+        s.vars[i] = v.vars[i].borrowed_from_var;
         i = i + 1;
     }
     i = 0;
@@ -3050,6 +3080,7 @@ fn vsnap_restore(v: *mut Validator, s: *VSnap) {
     while i < v.vars_count {
         v.vars[i].is_invalidated = s.inv[i];
         v.vars[i].borrowed_from_arena = s.arenas[i];
+        v.vars[i].borrowed_from_var = s.vars[i];
         i = i + 1;
     }
     i = 0;
@@ -3067,6 +3098,7 @@ fn vsnap_join(v: *mut Validator, s: *VSnap) {
     while i < v.vars_count {
         if s.inv[i] { v.vars[i].is_invalidated = true; }
         v.vars[i].borrowed_from_arena = arena_list_union(v, v.vars[i].borrowed_from_arena, s.arenas[i]);
+        v.vars[i].borrowed_from_var = arena_list_union(v, v.vars[i].borrowed_from_var, s.vars[i]);
         i = i + 1;
     }
     i = 0;
@@ -3074,6 +3106,18 @@ fn vsnap_join(v: *mut Validator, s: *VSnap) {
         validator_mark_deinit(v, s.deinit[i]);
         i = i + 1;
     }
+}
+
+fn vsnap_changed(v: *mut Validator, s: *VSnap, n: usize) -> bool {
+    if v.deinit_count != s.deinit_count { return true; }
+    let mut i: usize = 0;
+    while i < n {
+        if v.vars[i].is_invalidated != s.inv[i] { return true; }
+        if !arena_list_eq(v.vars[i].borrowed_from_arena, s.arenas[i]) { return true; }
+        if !arena_list_eq(v.vars[i].borrowed_from_var, s.vars[i]) { return true; }
+        i = i + 1;
+    }
+    return false;
 }
 
 // True if control never falls out of the end of `block` (its last statement is a return).
@@ -3418,13 +3462,26 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
             }
             let arena_name: string = get_expr_arena_borrow(v, stmt.left);
             if arena_name.len > 0 {
-                let a_idx: i32 = validator_find_var(v, arena_name);
-                if a_idx >= 0 {
-                    if v.vars[a_idx.as(usize)].is_stack_local {
-                        print_err_ret_arena(arena_name);
-                        v.has_error = true;
-                        return false;
+                let mut start: usize = 0;
+                let mut k: usize = 0;
+                while k <= arena_name.len {
+                    let mut at_end: bool = k == arena_name.len;
+                    if !at_end { at_end = arena_name[k] == 44; }
+                    if at_end {
+                        if k > start {
+                            let one: string = arena_name[start..k];
+                            let a_idx: i32 = validator_find_var(v, one);
+                            if a_idx >= 0 {
+                                if v.vars[a_idx.as(usize)].is_stack_local {
+                                    print_err_ret_arena(one);
+                                    v.has_error = true;
+                                    return false;
+                                }
+                            }
+                        }
+                        start = k + 1;
                     }
+                    k = k + 1;
                 }
             }
         }
@@ -3448,8 +3505,8 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
         if !check_expr_use(v, stmt.left) { return false; }
         // Each branch starts from the state before the `if`; afterwards the paths that fall
         // out of a branch are joined. A branch that always returns adds no path.
-        let mut before: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
-        let mut after_then: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
+        let mut before: VSnap = VSnap { inv: [false], arenas: [""], vars: [""], deinit: [""], deinit_count: 0 };
+        let mut after_then: VSnap = VSnap { inv: [false], arenas: [""], vars: [""], deinit: [""], deinit_count: 0 };
         vsnap_take(v, &mut before);
         if !validate_stmt(v, stmt.right) { return false; }
         let then_returns: bool = block_always_returns(stmt.right);
@@ -3471,20 +3528,18 @@ fn validate_stmt(v: *mut Validator, stmt: *mut AstNode) -> bool {
     }
 
     if stmt.tag == NODE_WHILE {
-        // Two passes over the body, each from the join of every state the loop head can see
-        // (0, 1 or 2 iterations so far); the loop exits from the last join.
+        // Iterate until the join at the loop head reaches a fixed point.
         let pre_vars_len: usize = v.vars_count;
-        let mut head: VSnap = VSnap { inv: [false], arenas: [""], deinit: [""], deinit_count: 0 };
-        vsnap_take(v, &mut head);
-        if !check_expr_use(v, stmt.left) { return false; }
-        if !validate_stmt(v, stmt.right) { return false; }
-        v.vars_count = pre_vars_len;
-        vsnap_join(v, &head);
-        vsnap_take(v, &mut head);
-        if !check_expr_use(v, stmt.left) { return false; }
-        if !validate_stmt(v, stmt.right) { return false; }
-        v.vars_count = pre_vars_len;
-        vsnap_join(v, &head);
+        let mut head: VSnap = VSnap { inv: [false], arenas: [""], vars: [""], deinit: [""], deinit_count: 0 };
+        let mut running: bool = true;
+        while running {
+            vsnap_take(v, &mut head);
+            if !check_expr_use(v, stmt.left) { return false; }
+            if !validate_stmt(v, stmt.right) { return false; }
+            v.vars_count = pre_vars_len;
+            vsnap_join(v, &head);
+            running = vsnap_changed(v, &head, pre_vars_len);
+        }
         return true;
     }
 
@@ -3607,11 +3662,22 @@ fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
         outs: [false],
         scalar_names: [""],
         scalar_count: 0,
+        overflow: false,
         count: 0,
     };
     let mut decl: *mut AstNode = root.left;
     while decl != (0).as(*mut AstNode) {
         if decl.tag == NODE_FN {
+            let mut prm: *mut AstNode = decl.left;
+            let mut p_count: usize = 0;
+            while prm != (0).as(*mut AstNode) {
+                p_count = p_count + 1;
+                prm = prm.next;
+            }
+            if p_count > 16 {
+                print("security error: function parameter limit (16) exceeded");
+                return false;
+            }
             if decl.right != (0).as(*mut AstNode) {
                 if fx.count < 1024 {
                     fx.names[fx.count] = decl.tok.slice;
@@ -3645,6 +3711,10 @@ fn validate_program(root: *mut AstNode, m: *SourceMap, g: *Generics) -> bool {
             }
             decl = decl.next;
         }
+    }
+    if fx.overflow {
+        print("security error: validator alias analysis capacity exceeded");
+        return false;
     }
 
     decl = root.left;

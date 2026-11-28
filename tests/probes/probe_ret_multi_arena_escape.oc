@@ -1,0 +1,17 @@
+import "std/mem.oc";
+
+fn bad_pick(caller: *mut Arena, take_local: bool) -> *mut u8 {
+    let mut local: Arena = arena_init(4096);
+    let mut p: *mut u8 = arena_alloc(caller, 8);
+    if take_local {
+        p = arena_alloc(&mut local, 8);
+    }
+    return p;
+}
+
+fn main() {
+    let mut c: Arena = arena_init(4096);
+    let p: *mut u8 = bad_pick(&mut c, true);
+    print(p[0]);
+    arena_deinit(&mut c);
+}

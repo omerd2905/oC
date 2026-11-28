@@ -1,0 +1,41 @@
+import "std/fs.oc";
+import "std/mem.oc";
+import "std/str.oc";
+
+fn main() {
+    match file_write("oc_fs_sec_test.txt", "secret\n") {
+        Ok(n) => print(n),
+        Err(_) => print("write err"),
+    }
+
+    let mut buf: [64]u8 = [0];
+    match file_read("oc_fs_sec_test.txt\0.png", (&mut buf).as(*mut u8), 63) {
+        Ok(_) => print("bad nul read"),
+        Err(e) => print(e),
+    }
+
+    match file_write("oc_fs_sec_test.txt\0.png", "bad") {
+        Ok(_) => print("bad nul write"),
+        Err(e) => print(e),
+    }
+
+    print(unlink_file("oc_fs_sec_test.txt\0.png"));
+
+    let mut a: Arena = arena_init(8192);
+    let long_path: string = str_repeat(&mut a, "a", 4100);
+    match file_read(long_path, (&mut buf).as(*mut u8), 63) {
+        Ok(_) => print("bad long read"),
+        Err(e) => print(e),
+    }
+    match file_write(long_path, "x") {
+        Ok(_) => print("bad long write"),
+        Err(e) => print(e),
+    }
+    arena_deinit(&mut a);
+
+    match file_read("oc_fs_sec_test.txt", (&mut buf).as(*mut u8), 63) {
+        Ok(n) => print(n),
+        Err(_) => print("read err"),
+    }
+    print(unlink_file("oc_fs_sec_test.txt"));
+}

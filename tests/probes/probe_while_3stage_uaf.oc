@@ -1,0 +1,28 @@
+import "std/mem.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut b: Arena = arena_init(4096);
+    let safe: *mut u8 = arena_alloc(&mut b, 8);
+    let mut p1: *mut u8 = safe;
+    let mut p2: *mut u8 = safe;
+    let mut p3: *mut u8 = safe;
+    let mut step: i32 = 0;
+    while step < 4 {
+        if step == 0 {
+            p1 = arena_alloc(&mut a, 8);
+        } else if step == 1 {
+            p2 = p1;
+        } else if step == 2 {
+            p3 = p2;
+        } else {
+            p1 = safe;
+            p2 = safe;
+            arena_reset(&mut a);
+            print(p3[0]);
+        }
+        step = step + 1;
+    }
+    arena_deinit(&mut a);
+    arena_deinit(&mut b);
+}

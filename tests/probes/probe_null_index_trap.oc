@@ -1,0 +1,4 @@
+fn main() {
+    let p: *mut i64 = (0).as(*mut i64);
+    print(p[1048576]);
+}

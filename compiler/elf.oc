@@ -1319,6 +1319,13 @@ fn ng_emit_lvalue_addr(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut Cod
             }
         } else {
             ng_emit_expr(ng, code, data, expr.left);
+            buf_append_u8(code, 72);
+            buf_append_u8(code, 133);
+            buf_append_u8(code, 192);
+            ng_add_fixup(ng, code.len, "__trap_null_deref", true);
+            buf_append_u8(code, 15);
+            buf_append_u8(code, 132);
+            elf_append_u32(code, 0);
         }
         buf_append_u8(code, 80); // push %rax (base)
         ng_emit_expr(ng, code, data, expr.right); // %rax = index
@@ -2683,6 +2690,13 @@ fn ng_emit_stmt(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
                     // Any other initializer is an array value: copy it (let b = a, let b = *p).
                     if stmt.left.tag == NODE_DEREF {
                         ng_emit_expr(ng, code, data, stmt.left.left);
+                        buf_append_u8(code, 72);
+                        buf_append_u8(code, 133);
+                        buf_append_u8(code, 192);
+                        ng_add_fixup(ng, code.len, "__trap_null_deref", true);
+                        buf_append_u8(code, 15);
+                        buf_append_u8(code, 132);
+                        elf_append_u32(code, 0);
                     } else {
                         ng_emit_lvalue_addr(ng, code, data, stmt.left);
                     }
@@ -3495,6 +3509,11 @@ fn ng_write_pe(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer,
     }
     pe_append_zeros(pe, file_size - pe.len);
 
+    if pe.overflow {
+        print("native codegen error: PE32+ image buffer capacity exceeded");
+        buf_deinit(pe);
+        return false;
+    }
     if pe.len != file_size {
         print("native codegen error: PE32+ image size mismatch");
         buf_deinit(pe);
@@ -4199,6 +4218,11 @@ fn ng_write_elf(ng: *mut NativeGen, code: *mut CodeBuffer, data: *mut CodeBuffer
         p = p + 1;
     }
 
+    if elf.overflow {
+        print("native codegen error: ELF64 image buffer capacity exceeded");
+        buf_deinit(elf);
+        return false;
+    }
     let elf_str: string = buf_to_string(elf);
     let ok: bool = write_file(out_file_str, elf_str);
     buf_deinit(elf);

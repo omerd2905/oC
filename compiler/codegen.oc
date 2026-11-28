@@ -34,10 +34,13 @@ struct CodeBuffer {
     srcmap: *SourceMap, // source locations for --fp-trap panics (null: line:col only)
     program: *mut AstNode, // for struct field types
     lit64: bool, // inside arithmetic on untyped literals only: they are i64
+    overflow: bool,
 }
 
 fn buf_init(capacity: usize) -> CodeBuffer {
     let raw: *mut void = sys_mmap(0, capacity, 3, 34, -1, 0);
+    if raw.as(usize) == 0 { sys_exit(1); }
+    if raw.as(usize) >= 0xfffffffffffff000 { sys_exit(1); }
     return CodeBuffer {
         buffer: raw.as(*mut u8),
         len: 0,
@@ -65,6 +68,7 @@ fn buf_init(capacity: usize) -> CodeBuffer {
         srcmap: (0).as(*SourceMap),
         program: (0).as(*mut AstNode),
         lit64: false,
+        overflow: false,
     };
 }
 
@@ -72,6 +76,8 @@ fn buf_append_u8(buf: *mut CodeBuffer, byte: u8) {
     if buf.len < buf.capacity {
         buf.buffer[buf.len] = byte;
         buf.len = buf.len + 1;
+    } else {
+        buf.overflow = true;
     }
 }
 
@@ -930,8 +936,13 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
         let mut via_array_ptr: bool = starts_with(base_t, "*[");
         if starts_with(base_t, "*mut [") { via_array_ptr = true; }
         buf_append(out, "__OC_AT((");
-        if via_array_ptr { buf_append(out, "*"); }
-        codegen_expr(expr.left, out);
+        if via_array_ptr {
+            buf_append(out, "*(__oc_notnull(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))");
+        } else {
+            codegen_expr(expr.left, out);
+        }
         buf_append(out, "), (");
         codegen_expr(expr.right, out);
         buf_append(out, "))");
@@ -973,10 +984,12 @@ fn codegen_expr(expr: *mut AstNode, out: *mut CodeBuffer) {
 
     if expr.tag == NODE_FIELD_ACCESS {
         buf_append(out, "((");
-        codegen_expr(expr.left, out);
         if is_expr_pointer(expr.left, out) {
-            buf_append(out, ")->");
+            buf_append(out, "__oc_notnull(");
+            codegen_expr(expr.left, out);
+            buf_append(out, "))->");
         } else {
+            codegen_expr(expr.left, out);
             buf_append(out, ").");
         }
         buf_append_ident(out, expr.tok.slice);
@@ -1346,7 +1359,9 @@ fn codegen_stmt(stmt: *mut AstNode, out: *mut CodeBuffer) {
                     buf_append_ident(out, stmt.tok.slice);
                     buf_append(out, ", ");
                     if copy_from.tag == NODE_DEREF {
+                        buf_append(out, "__oc_notnull(");
                         codegen_expr(copy_from.left, out);
+                        buf_append(out, ")");
                     } else {
                         codegen_expr(copy_from, out);
                     }
@@ -1524,8 +1539,8 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
     buf_append(out, "#ifdef ntohl\n#undef ntohl\n#endif\n\n");
     buf_append(out, "static inline int __oc_open_flags(int32_t f) { int r = O_BINARY; int acc = f & 3; if (acc == 1) r |= O_WRONLY; else if (acc == 2) r |= O_RDWR; else r |= O_RDONLY; if (f & 64) r |= O_CREAT; if (f & 512) r |= O_TRUNC; if (f & 1024) r |= O_APPEND; if (f & 131072) r |= O_NOFOLLOW; if (f & 524288) r |= O_CLOEXEC_HOST; return r; }\n");
     buf_append(out, "#ifdef _WIN32\n");
-    buf_append(out, "static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, (unsigned)count); }\n");
-    buf_append(out, "static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, (unsigned)count); }\n");
+    buf_append(out, "static inline int64_t sys_read(int32_t fd, char* buf, size_t count) { return (int64_t)_read(fd, buf, count > 2147483647 ? 2147483647u : (unsigned)count); }\n");
+    buf_append(out, "static inline int64_t sys_write(int32_t fd, const char* buf, size_t count) { return (int64_t)_write(fd, buf, count > 2147483647 ? 2147483647u : (unsigned)count); }\n");
     buf_append(out, "static inline int32_t sys_open(const char* path, int32_t flags, uint32_t mode) { (void)mode; return (int32_t)_open(path, __oc_open_flags(flags), _S_IREAD | _S_IWRITE); }\n");
     buf_append(out, "static inline int32_t sys_close(int32_t fd) { return (int32_t)_close(fd); }\n");
     buf_append(out, "static inline void* sys_mmap(size_t addr, size_t len, int32_t prot, int32_t flags, int32_t fd, size_t off) { (void)addr; (void)prot; (void)flags; (void)fd; (void)off; void* p = VirtualAlloc(0, len, 0x3000, 0x04); return p ? p : (void*)-1; }\n");
@@ -1643,7 +1658,7 @@ fn codegen_program(root: *mut AstNode, out: *mut CodeBuffer) {
 
     // Array vs pointer is decided by the C type, so struct fields and shadowed names are covered too.
     // "+ 0" keeps -Wsizeof-pointer-div quiet in the branch that is discarded for pointers.
-    buf_append(out, "#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(a)[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n");
+    buf_append(out, "#define __OC_AT(a, i) (*__builtin_choose_expr(__builtin_types_compatible_p(__typeof__(a), __typeof__(&(a)[0])), &(__oc_notnull(a))[i], ({ size_t _i = (size_t)(i); if (_i >= (sizeof(a) + 0) / sizeof((a)[0])) { fprintf(stderr, \"panic: slice index out of bounds\\n\"); exit(1); } &(a)[_i]; })))\n\n");
 
     buf_append(out, "static inline int64_t __oc_div_check(int64_t a, int64_t b) {\n");
     buf_append(out, "    if (b == 0) { fprintf(stderr, \"panic: division by zero\\n\"); exit(1); }\n");

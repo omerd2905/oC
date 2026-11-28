@@ -84,6 +84,10 @@ COMPILE_REJECT=(
   "probe_str_after_reset.oc|use-after-free: variable 'greeting' used after arena 'a' was reset"
   "probe_float_mixed_to_f32.oc|probe_float_mixed_to_f32.oc:6:20: error: implicit conversion from f64 to f32 in a variable initializer can lose precision"
   "probe_lossy_mixed_op.oc|probe_lossy_mixed_op.oc:3:12: error: implicit conversion from u64 to f64 in a float operation can lose precision"
+  "probe_while_3stage_uaf.oc|use-after-free: variable 'p3' used after arena 'a' was reset"
+  "probe_ret_multi_arena_escape.oc|cannot return reference to locally allocated arena 'local'"
+  "probe_if_var_borrow_uaf.oc|reference 'r' invalidated by mutable operation on 'x'"
+  "probe_fn_param_limit.oc|security error: function parameter limit (16) exceeded"
 )
 
 RUNTIME_TRAP=(
@@ -121,6 +125,8 @@ RUNTIME_TRAP=(
   "probe_subslice_bounds.oc"
   "probe_enum_cast_range.oc"
   "probe_str2_split_empty_sep.oc"
+  "probe_null_index_trap.oc"
+  "probe_null_field_trap.oc"
 )
 
 PASS=0
