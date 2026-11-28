@@ -1,0 +1,9 @@
+// The slice str_lines returns lives in its arena: not usable after that arena is reset (#79).
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let ls: []string = str_lines(&mut a, "one\ntwo");
+    arena_reset(&mut a);
+    print(ls.len);
+}

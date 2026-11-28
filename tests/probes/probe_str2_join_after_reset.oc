@@ -1,0 +1,10 @@
+// str_join_slice builds its result in the arena it is given (#79).
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let words: [2]string = ["x", "y"];
+    let j: string = str_join_slice(&mut a, words[0..2], "-");
+    arena_reset(&mut a);
+    print(j);
+}

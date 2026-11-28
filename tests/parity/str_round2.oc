@@ -1,0 +1,110 @@
+// std/str.oc round 2 (issue #79), on both backends: empty strings and bound edges for each
+// function. Views of a reset arena are rejected: tests/probes/probe_str2_*.oc.
+import "std/str.oc";
+import "std/fmt.oc";
+
+fn show(parts: []string) {
+    print_u64(parts.len);
+    print_str(":");
+    let mut i: usize = 0;
+    while i < parts.len {
+        print_str(" [");
+        print_str(parts[i]);
+        print_str("]");
+        i = i + 1;
+    }
+    print("");
+}
+
+fn utf8_report(s: string) {
+    match utf8_len(s) {
+        Ok(n) => print(n),
+        Err(e) => {
+            match e {
+                Utf8Error.Truncated => print("truncated"),
+                Utf8Error.BadByte => print("bad byte"),
+                Utf8Error.Overlong => print("overlong"),
+                Utf8Error.Surrogate => print("surrogate"),
+                Utf8Error.TooLarge => print("too large"),
+            }
+        }
+    }
+}
+
+fn main() {
+    let mut a: Arena = arena_init(65536);
+
+    show(str_split(&mut a, "a,b,,c", ","));     // 4: [a] [b] [] [c]
+    show(str_split(&mut a, ",x,", ","));        // 3: [] [x] []
+    show(str_split(&mut a, "", ","));           // 1: []
+    show(str_split(&mut a, "none", ","));       // 1: [none]
+    show(str_split(&mut a, "a<>b<>", "<>"));    // 3: [a] [b] []
+    show(str_lines(&mut a, "one\r\ntwo\nthree"));  // 3
+    show(str_lines(&mut a, "a\nb\n"));          // 2: [a] [b]
+    show(str_lines(&mut a, ""));                // 0:
+    show(str_lines(&mut a, "\n"));              // 1: []
+    show(str_lines(&mut a, "\r\n\r\n"));        // 2: [] []
+    let words: [3]string = ["x", "yy", "z"];
+    print(str_join_slice(&mut a, words[0..3], ", "));   // x, yy, z
+    print(str_join_slice(&mut a, words[0..0], ", ").len); // 0
+
+    print(find_from("abcabc", "bc", 0));        // 1
+    print(find_from("abcabc", "bc", 2));        // 4
+    print(find_from("abcabc", "bc", 6));        // -1
+    print(find_from("abc", "", 3));             // 3
+    print(find_from("abc", "a", 4));            // -1
+    print(find_last("abcabc", "bc"));           // 4
+    print(find_last("abc", "x"));               // -1
+    print(find_last("abc", ""));                // 3
+    print(find_last("", "a"));                  // -1
+    print(str_count("aaaa", "aa"));             // 2
+    print(str_count("abc", ""));                // 4
+    print(str_count("", "a"));                  // 0
+
+    print(str_cmp("abc", "abd"));               // -1
+    print(str_cmp("abc", "ab"));                // 1
+    print(str_cmp("", ""));                     // 0
+    print(str_cmp("", "a"));                    // -1
+    print(str_cmp("Z", "a"));                   // -1
+    print(str_cmp("\xff", "a"));                // 1: bytes compare unsigned
+
+    print(pad_left(&mut a, "42", 5, 48));       // 00042
+    print(pad_right(&mut a, "ab", 4, 46));      // ab..
+    print(pad_left(&mut a, "wide", 2, 32));     // wide: already wide enough
+    print(pad_right(&mut a, "", 3, 45));        // ---
+    print(pad_left(&mut a, "", 0, 45).len);     // 0
+
+    let mut sb: StrBuf = strbuf_init(&mut a, 16);
+    strbuf_push_str(&mut sb, "n=");
+    strbuf_push_i64(&mut sb, -9223372036854775807 - 1);
+    strbuf_push_str(&mut sb, " u=");
+    strbuf_push_u64(&mut sb, 18446744073709551615);
+    strbuf_push_str(&mut sb, " f=");
+    strbuf_push_f64(&mut sb, 2.5, 3);
+    strbuf_push_str(&mut sb, " z=");
+    strbuf_push_i64(&mut sb, 0);
+    print(strbuf_to_string(&sb));               // n=-9223372036854775808 u=18446744073709551615 f=2.5 z=0
+    print(strbuf_len(&sb));                     // 55
+    strbuf_clear(&mut sb);
+    print(strbuf_len(&sb));                     // 0
+    strbuf_push_str(&mut sb, "again");
+    print(strbuf_to_string(&sb));               // again
+
+    utf8_report("");                            // 0
+    utf8_report("abc");                         // 3
+    utf8_report("\xc3\xa9t\xc3\xa9");           // 3 (été)
+    utf8_report("\xe2\x82\xac\xf0\x9f\x98\x80"); // 2 (euro sign, emoji)
+    utf8_report("\xc3");                        // truncated
+    utf8_report("\x80");                        // bad byte
+    utf8_report("\xc3\x28");                    // bad byte
+    utf8_report("\xc0\xaf");                    // overlong
+    utf8_report("\xed\xa0\x80");                // surrogate
+    utf8_report("\xf4\x90\x80\x80");            // too large
+    print(utf8_valid("ok"));                    // true
+    print(utf8_valid("\xff"));                  // false
+    match utf8_decode("\xe2\x82\xac", 0) {
+        Ok(c) => { print(c.code); print(c.width); }   // 8364 3
+        Err(_) => print("error"),
+    }
+    arena_deinit(&mut a);
+}

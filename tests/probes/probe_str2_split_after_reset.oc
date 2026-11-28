@@ -1,0 +1,11 @@
+// str_split's parts are views of s: once s's arena is reset they cannot be used (#79).
+import "std/str.oc";
+
+fn main() {
+    let mut a: Arena = arena_init(4096);
+    let mut b: Arena = arena_init(4096);
+    let line: string = str_concat(&mut a, "x,", "y");
+    let parts: []string = str_split(&mut b, line, ",");
+    arena_reset(&mut a);
+    print(parts[0]);
+}
